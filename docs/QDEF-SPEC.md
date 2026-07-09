@@ -114,7 +114,46 @@ malformed input could make lie.
 
 ## 3. The Record Architecture
 
-Every Record is a CBOR Map.
+Every Record is a CBOR Map. The rules below (§3.1–§3.3) all constrain the
+same fixed shape:
+
+```
+  Tag(TypeID)                    <- OPTIONAL: "Smart Route" (§3.1)
+       |
+       v
+  CBOR Map {
+    0   : TypeID (uint)          <- MUST; "Constrained Route" (§3.1)
+                                     even key -> always CRITICAL
+                                     must equal Tag above, if present
+    key : value                  <- key even -> CRITICAL if unrecognized
+                                     (abort this Record, §3.2)
+    key : value                  <- key odd  -> OPTIONAL if unrecognized
+                                     (silently ignored, §3.2)
+    ...
+  }
+
+  value ::= uint | negint | simple | float | definite-length string
+            (never array | map | tag -- §3.2 field-value-shape rule)
+```
+
+Filled in with §5's Wi-Fi example (Type `100`):
+
+```
+  Tag(100)
+  Map {
+    0: 100,                // even, CRITICAL -- Type ID, must match Tag
+    2: "My Coffee Shop",   // even, CRITICAL -- SSID
+    4: "guest123",         // even, CRITICAL -- Password
+    6: 2,                  // even, CRITICAL -- Auth Type
+    1: true                // odd,  OPTIONAL -- Hidden Network Flag
+  }
+```
+
+Every Record — a plain content Record like this one or a stdlib Wrapper
+Record (§4.1) — has exactly this shape: an optional Tag, a mandatory Map,
+and field values that are always scalar-or-string, never structure to walk
+into. That fixed depth is what §3.3 means by "a conformant core parser
+never needs recursion at all."
 
 ### 3.1 Hardware Parity Routing (Record Type ID)
 
