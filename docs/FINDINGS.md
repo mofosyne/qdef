@@ -145,6 +145,76 @@ redundant "what should be outside me" metadata that the format doesn't
 otherwise need. §4.1's rationale text should be corrected to say
 "recommended for efficiency," not "required for correctness."
 
+## Findings from the Rust core-parser prototype
+
+The Node prototype above validated the *design* — but it validated it using
+Node's `cbor` npm package, which does all the real CBOR work (tags, maps,
+streaming) for it. That left one of the spec's own claims (§3.3: a "deeply
+constrained embedded scanner with no semantic-tag-aware CBOR library" can
+implement the mandatory core) completely unverified — Node can't tell you
+whether that's true. [`rust/qdef-core`](../rust/qdef-core) is a second,
+independent implementation of the mandatory core only (not the stdlib
+Wrapper layer), written `#![no_std]`, with zero dependencies and zero heap
+allocation — including hand-rolling the CBOR primitives instead of using a
+crate for them, since using one would just re-test the Node prototype's
+finding a second time.
+
+### 8. The "minimal core" claim is true, and now has a number attached
+
+Built in release mode for `thumbv6m-none-eabi` (Cortex-M0 — one of the most
+constrained ARM targets in common use, no atomics beyond the basics), the
+entire mandatory core — magic/version framing, full CBOR-Sequence walking,
+key-0 routing, Hardware Parity mismatch detection, plus the even/odd
+criticality helper and a field-lookup helper — compiles to **~4.4 KB of
+code**, with **zero `unsafe`** and **zero heap allocation**. §3.3's claim
+that a minimal implementer's surface area is genuinely small was previously
+just prose confidence; it's now a measured, reproducible number tied to a
+real embedded target.
+
+### 9. Unbounded recursion depth is a real hardening gap prose review (and the Node prototype) couldn't see
+
+Skipping past a Record field (or an entire Record) the parser doesn't
+recognize requires generically walking arbitrarily-nested CBOR structures —
+arrays inside maps inside tags, etc. Written the natural way (recursively),
+this has no inherent bound on stack depth: a malformed or adversarial input
+with deeply nested structures could exhaust the stack on a small MCU with a
+few KB of RAM. This is invisible when a hosted CBOR library does the
+walking for you inside a process with megabytes of stack and its own
+(possibly absent) guard — which is exactly why it never came up in the Node
+prototype. `rust/qdef-core/src/cbor.rs` added an explicit `MAX_DEPTH` guard
+(`skip_value` returns `Error::TooDeep` past a fixed recursion limit),
+verified by a dedicated test that constructs a pathologically nested input
+and confirms it's rejected rather than blowing the stack.
+
+**Fix:** the spec should say a conformant core parser must bound recursion
+depth while walking structures it doesn't otherwise interpret — not a
+wire-format change, but a real robustness requirement for anyone
+implementing the "skip what you don't recognize" behavior §3.2/§3.3 already
+require.
+
+### 10. A malformed (not just unrecognized) Record can desync the whole Sequence — the spec's "isolated failure" promise has an unstated precondition
+
+§3.2 promises an aborted Record doesn't affect its siblings in the same
+Sequence. That promise silently assumes the Record is at least *well-formed*
+CBOR — its byte length needs to be determinable to know where the next
+Record starts. A genuinely malformed byte stream (truncated, an invalid
+length prefix, a reserved additional-info value) means the parser can no
+longer find that boundary, so it can't safely resume the Sequence at all —
+a fundamentally different, worse failure than "this Record's Type/keys
+aren't recognized." This distinction was invisible in the Node prototype,
+where `cbor.decodeAllSync` either decodes the whole sequence or throws for
+all of it — there was never a point where "resume after this specific
+byte-level failure" was an explicit decision to make. Writing the Rust
+`Records` iterator by hand forced the decision: it now distinguishes
+"Record aborted but Sequence continues" (missing key 0, tag mismatch — see
+findings #1–#2) from "Sequence itself is unrecoverable" (malformed CBOR),
+and only the former lets iteration continue.
+
+**Fix:** §3.2 should state this precondition explicitly rather than leave
+it implicit — an aborted-but-well-formed Record doesn't affect siblings;
+malformed CBOR at the Sequence level is a stronger failure with no
+per-Record isolation possible.
+
 ## Confirmed working as designed (no fix needed)
 
 - **Magic + version + CBOR-Sequence-of-Records** round-trips exactly as
@@ -170,6 +240,12 @@ otherwise need. §4.1's rationale text should be corrected to say
   missing fragment (both a full-length one and the shorter last one) via
   XOR parity, and correctly failing when 2 of the 4 fragments (more than
   single-parity can cover) are missing.
+- **Cross-implementation agreement:** containers encoded by the Node
+  prototype's `cbor`-package-based encoder decode correctly through the
+  Rust prototype's independent, hand-rolled decoder with no coordination
+  beyond the spec text itself (`rust/qdef-core/src/fixtures.rs`) — the
+  closest thing this exercise has to a real interop test between two
+  unrelated implementations.
 
 ## Net effect on the spec
 
@@ -181,3 +257,11 @@ places that read as complete prose turned out to be underspecified the
 moment two independent implementations needed to agree on wire bytes
 without talking to each other first. That gap is exactly what a prototype
 catches and prose review doesn't.
+
+The Rust pass added a second kind of value beyond the Node prototype: not
+just "does the design round-trip," but "does the *minimal-core* claim,
+specifically, survive contact with a language and target that can't lean on
+a hosted CBOR library or an OS to hide the hard parts." It did — with two
+concrete hardening gaps (#9, #10) that only became visible once the
+CBOR-walking and Sequence-iteration logic had to be written by hand instead
+of delegated to a library call.

@@ -15,17 +15,26 @@ recognizes its type and ignored by every app that doesn't.
 ## Status
 
 **Draft, not yet implemented as a reference library.** The design in
-[`docs/QDEF-SPEC.md`](docs/QDEF-SPEC.md) has been validated end-to-end by a
-throwaway round-trip prototype (see [`/prototype`](prototype)) — real code
-encoding and decoding real QDEF bytes, including the multi-fragment
-split/encrypt worked example with fragment-loss recovery. It has **not**
-been used in production anywhere, and Record Type IDs referenced in the
-spec (`100`, `105`, `900`, `950`, etc.) are illustrative placeholders, not
-an allocated registry.
+[`docs/QDEF-SPEC.md`](docs/QDEF-SPEC.md) has been validated by two
+throwaway prototypes:
 
-See [`docs/FINDINGS.md`](docs/FINDINGS.md) for what the prototype found and
-fixed — several real interop gaps that careful prose review alone hadn't
-caught.
+- [`/prototype`](prototype) (Node) — real code encoding and decoding real
+  QDEF bytes end to end, including the multi-fragment split/encrypt worked
+  example with fragment-loss recovery.
+- [`/rust/qdef-core`](rust/qdef-core) (Rust, `#![no_std]`) — an independent
+  reimplementation of just the mandatory core, with hand-rolled CBOR
+  primitives and zero dependencies, that also builds for a bare-metal
+  Cortex-M0 target — checking the spec's "a deeply constrained scanner can
+  implement this" claim against an actual constrained target rather than
+  leaving it as prose.
+
+Neither has been used in production anywhere, and Record Type IDs
+referenced in the spec (`100`, `105`, `900`, `950`, etc.) are illustrative
+placeholders, not an allocated registry.
+
+See [`docs/FINDINGS.md`](docs/FINDINGS.md) for what both prototypes found
+and fixed — several real interop and hardening gaps that careful prose
+review alone hadn't caught.
 
 ## Why QDEF
 
@@ -72,6 +81,10 @@ MIME type already routing it.
 - [`prototype/`](prototype) — a throwaway Node.js implementation used to
   validate the design by actually encoding and decoding QDEF bytes. Not a
   reference library; see its own README for scope and how to run it.
+- [`rust/qdef-core/`](rust/qdef-core) — a throwaway `#![no_std]` Rust
+  reimplementation of just the mandatory core, used to check that layer's
+  "genuinely minimal, no CBOR library required" claim against a real
+  bare-metal target. Not a reference library either; see its own README.
 
 ## Origin
 

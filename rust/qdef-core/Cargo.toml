@@ -1,0 +1,12 @@
+[package]
+name = "qdef-core"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Prototype no_std QDEF core parser: magic/version framing, CBOR-Sequence walking, key-0 routing. Zero dependencies, zero heap allocation."
+
+[lib]
+name = "qdef_core"
+path = "src/lib.rs"
+
+[dependencies]

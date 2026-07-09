@@ -1,8 +1,11 @@
 # QDEF — Quick Data Exchange Format
 
-**Status: Draft. Validated by a throwaway round-trip prototype (see
-[`/prototype`](../prototype) and [FINDINGS.md](FINDINGS.md)); not yet
-implemented as a reference library, not yet used in production anywhere.**
+**Status: Draft. Validated by two throwaway prototypes — a Node round-trip
+prototype covering the full design ([`/prototype`](../prototype)) and a
+`no_std`, zero-dependency Rust prototype of the mandatory core specifically
+([`/rust/qdef-core`](../rust/qdef-core)), which also builds for a bare-metal
+Cortex-M0 target (see [FINDINGS.md](FINDINGS.md)); not yet implemented as a
+reference library, not yet used in production anywhere.**
 
 QDEF is a general-purpose binary container for multi-action 2D barcodes
 (QR, Data Matrix, Aztec) and NFC tags. Think of it as filling the gap NDEF
@@ -121,6 +124,16 @@ This gives per-field forward compatibility: a future critical field doesn't
 require bumping the container `Version` byte, only choosing an even key
 number the current Record Type doesn't yet define.
 
+**Precondition on "the whole stream is unaffected":** this isolation
+guarantee assumes the Record is at least well-formed CBOR — a parser needs
+to determine its byte length to find where the next Record starts. A
+Record that fails to route (missing key `0`, a Hardware Parity mismatch,
+§3.1) is still well-formed and isolable this way. A Record whose bytes are
+themselves malformed CBOR (truncated, an invalid length prefix, a reserved
+additional-info value) is a stronger failure: the parser can no longer find
+that boundary and cannot safely resume the Sequence at all. Implementers
+should not conflate the two — only the former is isolated to one Record.
+
 ### 3.3 Conformance Levels
 
 QDEF is designed so a minimal, generic parser is genuinely minimal — no
@@ -139,6 +152,17 @@ just to support the *container*:
   QDEF. An implementer who only cares about Wi-Fi provisioning (Type 100)
   never has to read, understand, or link against whatever some other
   registered Record Type does internally.
+
+A conformant core parser MUST bound recursion depth while walking CBOR
+structures it doesn't otherwise interpret (skipping an unrecognized field's
+value, or an unrecognized Record's entire map). This isn't a wire-format
+requirement — it doesn't change what bytes are valid — but a genuinely
+constrained target (§1's "deeply constrained embedded scanner") can have
+only a few KB of stack, and an unbounded-recursion skip implementation lets
+a malformed or adversarial input exhaust it. Validated in
+[`rust/qdef-core`](../rust/qdef-core), whose hand-rolled skip logic
+enforces a fixed maximum nesting depth for exactly this reason (see
+FINDINGS.md).
 
 ## 4. The QDEF Standard Library
 

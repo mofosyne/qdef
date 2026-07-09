@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  node-prototype:
+    name: Node prototype (round-trip tests)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: prototype
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: prototype/package-lock.json
+      - run: npm ci
+      - run: npm test
+
+  rust-core:
+    name: Rust core (tests, clippy, fmt, no_std embedded build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust/qdef-core
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv6m-none-eabi
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust/qdef-core
+      - name: cargo test (host)
+        run: cargo test --locked
+      - name: cargo clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: cargo fmt --check
+        run: cargo fmt --check
+      - name: build for bare-metal Cortex-M0 (no_std, no heap — the actual point of this crate)
+        run: cargo build --release --locked --target thumbv6m-none-eabi
+
+  rust-fixtures-in-sync:
+    name: Rust test fixtures match the Node encoder
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: prototype/package-lock.json
+      - run: npm ci
+        working-directory: prototype
+      - name: regenerate rust/qdef-core/src/fixtures.rs
+        run: node scripts/gen-rust-fixtures.js > ../rust/qdef-core/src/fixtures.rs
+        working-directory: prototype
+      - name: fail if fixtures.rs no longer matches the Node encoder's output
+        run: |
+          if ! git diff --exit-code -- rust/qdef-core/src/fixtures.rs; then
+            echo "::error::rust/qdef-core/src/fixtures.rs is out of sync with 'node prototype/scripts/gen-rust-fixtures.js'. Regenerate and commit it."
+            exit 1
+          fi
