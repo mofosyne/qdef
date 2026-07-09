@@ -57,8 +57,10 @@ QDEF is:
   libc. A minimal implementer never needs a compression or reassembly
   library just to route Records.
 - **Usable by a deeply constrained scanner.** Every Record's type is
-  readable at zero decode cost from a plain map key, even by a parser with
-  no CBOR-tag support at all.
+  readable at zero decode cost from a plain map key — no CBOR tag support
+  needed, no semantic-tag-aware library at all. QDEF doesn't use CBOR tags
+  for routing (an earlier draft did; dropped after finding it collided
+  with the IANA tag registry — see `docs/FINDINGS.md` #11–#12).
 
 QDEF is meant for adoption by unrelated applications with no shared
 history. The format's own spec works through a Wi-Fi-provisioning example

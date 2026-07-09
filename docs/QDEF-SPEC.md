@@ -26,7 +26,9 @@ familiarity with, any particular application.
 
 QDEF is binary-first: an extensible, multi-action CBOR payload, parseable
 both by a modern smartphone and by a deeply constrained embedded scanner
-(transit gate, POS terminal) with no semantic-tag-aware CBOR library.
+(transit gate, POS terminal) with only a minimal CBOR decoder — no
+semantic-tag support, no compression library, nothing beyond reading maps,
+uints, and strings.
 
 QDEF is deliberately two things, not one:
 
@@ -93,9 +95,9 @@ change the framing, the routing rules, or the even/odd criticality
 convention itself, i.e. the very machinery a decoder would otherwise rely
 on to skip safely. This is the one point in QDEF where "skip what you don't
 understand" deliberately does *not* apply: an unknown Record Type ID (skip
-the record), an unknown even key (abort the record), and an unrecognized
-tag (§3.1) all have local, recoverable rules, but an unknown *version* is a
-global "I cannot safely interpret any of this" signal. Version bumps are
+the record) and an unknown even key (abort the record) both have local,
+recoverable rules, but an unknown *version* is a global "I cannot safely
+interpret any of this" signal. Version bumps are
 expected to be rare precisely because §3.2's per-field forward
 compatibility absorbs most evolution without one; the version byte moves
 only for a change to the core framing itself.
@@ -114,22 +116,11 @@ malformed input could make lie.
 
 ## 3. The Record Architecture
 
-Every Record is a CBOR Map, at most two levels deep: an optional Tag around
-a mandatory Map, using §5's Wi-Fi Record (Type `100`) as the example:
-
-```
-+--------------------------+---------------------------------------------+
-|      Tag (optional)      |                   CBOR Map                  |
-+--------------------------+---------------------------------------------+
-|         Tag(100)         | { 0: 100, 2: ..., 4: ..., 6: ..., 1: ... }  |
-| "Smart Route" (§3.1)     | MUST contain key 0 = Type ID                |
-| SHOULD equal key 0       | ("Constrained Route", §3.1)                 |
-+--------------------------+---------------------------------------------+
-```
-
-Expanding the Map's own keys (this is where §3.2's even/odd rule and
-field-value-shape rule apply — the "Type" column below is never array,
-map, or tag, by that rule):
+Every Record is a CBOR Map, one level deep, no more — a flat set of
+key/value pairs and nothing else. Using §5's Wi-Fi Record (Type `100`) as
+the example (this is where §3.2's even/odd rule and field-value-shape rule
+apply — the "Type" column below is never array, map, or tag, by that
+rule):
 
 ```
 +-----+------------------------+-------+----------+-----------------------------+
@@ -144,52 +135,34 @@ map, or tag, by that rule):
 ```
 
 Every Record — a plain content Record like this one or a stdlib Wrapper
-Record (§4.1) — has exactly this shape: an optional Tag, a mandatory Map,
-and field values that are always scalar-or-string, never structure to walk
-into. That fixed depth is what §3.3 means by "a conformant core parser
-never needs recursion at all."
+Record (§4.1) — has exactly this shape: a flat Map, and field values that
+are always scalar-or-string, never structure to walk into. That fixed
+shape is what §3.3 means by "a conformant core parser never needs
+recursion at all."
 
-### 3.1 Hardware Parity Routing (Record Type ID)
+### 3.1 Record Type ID (Key 0)
 
-1. **The Smart Route (Tags):** the Record Map SHOULD be wrapped in a CBOR
-   Semantic Tag matching the Record Type ID, for parsers with tag-aware
-   CBOR libraries.
-2. **The Constrained Route (Key 0):** the Record Map MUST also contain Key
-   `0` (uint), with the same Record Type ID as the tag. A constrained
-   parser with no tag support reads `map[0]` directly and ignores the tag.
+The Record Map MUST contain Key `0` (uint), the Record Type ID. This is
+the *only* routing mechanism — a parser reads `map[0]` to decide what kind
+of Record it's looking at, or to skip a Record it doesn't recognize. Key
+`0` is even, and is always critical: a Record with no key `0` cannot be
+routed at all and MUST be treated as an abort of that Record (§3.2's
+critical-key failure mode).
 
-Both routes carry the *same* ID — this is redundant dual-declaration for
-routing robustness, not a two-level type hierarchy (that's a different
-thing NDEF does — TNF category plus a separate Type string — which QDEF
-does not need, since "Record Type ID" is already the only dispatch key).
-
-Key `0` is MUST, not SHOULD, for a concrete reason, not just symmetry: many
-CBOR libraries and language bindings don't expose semantic tags to
-application code at all after decoding, or expose them awkwardly enough
-that treating tags as the only routing mechanism would silently break for
-their users. Key `0` is the routing mechanism every implementer can rely
-on regardless of what CBOR library they reach for; the tag is the optional
-accelerant for the libraries that do support it.
-
-**If the tag and `map[0]` disagree,** or `map[0]` is absent entirely, the
-Record cannot be routed consistently by every parser and MUST be treated as
-an abort of that Record (§3.2's critical-key failure mode) — a tag-aware
-parser and a constrained parser must never end up disagreeing about what
-Type a Record is.
-
-**Caution — the tag numbers are not QDEF's to give; key `0` is.** The Smart
-Route's "tag == Type ID" mapping collides with the IANA CBOR tag registry
-(RFC 8949 §9.2): the low numbers QDEF assigns to its own stdlib (§4) are
-already taken for bignums, decimal fractions, and dates. This is a real,
-reproduced collision, not a theoretical one — see §9's "CBOR tag-number
-collision" and FINDINGS.md #11 for a real decoder mangling a tagged Record.
-The Constrained Route (key `0`) has no such risk, and this isn't luck: CBOR
-has an IANA registry for tag numbers, but none for map keys — a bare map
-carries no built-in semantic layer for a generic decoder to misinterpret,
-which FINDINGS.md #11 also verifies directly (the identical Record map,
-tagged vs. untagged, round-trips cleanly only when untagged). Key `0`
-remains the mandatory, unconditionally collision-free routing mechanism
-regardless of how the tag question in §9 is eventually settled.
+An earlier draft also wrapped the Record Map in a CBOR semantic Tag
+matching the Type ID, as a second, redundant routing path for tag-aware
+CBOR libraries. That mechanism has been removed: CBOR tag numbers are a
+shared IANA registry meant for predefined, universal interpretations of a
+data item (a byte string *is* a bignum, a text string *is* a date) — not a
+private, per-application enumeration space, which is what treating "tag
+number" as "Type ID" actually asked of it. It also collided in practice:
+QDEF's own low Type IDs landed on tag numbers IANA already assigns to
+bignums, decimal fractions, and dates, verified against a real decoder
+mangling the result. See §9's "CBOR tag-number collision (resolved)" and
+FINDINGS.md #11 for the full reasoning and the decision. Key `0` was never
+part of the problem — there is no IANA registry for map keys, only for
+tags, so this simplification costs nothing: every prototype test already
+routed through key `0` alone.
 
 ### 3.2 The Extensibility Rule (Even/Odd Keys)
 
@@ -235,8 +208,7 @@ recursion, structurally. (Validated in
 guarantee assumes the Record is at least well-formed CBOR *and* obeys the
 field-value-shape rule above — a parser needs to determine the Record's
 byte length to find where the next Record starts. A Record that fails to
-route (missing key `0`, a Hardware Parity mismatch, §3.1) is still
-well-formed and isolable this way. A Record that is malformed CBOR, or
+route (missing key `0`, §3.1) is still well-formed and isolable this way. A Record that is malformed CBOR, or
 whose bytes violate the field-value-shape rule (a bare array/map/tag as a
 field value), is a stronger failure in both cases: the parser can no longer
 determine that boundary and cannot safely resume the Sequence at all.
@@ -264,11 +236,10 @@ just to support the *container*:
 
 Because of §3.2's field-value-shape rule, a conformant core parser never
 needs recursion at all to do its job — not bounded recursion, none. A
-Record is always exactly `Tag? → Map → (scalar | definite-length string)*`:
-a fixed two-level shape, walked once. Skipping a field whose key isn't
-recognized, or an entire Record whose Type ID isn't recognized, is always a
-direct read or a cursor-arithmetic jump, never a walk into unbounded
-structure. A conformant core parser SHOULD still reject a Record outright
+Record is always exactly `Map → (scalar | definite-length string)*`: one
+flat level, walked once. Skipping a field whose key isn't recognized, or
+an entire Record whose Type ID isn't recognized, is always a direct read
+or a cursor-arithmetic jump, never a walk into unbounded structure. A conformant core parser SHOULD still reject a Record outright
 (rather than attempt to interpret it) the instant it encounters a field
 value that violates the shape rule, since by definition that value's true
 length can't be determined without doing the recursive walk the rule exists
@@ -433,7 +404,7 @@ Wrapper's opaque payload would defeat.
 ### Type `100`: Wi-Fi Provisioning
 
 ```
-Tag 100: {
+{
   0: 100,               // CRITICAL: Record Type ID
   2: "My Coffee Shop",  // CRITICAL: SSID
   4: "guest123",        // CRITICAL: Password
@@ -445,7 +416,7 @@ Tag 100: {
 ### Type `105`: Universal Transit / Event Ticket
 
 ```
-Tag 105: {
+{
   0: 105,                // CRITICAL: Record Type ID
   2: h'A7F90B...',       // CRITICAL: Ticket Hash/Token
   4: 1735689600,         // CRITICAL: Expiry Epoch Timestamp
@@ -462,8 +433,8 @@ one Record Type ID and carry that payload unchanged, byte-for-byte, as an
 opaque blob under a single key:
 
 ```
-Tag <N>: {                     // application-chosen Type ID
-  0: <N>,
+{
+  0: <N>,                          // application-chosen Type ID
   2: h'<existing payload bytes>'  // CRITICAL: raw bytes, unchanged from
                                    //   whatever that application already
                                    //   defines — QDEF never looks inside
@@ -492,13 +463,13 @@ second, competing one at the QDEF layer).
 
 **Why not build them into the container:**
 
-- *Compression:* §3.1's "Constrained Route" only works if a bare-metal
-  scanner can read `map[0]` at zero decode cost to decide whether a record
-  concerns it. If the CBOR Sequence itself were compressed, that scanner
-  would need a DEFLATE implementation just to *skip* a record it doesn't
-  recognize — directly against the point of Hardware Parity routing (§3.1).
-  Keeping compression a per-Record-Type concern means a parser that doesn't
-  recognize a given Type never touches a compressed byte it didn't ask for.
+- *Compression:* §3.1's key-`0` routing only works if a bare-metal scanner
+  can read `map[0]` at zero decode cost to decide whether a record concerns
+  it. If the CBOR Sequence itself were compressed, that scanner would need
+  a DEFLATE implementation just to *skip* a record it doesn't recognize —
+  directly against the point of routing at all (§3.1). Keeping compression
+  a per-Record-Type concern means a parser that doesn't recognize a given
+  Type never touches a compressed byte it didn't ask for.
 - *Splitting:* QDEF is deliberately scoped to one physical code's records
   (§2). Reassembling a payload spread across multiple codes (ordering,
   missing/duplicate parts, parity, content-addressing) is a much harder
@@ -523,7 +494,7 @@ codes are only ever scanned by its own app, never clicked or typed — so per
 Registers one Record Type, say `950`, for the plain secret-key bytes:
 
 ```
-Tag 950: {
+{
   0: 950,
   2: h'<raw secret key packet bytes>'  // CRITICAL
 }
@@ -561,13 +532,15 @@ in `prototype/test/roundtrip.test.js`.
   this is meant to be shared across unrelated projects is still open — no
   registry authority exists yet, and IDs in this document remain
   illustrative placeholders. But the *shape* of the range has an answer:
-  tier it the way CBOR's own tag registry (RFC 8949 §9.2) already tiers
-  tag numbers — a small span requiring registration/review, then a larger
+  tier it the way CBOR's own tag registry (RFC 8949 §9.2) tiers tag
+  numbers — a small span requiring registration/review, then a larger
   "first-come" span, then an explicit private-use span for
-  never-shared/internal Type IDs. QDEF already leans on CBOR tags for
-  routing (§3.1), so mirroring the tiering convention its host format
-  already uses is a natural fit, not a new pattern to learn. Two options
-  were weighed and this is the one to build the eventual policy on:
+  never-shared/internal Type IDs. QDEF doesn't use CBOR tags itself
+  (§3.1, §9's "CBOR tag-number collision"), but the *governance pattern*
+  a mature numeric-ID registry uses is worth borrowing on its own merits,
+  independent of whether QDEF's wire format happens to touch tags at all.
+  Two options were weighed and this is the one to build the eventual
+  policy on:
   - **Tiered ranges (recommended):** four tiers, not two, each with a
     different reason to exist:
     - `1`–`99`: mechanism/plumbing (already spec'd, §4) — Wrapper Records
@@ -601,44 +574,47 @@ in `prototype/test/roundtrip.test.js`.
     unrelated meanings of "even/odd" depending on whether they're looking
     at a key or a Type ID — and it halves the usable ID space for no
     benefit a tiered range doesn't already provide more cheaply.
-- **CBOR tag-number collision (new, from the review pass — significant).**
-  The Smart Route (§3.1) wraps a Record Map in a CBOR semantic tag whose
-  number equals the Record Type ID. But CBOR tag numbers are a shared IANA
-  registry (RFC 8949 §3.4), and the low numbers QDEF hands to its own
-  stdlib are already assigned: tag `2`/`3` are bignums, tag `4` is a decimal
-  fraction, tag `5` is a bigfloat — i.e. exactly Types 2 (Split), 3
-  (Compress), 4 (Encrypt), 5 (Fallback Hint). The flagship Wi-Fi example,
-  Type `100`, collides with RFC 8943's "days-since-epoch date" (tag 100);
-  tag `0` (date/time string) additionally makes Type ID `0` unusable as a
-  tag. Verified against a real decoder, not just asserted: the Node `cbor`
-  library decodes `Tagged(2, <byte string>)` to a `BigInt` and
-  `Tagged(0, <text>)` to a `Date`, so these numbers are semantically
-  *live*. QDEF's reuse of them only "works" because that library falls back
-  to passthrough (`Tagged(2, Map)`) when the tagged content is a map rather
-  than the byte string a bignum expects — a stricter conformant decoder,
-  precisely the tag-aware audience the Smart Route exists for, may reject or
-  mangle it instead. So the Smart Route is unreliable, possibly harmful, for
-  its own intended audience; the Constrained Route (key `0`) is untouched,
-  and verifiably so — not by luck. CBOR's IANA Considerations register tag
-  numbers (and simple values); there is no equivalent registry for map
-  keys, because a bare map has no built-in semantic layer for a generic
-  decoder to apply. The identical Record map decodes as inert, uncoerced
-  data when untagged, and as `Invalid Date` when wrapped in tag `0` — see
-  FINDINGS.md #11. Whatever this open question resolves to, key `0` is not
-  at risk from it. Three resolutions, none chosen (each changes the wire
-  format, so this is left open rather than fixed unilaterally):
-  - **One registered QDEF tag.** Register a single IANA tag (the way tag
-    `55799` means "self-describe CBOR") meaning only "the following map is a
-    QDEF Record," and keep all routing in key `0`. Ends the collision with
-    one allocation; loses the tag-number-equals-Type-ID mapping.
-  - **Offset into unassigned tag space.** `tag = BASE + TypeID` for a `BASE`
-    in a definitively-unassigned IANA range — preserves a 1:1 tag↔Type
-    mapping at the cost of an arbitrary constant and wider tag encoding.
-  - **Drop the tag route.** Make key `0` the sole routing mechanism and
-    delete the Smart Route entirely — simplest and collision-proof, but
-    abandons the one optimization tag-aware libraries could offer. Whether
-    the tag route earns its keep at all is itself unsettled: every prototype
-    test routes via key `0`, and none has needed the tag.
+- **CBOR tag-number collision (resolved — the tag route was removed).** An
+  earlier draft wrapped every Record Map in a CBOR semantic tag equal to
+  its Type ID (the "Smart Route"), alongside the mandatory key `0`. Found
+  broken on two independent grounds, not one:
+  - **Empirical.** CBOR tag numbers are a shared IANA registry (RFC 8949
+    §3.4), and the low numbers QDEF's stdlib picked are already assigned:
+    tag `2`/`3` are bignums, tag `4` is a decimal fraction, tag `5` is a
+    bigfloat — exactly Types 2 (Split), 3 (Compress), 4 (Encrypt), 5
+    (Fallback Hint). Type `100` (Wi-Fi) collides with RFC 8943's
+    days-since-epoch date; tag `0` additionally makes Type ID `0` unusable.
+    Reproduced against a real decoder, not just asserted: `Tagged(2, <byte
+    string>)` decodes to a `BigInt`, and wrapping an actual Record Map in
+    tag `0` decodes to `Invalid Date` — see FINDINGS.md #11.
+  - **Conceptual, and the deeper reason.** Even numbers with no *current*
+    collision were the wrong fix, not just a smaller one. A tag number is
+    meant to carry one predefined, universal interpretation (a byte string
+    *is* a bignum, a text string *is* a date) that any implementation can
+    look up and apply — not a private, per-application enumeration handed
+    out in bulk. Treating "tag == Type ID" as QDEF's own extensible ID
+    space was asking the registry to be something it isn't, independent of
+    which specific numbers happened to be free. No legitimate registry
+    grants thousands of slots to one application's internal dispatch
+    table.
+
+  Key `0` was never implicated by either argument: there is no IANA
+  registry for map keys, only for tags, so a bare Record Map has no
+  built-in semantic layer for a generic decoder to misinterpret — verified
+  directly (FINDINGS.md #11): the identical Record Map round-trips cleanly
+  when untagged, and decodes to `Invalid Date` only when wrapped in a tag.
+  **Decision: the tag route is removed. Key `0` is the sole routing
+  mechanism** (§3.1) — simpler, and every prototype test already routed
+  through it alone, tag or no tag. The one place a CBOR tag still
+  legitimately appears in QDEF is unrelated to routing: §3.2's optional
+  tag-24 hint on a field's own byte-string *value*, a Record-Type author's
+  own opt-in choice about one field's content, which is exactly the
+  "predefined, universal meaning" use tags are for — not a mechanism
+  QDEF's core depends on. A single shared "this map is a QDEF Record" tag
+  (the way tag `55799` means "self-describe CBOR") was considered as a
+  middle ground and set aside for the same reason: one more optional
+  mechanism to document and implement, for a benefit key `0` already
+  provides unconditionally.
 - **Standard library governance.** Related but narrower (§4): who maintains
   the reserved `1`–`99` range itself — additions like §4.1/§4.2 need some
   process for becoming part of "the stdlib" rather than just another

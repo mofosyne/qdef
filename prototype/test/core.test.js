@@ -8,35 +8,25 @@ const core = require('../src/core');
 const rt = require('../src/recordTypes');
 
 // ---------------------------------------------------------------------
-// Hardware Parity dual routing (§3.1): tag is optional, key 0 is mandatory.
+// Record Type ID routing (§3.1): key 0 is the only mechanism. An earlier
+// draft also wrapped Records in a CBOR tag equal to the Type ID; dropped
+// after finding it collided with the IANA CBOR tag registry (see
+// docs/FINDINGS.md #11-#12) — a stray tag around a Record is now simply
+// malformed input, not an alternate routing path to unwrap.
 // ---------------------------------------------------------------------
-test('a Constrained-Route-only encoder (no CBOR tag) still routes correctly via key 0', () => {
-  const container = core.encodeContainer(
-    [{ typeId: rt.WIFI_TYPE, fields: new Map([[2, 'SSID'], [4, 'pass'], [6, 2]]) }],
-    { tagged: false }
-  );
-  const { records } = core.decodeContainer(container);
-  assert.equal(records.length, 1);
-  assert.equal(records[0].tag, null);
-  assert.equal(records[0].typeId, 100); // routed purely off map[0]
-  const rec = core.applyCriticality(records[0], rt.WIFI_KNOWN_KEYS);
-  assert.equal(rec.aborted, false);
-});
-
-test('a tag/key-0 disagreement (Hardware Parity mismatch) aborts the record', () => {
-  // Hand-construct a malformed record: Tag says 105, key 0 says 100.
+test('a tagged item is malformed input, not an alternate route to unwrap', () => {
+  // A CBOR-tagged map is no longer valid Record syntax at all now that
+  // key 0 is the sole routing mechanism.
   const map = new Map([[0, 100], [2, 'SSID'], [4, 'pass'], [6, 2]]);
-  const malformed = cbor.encode(new cbor.Tagged(105, map));
-  const container = Buffer.concat([core.MAGIC, Buffer.from([core.VERSION]), malformed]);
+  const tagged = cbor.encode(new cbor.Tagged(105, map));
+  const container = Buffer.concat([core.MAGIC, Buffer.from([core.VERSION]), tagged]);
 
-  const { records } = core.decodeContainer(container);
-  assert.equal(records[0].aborted, true);
-  assert.match(records[0].abortReason, /hardware-parity mismatch/);
+  assert.throws(() => core.decodeContainer(container), /Record is not a CBOR map/);
 });
 
 test('a record missing key 0 entirely aborts (cannot be routed by any parser)', () => {
   const map = new Map([[2, 'SSID']]); // no key 0
-  const bytes = cbor.encode(new cbor.Tagged(100, map));
+  const bytes = cbor.encode(map);
   const container = Buffer.concat([core.MAGIC, Buffer.from([core.VERSION]), bytes]);
 
   const { records } = core.decodeContainer(container);
@@ -49,9 +39,7 @@ test('a record missing key 0 entirely aborts (cannot be routed by any parser)', 
 // because NDEF's own MIME type (application/vnd.qdef) already identifies it.
 // ---------------------------------------------------------------------
 test('NDEF path: a bare CBOR Sequence (no magic/version) still routes via decodeSequence', () => {
-  const bareSeq = Buffer.concat([
-    cbor.encode(new cbor.Tagged(rt.WIFI_TYPE, new Map([[0, 100], [2, 'SSID'], [4, 'pass'], [6, 2]]))),
-  ]);
+  const bareSeq = cbor.encode(new Map([[0, 100], [2, 'SSID'], [4, 'pass'], [6, 2]]));
   // Sanity: this must NOT be parseable as a magic-prefixed container.
   assert.throws(() => core.decodeContainer(bareSeq), /bad magic/);
 
@@ -89,17 +77,17 @@ test('a totally unrecognized Record Type is skippable without inspecting its key
 // ---------------------------------------------------------------------
 test('records decode incrementally off a byte stream, confirming the no-buffering claim', () => {
   const seq = Buffer.concat([
-    cbor.encode(new cbor.Tagged(rt.WIFI_TYPE, new Map([[0, 100], [2, 'a']]))),
-    cbor.encode(new cbor.Tagged(rt.TAGDROP_REGISTRATION_TYPE, new Map([[0, 900], [2, 'b']]))),
+    cbor.encode(new Map([[0, 100], [2, 'a']])),
+    cbor.encode(new Map([[0, 900], [2, 'b']])),
   ]);
 
   return new Promise((resolve, reject) => {
-    const decoder = new cbor.Decoder({ tags: {} });
-    const seenTags = [];
-    decoder.on('data', (item) => seenTags.push(item.tag));
+    const decoder = new cbor.Decoder();
+    const seenTypeIds = [];
+    decoder.on('data', (item) => seenTypeIds.push(item.get(0)));
     decoder.on('error', reject);
     decoder.on('end', () => {
-      assert.deepEqual(seenTags, [100, 900]);
+      assert.deepEqual(seenTypeIds, [100, 900]);
       resolve();
     });
     // Feed the sequence in arbitrary small chunks, simulating bytes arriving

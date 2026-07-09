@@ -21,9 +21,10 @@ found.
   a Record wrapping an opaque third-party payload, the full
   Split(parity)→Encrypt→plain stack with fragment-drop recovery, and the
   even/odd criticality rule.
-- `test/core.test.js` — Hardware Parity dual-routing edge cases (tag/key-0
-  agreement, disagreement, and tag-less encoding), the NDEF no-magic path,
-  and the streaming-decode claim.
+- `test/core.test.js` — Record Type ID routing edge cases (missing key 0,
+  a CBOR-tagged item as malformed input now that key 0 is the sole
+  routing mechanism), the NDEF no-magic path, and the streaming-decode
+  claim.
 - `test/nesting-order.test.js` — whether a generic decoder can detect a
   non-conformant Wrapper nesting order (spec finding: it can't).
 

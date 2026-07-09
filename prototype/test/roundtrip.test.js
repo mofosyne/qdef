@@ -33,7 +33,6 @@ test('Type 100 (Wi-Fi) record round-trips through a full container', () => {
 
   assert.equal(rec.aborted, false);
   assert.equal(rec.typeId, 100);
-  assert.equal(rec.tag, 100);
   assert.equal(rec.map.get(2), 'My Coffee Shop');
   assert.equal(rec.map.get(4), 'guest123');
   assert.equal(rec.map.get(6), 2);

@@ -29,9 +29,6 @@ pub enum Error {
 pub enum AbortReason {
     /// §3.1: a Record with no key 0 cannot be routed by any parser.
     MissingKeyZero,
-    /// §3.1: the Smart-Route CBOR tag and the Constrained-Route key 0
-    /// disagree about this Record's Type ID.
-    HardwareParityMismatch { tag: u64, key0: u64 },
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -109,10 +106,14 @@ impl<'a> Iterator for Records<'a> {
             Err(e) => {
                 // A malformed CBOR item means we can no longer determine
                 // where it ends, so we can't safely resume the Sequence —
-                // unlike a well-formed-but-unroutable Record (missing key 0,
-                // tag mismatch), which aborts only itself. See FINDINGS.md:
-                // the spec's "abort just that record" promise silently
-                // assumes the record is at least well-formed CBOR.
+                // unlike a well-formed-but-unroutable Record (missing key 0),
+                // which aborts only itself. See FINDINGS.md: the spec's
+                // "abort just that record" promise silently assumes the
+                // record is at least well-formed CBOR. A CBOR-tagged item is
+                // one such malformed case now: key 0 is the sole routing
+                // mechanism (§3.1), so a tag around a Record is no longer
+                // valid Record syntax at all — it's rejected here as "not a
+                // map", the same as any other malformed item.
                 self.done = true;
                 Some(Err(e))
             }
@@ -120,12 +121,10 @@ impl<'a> Iterator for Records<'a> {
     }
 }
 
-/// A routed Record: which Type ID it claims (via key 0), whether Hardware
-/// Parity routing (§3.1) accepts it, and its raw map bytes for a
-/// Record-Type-specific handler (e.g. `check_criticality`, `find_value`) to
-/// inspect further.
+/// A routed Record: which Type ID it claims (via key 0, §3.1's sole routing
+/// mechanism), and its raw map bytes for a Record-Type-specific handler
+/// (e.g. `check_criticality`, `find_value`) to inspect further.
 pub struct Record<'a> {
-    pub tag: Option<u64>,
     pub type_id: Option<u64>,
     pub aborted: bool,
     pub abort_reason: Option<AbortReason>,
@@ -133,38 +132,22 @@ pub struct Record<'a> {
 }
 
 fn parse_record(buf: &[u8]) -> Result<(Record<'_>, usize), Error> {
-    let head = cbor::read_head(buf).map_err(Error::Cbor)?;
-    let (tag, map_start) = if head.major == 6 {
-        (Some(head.arg), head.head_len)
-    } else {
-        (None, 0)
-    };
-
-    let (key0, map_len) = parse_map_key0(&buf[map_start..]).map_err(Error::Cbor)?;
-    let total = map_start + map_len;
-    let map_bytes = &buf[map_start..total];
+    let (key0, map_len) = parse_map_key0(buf).map_err(Error::Cbor)?;
+    let map_bytes = &buf[..map_len];
 
     let (type_id, aborted, abort_reason) = match key0 {
         None => (None, true, Some(AbortReason::MissingKeyZero)),
-        Some(id) => match tag {
-            Some(t) if t != id => (
-                Some(id),
-                true,
-                Some(AbortReason::HardwareParityMismatch { tag: t, key0: id }),
-            ),
-            _ => (Some(id), false, None),
-        },
+        Some(id) => (Some(id), false, None),
     };
 
     Ok((
         Record {
-            tag,
             type_id,
             aborted,
             abort_reason,
             map_bytes,
         },
-        total,
+        map_len,
     ))
 }
 

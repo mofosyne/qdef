@@ -17,7 +17,6 @@ fn wifi_record_routes_and_fields_extract() {
     let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
     assert_eq!(records.len(), 1);
     let rec = &records[0];
-    assert_eq!(rec.tag, Some(100));
     assert_eq!(rec.type_id, Some(100));
     assert!(!rec.aborted);
 
@@ -31,15 +30,6 @@ fn wifi_record_routes_and_fields_extract() {
     assert_eq!(read_definite_string(ssid).unwrap(), b"My Coffee Shop");
     let password = find_value(rec.map_bytes, 4).unwrap().unwrap();
     assert_eq!(read_definite_string(password).unwrap(), b"guest123");
-}
-
-#[test]
-fn untagged_wifi_record_still_routes_via_key_0() {
-    let container = Container::parse(WIFI_UNTAGGED_CONTAINER).unwrap();
-    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
-    assert_eq!(records[0].tag, None);
-    assert_eq!(records[0].type_id, Some(100));
-    assert!(!records[0].aborted);
 }
 
 #[test]
@@ -73,18 +63,15 @@ fn unrecognized_odd_key_is_silently_ignored() {
 }
 
 #[test]
-fn hardware_parity_mismatch_aborts_at_routing_time() {
-    let container = Container::parse(HARDWARE_PARITY_MISMATCH_CONTAINER).unwrap();
-    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
-    let rec = &records[0];
-    assert!(rec.aborted);
-    assert_eq!(
-        rec.abort_reason,
-        Some(AbortReason::HardwareParityMismatch {
-            tag: 105,
-            key0: 100
-        })
-    );
+fn a_tagged_item_is_malformed_input_not_an_alternate_route() {
+    // Key 0 is the sole routing mechanism (§3.1) — an earlier draft also
+    // routed via a CBOR tag equal to the Type ID, removed after finding it
+    // collided with the IANA CBOR tag registry (FINDINGS.md #11-#12). A
+    // CBOR-tagged item is no longer valid Record syntax: it's malformed,
+    // Sequence-fatal input, not something to unwrap.
+    let container = Container::parse(TAGGED_ITEM_IS_MALFORMED_CONTAINER).unwrap();
+    let result: Result<Vec<_>, _> = container.records().collect();
+    assert_eq!(result.err(), Some(Error::Cbor(cbor::Error::NotAMap)));
 }
 
 #[test]

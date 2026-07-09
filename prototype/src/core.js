@@ -2,6 +2,11 @@
 // QDEF core: magic/version framing, CBOR-Sequence-of-Records, key-0 routing,
 // even/odd unknown-key criticality. Deliberately has no knowledge of any
 // specific Record Type, compression, or reassembly (see docs/QDEF-SPEC.md §3.3).
+//
+// Records are plain CBOR maps, never CBOR-tagged: an earlier draft also
+// wrapped each Record in a CBOR semantic tag equal to its Type ID, dropped
+// after finding it collided with the IANA CBOR tag registry (see
+// docs/FINDINGS.md #11–#12). Key 0 is the only routing mechanism.
 
 const cbor = require('cbor');
 
@@ -11,22 +16,17 @@ const VERSION = 0x01;
 /**
  * Encode a QDEF container from a list of records.
  * @param {Array<{typeId: number, fields: Map<number, any>}>} records
- * @param {{tagged?: boolean}} [opts] - tagged=false emits bare maps only
- *   (simulates a constrained encoder that skips the "Smart Route" tag).
  */
-function encodeContainer(records, opts = {}) {
-  const tagged = opts.tagged !== false;
-  const parts = records.map((r) => encodeRecordBytes(r, { tagged }));
+function encodeContainer(records) {
+  const parts = records.map(encodeRecordBytes);
   return Buffer.concat([MAGIC, Buffer.from([VERSION]), ...parts]);
 }
 
-function encodeRecordBytes({ typeId, fields }, opts = {}) {
-  const tagged = opts.tagged !== false;
+function encodeRecordBytes({ typeId, fields }) {
   const map = new Map(fields);
-  map.set(0, typeId); // Key 0 MUST carry the Record Type ID (Constrained Route)
+  map.set(0, typeId); // Key 0 MUST carry the Record Type ID — the only routing mechanism
   if (map.get(0) !== typeId) throw new Error('key 0 must equal typeId');
-  const value = tagged ? new cbor.Tagged(typeId, map) : map;
-  return cbor.encode(value);
+  return cbor.encode(map);
 }
 
 /**
@@ -54,37 +54,16 @@ function decodeSequence(seq) {
   return items.map(decodeRecordItem);
 }
 
-function decodeRecordItem(item) {
-  let tag = null;
-  let map = item;
-  if (item instanceof cbor.Tagged) {
-    tag = item.tag;
-    map = item.value;
-  }
+function decodeRecordItem(map) {
   if (!(map instanceof Map)) {
-    throw new Error('Record is not a CBOR map (or Tagged map)');
+    throw new Error('Record is not a CBOR map');
   }
   if (!map.has(0)) {
     // Key 0 is even and always critical: a record with no Type ID at all
-    // cannot be routed by *any* parser, tag-aware or not. Treat as an
-    // immediate abort of this record.
-    return { tag, typeId: null, map, aborted: true, abortReason: 'missing key 0' };
+    // cannot be routed. Treat as an immediate abort of this record.
+    return { typeId: null, map, aborted: true, abortReason: 'missing key 0' };
   }
-  const typeId = map.get(0);
-  if (tag !== null && tag !== typeId) {
-    // Spec gap found by the prototype: the draft never says what a decoder
-    // should do when the Smart-Route tag and the Constrained-Route key 0
-    // disagree. Treating it as a hard abort of the record (rather than
-    // silently trusting one side) is the conservative, tamper-evident choice.
-    return {
-      tag,
-      typeId,
-      map,
-      aborted: true,
-      abortReason: `hardware-parity mismatch: tag=${tag} key0=${typeId}`,
-    };
-  }
-  return { tag, typeId, map, aborted: false };
+  return { typeId: map.get(0), map, aborted: false };
 }
 
 /**
