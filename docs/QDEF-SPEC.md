@@ -85,6 +85,21 @@ looking at. (Validated in the prototype: a bare CBOR Sequence with no magic
 prefix decodes through the exact same Record-routing logic as the full
 container.)
 
+**Unknown version byte: reject the whole container.** The version byte
+gates the interpretation of everything after it. A decoder that reads a
+version it does not implement MUST reject the entire container and MUST NOT
+attempt to parse the Sequence that follows — a future version is free to
+change the framing, the routing rules, or the even/odd criticality
+convention itself, i.e. the very machinery a decoder would otherwise rely
+on to skip safely. This is the one point in QDEF where "skip what you don't
+understand" deliberately does *not* apply: an unknown Record Type ID (skip
+the record), an unknown even key (abort the record), and an unrecognized
+tag (§3.1) all have local, recoverable rules, but an unknown *version* is a
+global "I cannot safely interpret any of this" signal. Version bumps are
+expected to be rare precisely because §3.2's per-field forward
+compatibility absorbs most evolution without one; the version byte moves
+only for a change to the core framing itself.
+
 **Deliberately no record count or total payload size in the header** —
 suggested more than once as a natural addition to a binary header, and
 deliberately left out. Either field would require an encoder to know its
@@ -128,6 +143,15 @@ Record cannot be routed consistently by every parser and MUST be treated as
 an abort of that Record (§3.2's critical-key failure mode) — a tag-aware
 parser and a constrained parser must never end up disagreeing about what
 Type a Record is.
+
+**Caution — the tag numbers are not QDEF's to give.** The Smart Route's
+"tag == Type ID" mapping collides with the IANA CBOR tag registry (RFC
+8949): the low numbers QDEF assigns to its own stdlib (§4) are already
+taken for bignums, decimal fractions, and dates. This is an unresolved
+wire-format issue surfaced (and reproduced against a real CBOR library)
+during review — see §9's "CBOR tag-number collision." The Constrained
+Route (key `0`) is unaffected and remains the mandatory, collision-free
+routing mechanism regardless of how the tag question is settled.
 
 ### 3.2 The Extensibility Rule (Even/Odd Keys)
 
@@ -519,6 +543,38 @@ in `prototype/test/roundtrip.test.js`.
     unrelated meanings of "even/odd" depending on whether they're looking
     at a key or a Type ID — and it halves the usable ID space for no
     benefit a tiered range doesn't already provide more cheaply.
+- **CBOR tag-number collision (new, from the review pass — significant).**
+  The Smart Route (§3.1) wraps a Record Map in a CBOR semantic tag whose
+  number equals the Record Type ID. But CBOR tag numbers are a shared IANA
+  registry (RFC 8949 §3.4), and the low numbers QDEF hands to its own
+  stdlib are already assigned: tag `2`/`3` are bignums, tag `4` is a decimal
+  fraction, tag `5` is a bigfloat — i.e. exactly Types 2 (Split), 3
+  (Compress), 4 (Encrypt), 5 (Fallback Hint). The flagship Wi-Fi example,
+  Type `100`, collides with RFC 8943's "days-since-epoch date" (tag 100);
+  tag `0` (date/time string) additionally makes Type ID `0` unusable as a
+  tag. Verified against a real decoder, not just asserted: the Node `cbor`
+  library decodes `Tagged(2, <byte string>)` to a `BigInt` and
+  `Tagged(0, <text>)` to a `Date`, so these numbers are semantically
+  *live*. QDEF's reuse of them only "works" because that library falls back
+  to passthrough (`Tagged(2, Map)`) when the tagged content is a map rather
+  than the byte string a bignum expects — a stricter conformant decoder,
+  precisely the tag-aware audience the Smart Route exists for, may reject or
+  mangle it instead. So the Smart Route is unreliable, possibly harmful, for
+  its own intended audience; the Constrained Route (key `0`) is untouched.
+  Three resolutions, none chosen (each changes the wire format, so this is
+  left open rather than fixed unilaterally):
+  - **One registered QDEF tag.** Register a single IANA tag (the way tag
+    `55799` means "self-describe CBOR") meaning only "the following map is a
+    QDEF Record," and keep all routing in key `0`. Ends the collision with
+    one allocation; loses the tag-number-equals-Type-ID mapping.
+  - **Offset into unassigned tag space.** `tag = BASE + TypeID` for a `BASE`
+    in a definitively-unassigned IANA range — preserves a 1:1 tag↔Type
+    mapping at the cost of an arbitrary constant and wider tag encoding.
+  - **Drop the tag route.** Make key `0` the sole routing mechanism and
+    delete the Smart Route entirely — simplest and collision-proof, but
+    abandons the one optimization tag-aware libraries could offer. Whether
+    the tag route earns its keep at all is itself unsettled: every prototype
+    test routes via key `0`, and none has needed the tag.
 - **Standard library governance.** Related but narrower (§4): who maintains
   the reserved `1`–`99` range itself — additions like §4.1/§4.2 need some
   process for becoming part of "the stdlib" rather than just another
@@ -563,6 +619,39 @@ in `prototype/test/roundtrip.test.js`.
   the field-value-shape rule (§3.2), which constrains *what shape* a value
   may be, not which of several valid *encodings* of that shape an encoder
   must pick.
+- **Sign / detached-authenticity wrapper (new, requested).** There is no
+  way today to prove a *plain, readable* Record is authentic without also
+  hiding it: the Encrypt wrapper's AES-GCM tag provides integrity only as a
+  side effect of confidentiality, and there is no standalone sign primitive.
+  Adding one is not the clean parallel to Encrypt it first looks like, and
+  that is the finding:
+  - **Sign-as-wrapper (opaque form).** Mechanically identical to Encrypt
+    (Type 4) — the signed Record's bytes become the wrapper's opaque
+    payload, plus a signature/MAC field. It inherits Encrypt's visibility,
+    though: an unaware parser skips the whole thing and sees *nothing*. That
+    is fine only when the inner Record was going to be opaque anyway (a
+    Type-950 key backup, a proprietary blob), where it *is* a clean
+    parallel. It cannot achieve "sign a Wi-Fi record and keep it readable" —
+    being readable and being a wrapper payload are mutually exclusive.
+  - **Sign-as-sibling (detached form).** The signature is a *separate*
+    Record (like the Fallback Hint §4.2 is a sibling, not a wrapper),
+    carrying a reference to which Record(s) it covers plus the signature
+    bytes. The signed Records stay plain and readable; an unaware parser
+    reads them normally and skips the unrecognized signature Record by Type
+    ID. This is the form that delivers "readable *and* verifiable" — but it
+    depends on two things QDEF lacks: the **canonical encoding** above (a
+    verifier must reconstruct the exact signed bytes) and a
+    **coverage-identification scheme** (which Records, addressed how — by
+    index? by content hash? — surviving reordering and unrelated siblings).
+    Coverage identification is the same signed-bytes/verified-bytes
+    divergence hazard this project's origin story (TagDrop's signing bug) is
+    a caution about, so it must not be hand-waved.
+
+  Direction when taken up: specify the sibling form (it is the one worth
+  having), but only *after* the canonical-encoding question is resolved —
+  a detached signature is meaningless without it. The wrapper form can be
+  dropped in at any time as a straight parallel to Encrypt if an
+  opaque-payload use case ever wants it.
 - **Nesting order enforcement — now answered, not open.** A prototype
   confirmed a generically-written decoder cannot detect or reject a
   non-conformant Wrapper nesting order (FINDINGS.md §7); §4.1's text has
