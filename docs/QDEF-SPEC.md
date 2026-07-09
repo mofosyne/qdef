@@ -116,7 +116,7 @@ malformed input could make lie.
 
 Every Record is a CBOR Map.
 
-### 3.1 Hardware Parity Routing (Key 0)
+### 3.1 Hardware Parity Routing (Record Type ID)
 
 1. **The Smart Route (Tags):** the Record Map SHOULD be wrapped in a CBOR
    Semantic Tag matching the Record Type ID, for parsers with tag-aware
