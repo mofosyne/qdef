@@ -535,10 +535,30 @@ in `prototype/test/roundtrip.test.js`.
   routing (§3.1), so mirroring the tiering convention its host format
   already uses is a natural fit, not a new pattern to learn. Two options
   were weighed and this is the one to build the eventual policy on:
-  - **Tiered ranges (recommended):** e.g. `100`–`999` specification-required,
-    `1000`–`0xFFFF` first-come-first-served, `0x10000`+ private use — exact
-    boundaries are a policy decision for whoever ends up running the
-    registry, not a wire-format one.
+  - **Tiered ranges (recommended):** four tiers, not two, each with a
+    different reason to exist:
+    - `1`–`99`: mechanism/plumbing (already spec'd, §4) — Wrapper Records
+      and other stdlib infrastructure, not application content.
+    - `100`–`999`: **common vocabulary** — reviewed, widely-recognized
+      content types (Wi-Fi, a URL/URI record, the kind of thing NDEF calls
+      a "Well Known Type"). This is the tier for a Record Type enough
+      unrelated implementers would want to recognize that it's worth a
+      shared, reviewed number rather than everyone reinventing their own —
+      today's §5 examples (`100`, `105`) already sit here informally.
+    - `1000`–`0xFFFF`: first-come-first-served — registered, but no review
+      gate beyond "not already taken."
+    - `0x10000`+: **private-use, via a large random value, not a
+      registry.** This tier needs no allocation authority at all: because
+      Type IDs are CBOR uints with no fixed width, an implementer who picks
+      a sufficiently large (e.g. 32- or 64-bit) *random* number gets
+      collision avoidance from the sheer size of the number space, the same
+      way a UUID does — not from anyone checking a list. This is the
+      correct answer for closed/internal Record Types that will never be
+      published or need to interoperate with an unrelated implementer, and
+      it's only viable because the wire format never fixed Type IDs to a
+      small byte-width field.
+    Exact boundaries remain a policy decision for whoever ends up running
+    the registry, not a wire-format one.
   - **Even/odd for governance tier (considered, rejected):** reuse the
     even/odd convention itself to mean "pre-registered vs. free-for-all,"
     the same way it already means critical-vs-optional for keys (§3.2).
