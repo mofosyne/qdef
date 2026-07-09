@@ -29,6 +29,11 @@ of the identical bytes, silently disagreeing about what the Record even is.
 class of failure as an unrecognized critical key) — verified in
 `prototype/test/core.test.js`.
 
+**Later superseded:** the tag route this finding is about no longer
+exists — see finding #12. Kept here as an accurate record of what shipped
+at the time; the mismatch case it fixed is moot once there's only one
+route.
+
 ### 2. A Record with no key 0 at all
 
 Not addressed anywhere. Key 0 is how *every* parser (tag-aware or not)
@@ -254,13 +259,94 @@ it implicit — an aborted-but-well-formed Record doesn't affect siblings;
 malformed CBOR at the Sequence level is a stronger failure with no
 per-Record isolation possible.
 
+## Findings from a spec review pass
+
+### 11. The Smart Route's tag numbers collide with the IANA CBOR tag registry — Hardware Parity's key-0 route does not, verified both ways
+
+A fresh review pass questioned whether "wrap the Record in a CBOR tag equal
+to the Type ID" (§3.1's Smart Route) is actually safe, given CBOR tag
+numbers are a shared IANA registry (RFC 8949 §9.2), not QDEF's own
+namespace. Checked against a real decoder rather than left as a plausible
+worry:
+
+```
+Tagged(2, <byte string>)  ->  decodes to a BigInt   (tag 2 = unsigned bignum)
+Tagged(0, "2026-...")     ->  decodes to a Date      (tag 0 = date/time string)
+Tagged(0, <a Record map>) ->  decodes to Invalid Date
+```
+
+Types 2/3/4/5 (the entire Wrapper stdlib) and Type 100 (the flagship Wi-Fi
+example) all reuse tag numbers IANA has already assigned real, live meaning
+to. QDEF's own worked examples aren't hypothetically at risk — they're
+already using colliding numbers today. A permissive decoder happens to fall
+back to passthrough when the tagged content doesn't match the registered
+type's expected shape (a byte string for a bignum, a text string for a
+date) — but a stricter conformant decoder, precisely the tag-aware audience
+the Smart Route exists to serve, is entitled to reject or mangle it, and
+wrapping an actual Record map in tag 0 demonstrably does mangle it.
+
+The follow-up question — does Hardware Parity's *other* route, key `0`,
+have the same problem? — was worth checking rather than assuming, since
+"QDEF picked a number that collides with something" was already true once.
+It does not, and the reason is structural, not luck: CBOR's IANA
+Considerations register tag numbers and simple values — there is no
+registry for map keys, because a bare CBOR map carries no built-in semantic
+layer the way a tag does. A generic decoder has nothing to coerce key `0`
+into; it's just data until something that knows the surrounding schema (a
+QDEF-aware parser) gives it meaning. Verified: encoding the identical
+Record map with *no* tag at all round-trips through a generic decoder as
+inert data (`map.get(0) === 100`, no coercion), while the same map wrapped
+in tag `0` decodes to `Invalid Date`. The asymmetry is exactly the
+asymmetry the format's own layering predicts — key `0` is the mandatory
+Constrained Route for a reason, and this is a second, independent reason
+beyond §1's "not every CBOR library exposes tags."
+
+**Fix:** at the time this was written, left open pending a decision between
+three wire-format resolutions. Superseded — see finding #12: the tag route
+was removed outright, for a reason beyond the collision this finding
+verified.
+
+### 12. The tag route wasn't just collision-prone — it was the wrong mechanism, and removing it simplified the core
+
+Finding #11 verified a real, reproduced IANA tag-number collision and
+confirmed key `0` was unaffected. That was enough to justify *a* fix, but
+not enough on its own to justify which fix — a wider or offset tag range
+would have dodged the specific collision without addressing why it
+happened. A follow-up review pass asked what a CBOR tag number is actually
+*for*: RFC 8949 §3.4's model is one tag number carrying one predefined,
+universal interpretation of a data item (a byte string *is* a bignum, a
+text string *is* a date) that any implementation can look up and apply —
+not a private space handed out in bulk for one application's internal
+dispatch table. Under that model, "tag == Type ID" was never a sound
+mechanism, independent of which specific numbers happened to be free at
+any given moment; "offset into unassigned tag space" (one of finding #11's
+three candidate fixes) would have preserved the exact category error on
+numbers that merely hadn't collided *yet*.
+
+**Fix:** the tag route (the "Smart Route") is removed outright. Key `0` is
+now the sole Record Type ID routing mechanism — §3.1 no longer describes
+two routes, only one. This is a genuine simplification of the mandatory
+core, not just a safer version of the old design: `rust/qdef-core`'s
+`parse_record` no longer needs to branch on CBOR major type 6 to detect an
+optional tag, the `Record` struct no longer carries a `tag` field, and
+`AbortReason::HardwareParityMismatch` (finding #1's fix) is dead code once
+there's nothing left to mismatch against. The one place a CBOR tag still
+legitimately appears in QDEF — §3.2's optional tag-24 hint on an
+individual field's byte-string *value* — was never affected by any of
+this: it's a Record-Type author's own opt-in annotation about one field's
+content, exactly the "predefined, universal meaning" use tags are
+correctly for, not a mechanism QDEF's core routing depends on.
+
 ## Confirmed working as designed (no fix needed)
 
 - **Magic + version + CBOR-Sequence-of-Records** round-trips exactly as
   drawn in §2's diagram, including rejecting bad magic / wrong version.
-- **Dual routing (§3.1):** a Record encoded with no CBOR tag at all (the
-  "Constrained Route only" case) still routes correctly off `map[0]` alone
-  — verified with a `tagged: false` encoder path in the prototype.
+- **Key-0-only routing (§3.1):** a Record encoded with no CBOR tag at all
+  still routes correctly off `map[0]` alone — verified with a `tagged:
+  false` encoder path in the prototype, back when a tagged path also
+  existed to compare against. The tag path was later removed entirely
+  (finding #12); this bullet just confirms key `0` alone was always
+  sufficient, which is exactly why removing the other route cost nothing.
 - **Even/odd criticality (§3.2):** an unrecognized even key aborts only
   that Record; an unrecognized odd key is silently ignored and the rest of
   the Record still processes; one aborted Record in a Sequence doesn't
@@ -288,14 +374,20 @@ per-Record isolation possible.
 
 ## Net effect on the spec
 
-None of this changes the four load-bearing design decisions called out as
-settled (two-layer core/stdlib split, Hardware Parity dual routing,
-even/odd criticality, Wrapper Records over a sibling key range, fixed
-nesting order as encoder convention). What changed is precision: several
-places that read as complete prose turned out to be underspecified the
-moment two independent implementations needed to agree on wire bytes
-without talking to each other first. That gap is exactly what a prototype
-catches and prose review doesn't.
+None of this changes three of the four load-bearing design decisions
+called out as settled (two-layer core/stdlib split, even/odd criticality,
+Wrapper Records over a sibling key range, fixed nesting order as encoder
+convention). What changed for those is precision: several places that read
+as complete prose turned out to be underspecified the moment two
+independent implementations needed to agree on wire bytes without talking
+to each other first. That gap is exactly what a prototype catches and
+prose review doesn't.
+
+The fourth — Hardware Parity dual routing — didn't survive: finding #12
+removed the tag half of it outright. That's a genuine reversal of a
+previously-settled decision, not just a precision fix, and it happened for
+the same reason the others got sharpened: a concrete finding (§11's
+reproduced IANA collision), not a stylistic second-guess.
 
 The Rust pass added a second kind of value beyond the Node prototype: not
 just "does the design round-trip," but "does the *minimal-core* claim,
