@@ -142,25 +142,40 @@ fn bad_magic_and_wrong_version_are_rejected() {
 }
 
 #[test]
-fn skip_value_rejects_pathologically_deep_nesting() {
-    // MAX_DEPTH array nestings of empty arrays, one level too deep: each
-    // byte 0x81 is "array of 1 item" (major 4, info 1); the final 0x80 is
-    // an empty array (major 4, info 0) terminating the chain.
-    let mut deep = alloc_free_deep_array(cbor::MAX_DEPTH as usize + 1);
-    deep.push(0x80);
+fn field_value_shape_rule_rejects_a_bare_array_even_under_an_odd_optional_key() {
+    // Key 11 is odd (optional) — without the field-value-shape rule, an
+    // unrecognized odd key would just be silently ignored. It must instead
+    // be rejected: the decoder can't determine this Record's byte length
+    // without walking into the array's structure, which the rule forbids
+    // it from ever attempting. This is a routing-time failure (the walker
+    // can't even finish reading the map), not a criticality-check failure.
+    let container = Container::parse(DISALLOWED_ARRAY_VALUE_CONTAINER).unwrap();
+    let result: Result<Vec<_>, _> = container.records().collect();
     assert_eq!(
-        cbor::skip_value(&deep, cbor::MAX_DEPTH),
-        Err(cbor::Error::TooDeep)
+        result.err(),
+        Some(Error::Cbor(cbor::Error::DisallowedFieldValueShape))
     );
-
-    // One level shallower must succeed.
-    let mut ok_depth = alloc_free_deep_array(cbor::MAX_DEPTH as usize - 1);
-    ok_depth.push(0x80);
-    assert!(cbor::skip_value(&ok_depth, cbor::MAX_DEPTH).is_ok());
 }
 
-fn alloc_free_deep_array(depth: usize) -> Vec<u8> {
-    // test-only helper; std's Vec is fine here even though the library
-    // itself is no_std, since #[cfg(test)] builds link std regardless.
-    core::iter::repeat_n(0x81u8, depth).collect()
+#[test]
+fn structured_content_is_carried_as_an_opaque_byte_string_and_skips_at_zero_cost() {
+    // The rule's *sanctioned* alternative: pre-encode the structured data
+    // (here, a 2-element CBOR array of auth method names) and carry the
+    // encoded bytes as a definite-length byte string under an ordinary
+    // field key. The outer decoder never looks inside it — it's skip-safe
+    // and round-trips byte-for-byte, exactly like any other opaque payload
+    // (the same property Wrapper Records rely on in §4.1).
+    let container = Container::parse(BYTE_STRING_WRAPPED_VALUE_CONTAINER).unwrap();
+    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
+    let rec = &records[0];
+    assert!(!rec.aborted);
+
+    // Odd/unrecognized key 11 doesn't trip criticality either — it's a
+    // perfectly ordinary skip-safe byte-string value from the core's POV.
+    let outcome = check_criticality(rec.map_bytes, WIFI_KNOWN_KEYS, |k| assert_eq!(k, 11)).unwrap();
+    assert_eq!(outcome, CriticalityOutcome::Ok);
+
+    let raw = find_value(rec.map_bytes, 11).unwrap().unwrap();
+    let nested_cbor = read_definite_string(raw).unwrap();
+    assert_eq!(nested_cbor, NESTED_AUTH_METHODS_CBOR);
 }

@@ -124,15 +124,42 @@ This gives per-field forward compatibility: a future critical field doesn't
 require bumping the container `Version` byte, only choosing an even key
 number the current Record Type doesn't yet define.
 
+**Field values MUST be skip-safe.** A Record field's value — for *any* key,
+recognized or not — MUST be one of: an unsigned or negative integer, a
+simple value or float, or a definite-length byte or text string. A value
+MUST NOT be a bare array, a nested map, or a CBOR tag. Structured content
+(a list, a sub-record, anything shaped like an array or map) MUST instead
+be CBOR-encoded separately and carried as the payload of a definite-length
+byte string — the same "opaque bytes, re-parsed only by something that
+opts in" pattern §4.1's Wrapper Records already use, just applied at the
+field level instead of only at the whole-Record level. (Optionally, that
+byte string's contents may themselves be tagged with CBOR tag 24 — "encoded
+CBOR data item," RFC 8949 §3.4.5.1 — as a hint to a decoder that chooses to
+parse them.)
+
+This isn't a style preference: determining a field's length ordinarily
+requires walking into its structure (an array's or map's true byte length
+isn't known until every element inside it has been walked, recursively for
+nested structure), which is an unbounded-recursion hazard on a target with
+only a few KB of stack. A byte or text string's length, by contrast, is
+always stated directly in its own head — skipping one is pure cursor
+arithmetic, never a walk. Restricting every field value to that shape means
+a conformant core parser never needs to recurse *at all* to skip a field it
+doesn't recognize — not "recursion bounded by a depth guard," but no
+recursion, structurally. (Validated in
+[`rust/qdef-core`](../rust/qdef-core); see FINDINGS.md.)
+
 **Precondition on "the whole stream is unaffected":** this isolation
-guarantee assumes the Record is at least well-formed CBOR — a parser needs
-to determine its byte length to find where the next Record starts. A
-Record that fails to route (missing key `0`, a Hardware Parity mismatch,
-§3.1) is still well-formed and isolable this way. A Record whose bytes are
-themselves malformed CBOR (truncated, an invalid length prefix, a reserved
-additional-info value) is a stronger failure: the parser can no longer find
-that boundary and cannot safely resume the Sequence at all. Implementers
-should not conflate the two — only the former is isolated to one Record.
+guarantee assumes the Record is at least well-formed CBOR *and* obeys the
+field-value-shape rule above — a parser needs to determine the Record's
+byte length to find where the next Record starts. A Record that fails to
+route (missing key `0`, a Hardware Parity mismatch, §3.1) is still
+well-formed and isolable this way. A Record that is malformed CBOR, or
+whose bytes violate the field-value-shape rule (a bare array/map/tag as a
+field value), is a stronger failure in both cases: the parser can no longer
+determine that boundary and cannot safely resume the Sequence at all.
+Implementers should not conflate the two failure classes — only the former
+is isolated to one Record.
 
 ### 3.3 Conformance Levels
 
@@ -153,16 +180,18 @@ just to support the *container*:
   never has to read, understand, or link against whatever some other
   registered Record Type does internally.
 
-A conformant core parser MUST bound recursion depth while walking CBOR
-structures it doesn't otherwise interpret (skipping an unrecognized field's
-value, or an unrecognized Record's entire map). This isn't a wire-format
-requirement — it doesn't change what bytes are valid — but a genuinely
-constrained target (§1's "deeply constrained embedded scanner") can have
-only a few KB of stack, and an unbounded-recursion skip implementation lets
-a malformed or adversarial input exhaust it. Validated in
-[`rust/qdef-core`](../rust/qdef-core), whose hand-rolled skip logic
-enforces a fixed maximum nesting depth for exactly this reason (see
-FINDINGS.md).
+Because of §3.2's field-value-shape rule, a conformant core parser never
+needs recursion at all to do its job — not bounded recursion, none. A
+Record is always exactly `Tag? → Map → (scalar | definite-length string)*`:
+a fixed two-level shape, walked once. Skipping a field whose key isn't
+recognized, or an entire Record whose Type ID isn't recognized, is always a
+direct read or a cursor-arithmetic jump, never a walk into unbounded
+structure. A conformant core parser SHOULD still reject a Record outright
+(rather than attempt to interpret it) the instant it encounters a field
+value that violates the shape rule, since by definition that value's true
+length can't be determined without doing the recursive walk the rule exists
+to avoid. Validated in [`rust/qdef-core`](../rust/qdef-core) — see
+FINDINGS.md for the size and code-shape difference this made in practice.
 
 ## 4. The QDEF Standard Library
 

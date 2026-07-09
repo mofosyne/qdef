@@ -165,32 +165,66 @@ Built in release mode for `thumbv6m-none-eabi` (Cortex-M0 — one of the most
 constrained ARM targets in common use, no atomics beyond the basics), the
 entire mandatory core — magic/version framing, full CBOR-Sequence walking,
 key-0 routing, Hardware Parity mismatch detection, plus the even/odd
-criticality helper and a field-lookup helper — compiles to **~4.4 KB of
-code**, with **zero `unsafe`** and **zero heap allocation**. §3.3's claim
-that a minimal implementer's surface area is genuinely small was previously
-just prose confidence; it's now a measured, reproducible number tied to a
-real embedded target.
+criticality helper and a field-lookup helper — compiles to **~3.7 KB of
+code** (see #9 below for why that number moved), with **zero `unsafe`** and
+**zero heap allocation**. §3.3's claim that a minimal implementer's surface
+area is genuinely small was previously just prose confidence; it's now a
+measured, reproducible number tied to a real embedded target.
 
-### 9. Unbounded recursion depth is a real hardening gap prose review (and the Node prototype) couldn't see
+### 9. Unbounded recursion depth wasn't just bounded — it was designed away entirely
 
-Skipping past a Record field (or an entire Record) the parser doesn't
-recognize requires generically walking arbitrarily-nested CBOR structures —
-arrays inside maps inside tags, etc. Written the natural way (recursively),
-this has no inherent bound on stack depth: a malformed or adversarial input
-with deeply nested structures could exhaust the stack on a small MCU with a
-few KB of RAM. This is invisible when a hosted CBOR library does the
-walking for you inside a process with megabytes of stack and its own
-(possibly absent) guard — which is exactly why it never came up in the Node
-prototype. `rust/qdef-core/src/cbor.rs` added an explicit `MAX_DEPTH` guard
-(`skip_value` returns `Error::TooDeep` past a fixed recursion limit),
-verified by a dedicated test that constructs a pathologically nested input
-and confirms it's rejected rather than blowing the stack.
+First pass: skipping past a Record field (or an entire Record) the parser
+doesn't recognize requires generically walking arbitrarily-nested CBOR
+structures — arrays inside maps inside tags, etc. Written the natural way
+(recursively), this has no inherent bound on stack depth: a malformed or
+adversarial input with deeply nested structures could exhaust the stack on
+a small MCU with a few KB of RAM. This is invisible when a hosted CBOR
+library does the walking for you inside a process with megabytes of stack
+and its own (possibly absent) guard — which is exactly why it never came up
+in the Node prototype. The first fix was a `MAX_DEPTH` guard in
+`rust/qdef-core/src/cbor.rs` (`skip_value` erroring past a fixed recursion
+limit) — bounded, but still recursive.
 
-**Fix:** the spec should say a conformant core parser must bound recursion
-depth while walking structures it doesn't otherwise interpret — not a
-wire-format change, but a real robustness requirement for anyone
-implementing the "skip what you don't recognize" behavior §3.2/§3.3 already
-require.
+A follow-up design review (prompted by comparing QDEF's problem to how
+Protobuf's wire format handles the identical concern) asked a sharper
+question: where does the recursion actually come from? Not from every CBOR
+type — unsigned/negative integers, simple values, floats, and
+definite-length byte/text strings are all skippable in O(1), because their
+length is stated directly in their own head bytes. The recursion is
+entirely confined to bare arrays, nested maps, and tags as a field's
+*value* — types whose length isn't knowable without walking their contents.
+
+**Fix:** rather than bound that recursion, remove the case that causes it.
+§3.2 now includes a field-value-shape rule: a Record field's value (for any
+key, recognized or not) MUST be a scalar or a definite-length string —
+never a bare array, map, or tag. Structured content must be CBOR-encoded
+separately and carried as a byte string's payload instead (the same
+opaque-until-unwrapped pattern §4.1's Wrapper Records already use, applied
+one level down, at individual fields instead of only whole Records). This
+is the same trick Protobuf's wire format uses for exactly the same reason —
+every field is varint/fixed-width/length-delimited, so skipping an unknown
+one is always cheap — not a novel or risky pattern.
+
+Checked against every existing worked example before adopting it: Wi-Fi
+(100), Ticket (105), and all three Wrapper Records (Split/Compress/Encrypt)
+already only ever use scalar or byte/text-string field values. Zero
+retrofit cost. `rust/qdef-core/src/cbor.rs`'s `skip_value` was rewritten
+from a recursive walker with a depth guard to pure non-recursive,
+non-looping arithmetic — `MAX_DEPTH` and the whole recursive
+skip_string/skip_items/skip_until_break machinery were deleted outright,
+not just tuned. That shrank `skip_value` itself from 836 bytes to 284 bytes
+(release, Cortex-M0) and the crate as a whole from ~4.4 KB to ~3.7 KB (#8).
+Tests confirm both directions: a bare array as a field value is rejected
+outright even under an otherwise-ignorable odd/optional key
+(`field_value_shape_rule_rejects_a_bare_array_even_under_an_odd_optional_key`),
+and the sanctioned byte-string-wrapped alternative round-trips its opaque
+nested CBOR payload byte-for-byte
+(`structured_content_is_carried_as_an_opaque_byte_string_and_skips_at_zero_cost`).
+
+The broader lesson: the first fix (bound the recursion) treated the symptom
+and would have shipped as "good enough." Asking *why* the recursion existed
+at all — rather than just how deep it could safely go — found a fix that's
+smaller, simpler to reason about, and cheaper to run, not merely safer.
 
 ### 10. A malformed (not just unrecognized) Record can desync the whole Sequence — the spec's "isolated failure" promise has an unstated precondition
 
@@ -201,14 +235,19 @@ Record starts. A genuinely malformed byte stream (truncated, an invalid
 length prefix, a reserved additional-info value) means the parser can no
 longer find that boundary, so it can't safely resume the Sequence at all —
 a fundamentally different, worse failure than "this Record's Type/keys
-aren't recognized." This distinction was invisible in the Node prototype,
-where `cbor.decodeAllSync` either decodes the whole sequence or throws for
-all of it — there was never a point where "resume after this specific
-byte-level failure" was an explicit decision to make. Writing the Rust
-`Records` iterator by hand forced the decision: it now distinguishes
-"Record aborted but Sequence continues" (missing key 0, tag mismatch — see
-findings #1–#2) from "Sequence itself is unrecoverable" (malformed CBOR),
-and only the former lets iteration continue.
+aren't recognized." The same is now also true of a Record that violates
+finding #9's field-value-shape rule (a bare array/map/tag as a field
+value): by construction, its length can't be determined without doing the
+recursive walk the rule exists to avoid, so it's classified the same way —
+Sequence-fatal, not Record-isolated. This distinction was invisible in the
+Node prototype, where `cbor.decodeAllSync` either decodes the whole
+sequence or throws for all of it — there was never a point where "resume
+after this specific byte-level failure" was an explicit decision to make.
+Writing the Rust `Records` iterator by hand forced the decision: it now
+distinguishes "Record aborted but Sequence continues" (missing key 0, tag
+mismatch — see findings #1–#2) from "Sequence itself is unrecoverable"
+(malformed CBOR, or a field-value-shape violation), and only the former
+lets iteration continue.
 
 **Fix:** §3.2 should state this precondition explicitly rather than leave
 it implicit — an aborted-but-well-formed Record doesn't affect siblings;

@@ -24,16 +24,23 @@ answered.
 
 ## What it found
 
-- The mandatory core compiles to **~4.4 KB of code** (release, Cortex-M0)
+- The mandatory core compiles to **~3.7 KB of code** (release, Cortex-M0)
   for magic/version framing + full CBOR-Sequence walking + key-0 routing +
   Hardware Parity mismatch detection + the even/odd criticality helper —
   small enough that "a constrained scanner can implement this" is a real,
   checked claim, not just an aspiration.
 - Recursive CBOR skipping (needed to walk past a field, or a whole Record,
   the parser doesn't recognize) has unbounded stack depth on adversarial
-  input unless the implementation bounds it — invisible when a hosted CBOR
-  library does the walking for you (see `cbor::MAX_DEPTH`, and
-  FINDINGS.md).
+  input unless something stops it — invisible when a hosted CBOR library
+  does the walking for you. The first fix bounded it with a depth guard;
+  a follow-up pass removed the recursion entirely instead, by restricting
+  Record field values to scalars and definite-length strings (spec §3.2's
+  field-value-shape rule — the same trick Protobuf's wire format uses for
+  the same reason). `cbor::skip_value` went from a recursive walker with a
+  depth guard to pure non-recursive arithmetic, shrinking both itself
+  (836 → 284 bytes) and the crate as a whole (~4.4 KB → ~3.7 KB). See
+  FINDINGS.md #9 for the full story — asking *why* the recursion existed
+  beat just bounding how deep it could go.
 - The spec's "abort just that record, not the whole stream" promise (§3.2)
   implicitly assumes the record is at least *well-formed* CBOR — a
   genuinely malformed byte stream (where a record's length can't even be
@@ -45,8 +52,9 @@ answered.
 ## Layout
 
 - `src/cbor.rs` — hand-rolled CBOR primitives: read a head byte + argument,
-  skip any well-formed value generically (all 7 major types, definite and
-  indefinite length), read a uint / definite-length string.
+  read a uint / definite-length string, and skip one field value — scalars
+  and definite-length strings only (§3.2's field-value-shape rule), so this
+  never recurses and never loops.
 - `src/lib.rs` — `Container::parse`, the `Records` iterator (key-0 routing,
   Hardware Parity mismatch/missing-key-0 detection), `check_criticality`
   (even/odd rule, layered on top as Record-Type-specific handling per

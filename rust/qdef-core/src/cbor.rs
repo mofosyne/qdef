@@ -6,30 +6,25 @@
 //! finding a second time; hand-rolling the byte-level decode is what tells
 //! us whether that claim is actually true.
 //!
-//! Scope: enough of CBOR (RFC 8949) to walk any well-formed item generically
-//! (skip it, or read a small uint / definite-length string out of it) —
-//! majors 0–7, definite AND indefinite lengths. No bignums, no float
-//! interpretation beyond skipping their bytes. `no_std`, no heap.
-
-/// Bounds worst-case recursion depth for `skip_value`. A malformed or
-/// adversarial input with deeply nested arrays/maps/tags could otherwise
-/// exhaust the stack on a small MCU — a concern that's invisible when a
-/// hosted CBOR library (with a real stack, or its own depth guard) does the
-/// walking for you, which is exactly why the Node prototype never surfaced
-/// it. See ../FINDINGS.md.
-pub const MAX_DEPTH: u8 = 16;
+//! Scope is deliberately narrow: read a head byte + argument, read a small
+//! uint or a definite-length string, and skip one *field value* — which,
+//! per docs/QDEF-SPEC.md §3.2's field-value-shape rule, is never an array,
+//! map, or tag. That rule is what keeps this module free of recursion
+//! entirely, not just bounded — see `skip_value` below and ../FINDINGS.md.
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Error {
     UnexpectedEof,
     ReservedAdditionalInfo,
-    UnexpectedBreak,
     LengthOverflow,
-    TooDeep,
     NotAUint,
     NotAMap,
-    NotATag,
     NotAString,
+    /// §3.2: a Record field's value was a bare array, map, or tag (major
+    /// type 4, 5, or 6), or an indefinite-length string — none of which are
+    /// legal QDEF field values. Structured content must be pre-encoded as
+    /// CBOR and carried inside a definite-length byte string instead.
+    DisallowedFieldValueShape,
 }
 
 pub(crate) struct Head {
@@ -110,73 +105,30 @@ pub(crate) fn read_head(buf: &[u8]) -> Result<Head, Error> {
     }
 }
 
-/// Skip one well-formed CBOR item starting at `buf[0]`, returning how many
-/// bytes it occupied. Does not interpret the item's meaning beyond what's
-/// needed to know its length — this is the building block that lets a
-/// constrained parser walk past Record fields (or whole Records) it has no
-/// schema for, without needing a full decode of their values.
-pub(crate) fn skip_value(buf: &[u8], depth: u8) -> Result<usize, Error> {
-    if depth == 0 {
-        return Err(Error::TooDeep);
-    }
+/// Skip one CBOR item that is a legal QDEF Record field value: a scalar
+/// (uint, negint, simple, or float) or a definite-length byte/text string.
+/// Anything that would require walking into nested structure to find its
+/// length — a bare array, a nested map, a tag, or an indefinite-length
+/// string — is refused immediately rather than walked, so this function
+/// can never recurse and never loops. That's the point: it's what makes
+/// skipping an unrecognized field O(1) instead of a stack-depth risk.
+pub(crate) fn skip_value(buf: &[u8]) -> Result<usize, Error> {
     let head = read_head(buf)?;
     match head.major {
         0 | 1 => Ok(head.head_len),
-        2 | 3 => skip_string(buf, &head, depth),
-        4 => skip_items(buf, &head, depth, 1),
-        5 => skip_items(buf, &head, depth, 2),
-        6 => {
-            let inner = skip_value(&buf[head.head_len..], depth - 1)?;
-            Ok(head.head_len + inner)
+        7 if head.info != 31 => Ok(head.head_len),
+        2 | 3 if !head.is_indefinite() => {
+            let len = head.arg as usize;
+            let total = head
+                .head_len
+                .checked_add(len)
+                .ok_or(Error::LengthOverflow)?;
+            if buf.len() < total {
+                return Err(Error::UnexpectedEof);
+            }
+            Ok(total)
         }
-        7 => match head.info {
-            31 => Err(Error::UnexpectedBreak),
-            _ => Ok(head.head_len), // simple/float: head already carries any payload bytes
-        },
-        _ => unreachable!("3-bit major"),
-    }
-}
-
-fn skip_string(buf: &[u8], head: &Head, depth: u8) -> Result<usize, Error> {
-    if head.is_indefinite() {
-        skip_until_break(buf, head.head_len, depth)
-    } else {
-        let len = head.arg as usize;
-        let total = head
-            .head_len
-            .checked_add(len)
-            .ok_or(Error::LengthOverflow)?;
-        if buf.len() < total {
-            return Err(Error::UnexpectedEof);
-        }
-        Ok(total)
-    }
-}
-
-/// Skips `items_per_entry` (1 for arrays, 2 for maps: key+value) CBOR items
-/// per logical entry, either `head.arg` times (definite) or until a break
-/// byte (indefinite).
-fn skip_items(buf: &[u8], head: &Head, depth: u8, items_per_entry: u8) -> Result<usize, Error> {
-    let mut pos = head.head_len;
-    if head.is_indefinite() {
-        return skip_until_break(buf, pos, depth);
-    }
-    let entries = head.arg;
-    for _ in 0..entries {
-        for _ in 0..items_per_entry {
-            pos += skip_value(&buf[pos..], depth - 1)?;
-        }
-    }
-    Ok(pos)
-}
-
-fn skip_until_break(buf: &[u8], start: usize, depth: u8) -> Result<usize, Error> {
-    let mut pos = start;
-    loop {
-        if *buf.get(pos).ok_or(Error::UnexpectedEof)? == 0xFF {
-            return Ok(pos + 1);
-        }
-        pos += skip_value(&buf[pos..], depth - 1)?;
+        _ => Err(Error::DisallowedFieldValueShape),
     }
 }
 
@@ -191,8 +143,6 @@ pub(crate) fn read_uint(buf: &[u8]) -> Result<(u64, usize), Error> {
 
 /// Reads a definite-length byte or text string (major type 2 or 3) at
 /// `buf[0]`, returning the raw payload bytes and total bytes consumed.
-/// Indefinite-length strings are out of scope for this helper (used only by
-/// tests/field-extraction, not by the mandatory routing path).
 pub(crate) fn read_definite_string(buf: &[u8]) -> Result<(&[u8], usize), Error> {
     let head = read_head(buf)?;
     if head.major != 2 && head.major != 3 {

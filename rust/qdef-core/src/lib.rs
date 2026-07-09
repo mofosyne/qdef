@@ -4,10 +4,12 @@
 //! no compression, no reassembly — those live in a separate stdlib layer,
 //! not here, by design.
 //!
-//! `no_std`, zero heap allocation, zero dependencies (see `cbor` module for
-//! why: this crate hand-rolls just enough CBOR to prove the "no
-//! semantic-tag-aware CBOR library needed" claim is actually buildable on a
-//! bare-metal target — see ../../docs/FINDINGS.md).
+//! `no_std`, zero heap allocation, zero dependencies, and — thanks to
+//! §3.2's field-value-shape rule (Record field values are always a scalar
+//! or a definite-length string, never a bare array/map/tag) — zero
+//! recursion anywhere in this crate. Skipping a field this crate doesn't
+//! recognize is always exactly one bounded read, never a walk into nested
+//! structure. See `cbor::skip_value` and ../../docs/FINDINGS.md.
 #![cfg_attr(not(test), no_std)]
 
 mod cbor;
@@ -258,7 +260,7 @@ fn walk_map_pairs<'a>(
         let (key, klen) = cbor::read_uint(&map_bytes[pos..])?;
         pos += klen;
         let vstart = pos;
-        let vlen = cbor::skip_value(&map_bytes[pos..], cbor::MAX_DEPTH)?;
+        let vlen = cbor::skip_value(&map_bytes[pos..])?;
         let value = &map_bytes[vstart..vstart + vlen];
         pos += vlen;
 
