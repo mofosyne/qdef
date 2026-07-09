@@ -254,6 +254,55 @@ it implicit — an aborted-but-well-formed Record doesn't affect siblings;
 malformed CBOR at the Sequence level is a stronger failure with no
 per-Record isolation possible.
 
+## Findings from a spec review pass
+
+### 11. The Smart Route's tag numbers collide with the IANA CBOR tag registry — Hardware Parity's key-0 route does not, verified both ways
+
+A fresh review pass questioned whether "wrap the Record in a CBOR tag equal
+to the Type ID" (§3.1's Smart Route) is actually safe, given CBOR tag
+numbers are a shared IANA registry (RFC 8949 §9.2), not QDEF's own
+namespace. Checked against a real decoder rather than left as a plausible
+worry:
+
+```
+Tagged(2, <byte string>)  ->  decodes to a BigInt   (tag 2 = unsigned bignum)
+Tagged(0, "2026-...")     ->  decodes to a Date      (tag 0 = date/time string)
+Tagged(0, <a Record map>) ->  decodes to Invalid Date
+```
+
+Types 2/3/4/5 (the entire Wrapper stdlib) and Type 100 (the flagship Wi-Fi
+example) all reuse tag numbers IANA has already assigned real, live meaning
+to. QDEF's own worked examples aren't hypothetically at risk — they're
+already using colliding numbers today. A permissive decoder happens to fall
+back to passthrough when the tagged content doesn't match the registered
+type's expected shape (a byte string for a bignum, a text string for a
+date) — but a stricter conformant decoder, precisely the tag-aware audience
+the Smart Route exists to serve, is entitled to reject or mangle it, and
+wrapping an actual Record map in tag 0 demonstrably does mangle it.
+
+The follow-up question — does Hardware Parity's *other* route, key `0`,
+have the same problem? — was worth checking rather than assuming, since
+"QDEF picked a number that collides with something" was already true once.
+It does not, and the reason is structural, not luck: CBOR's IANA
+Considerations register tag numbers and simple values — there is no
+registry for map keys, because a bare CBOR map carries no built-in semantic
+layer the way a tag does. A generic decoder has nothing to coerce key `0`
+into; it's just data until something that knows the surrounding schema (a
+QDEF-aware parser) gives it meaning. Verified: encoding the identical
+Record map with *no* tag at all round-trips through a generic decoder as
+inert data (`map.get(0) === 100`, no coercion), while the same map wrapped
+in tag `0` decodes to `Invalid Date`. The asymmetry is exactly the
+asymmetry the format's own layering predicts — key `0` is the mandatory
+Constrained Route for a reason, and this is a second, independent reason
+beyond §1's "not every CBOR library exposes tags."
+
+**Fix:** not yet resolved — §9 now documents the collision with three
+possible wire-format resolutions rather than picking one unilaterally,
+since each changes the wire format. What's settled is the asymmetry: the
+Smart Route (tag == Type ID) has a real, demonstrated collision risk; the
+Constrained Route (key `0`) has none, verified the same way the collision
+itself was verified rather than assumed.
+
 ## Confirmed working as designed (no fix needed)
 
 - **Magic + version + CBOR-Sequence-of-Records** round-trips exactly as

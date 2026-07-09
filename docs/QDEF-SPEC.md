@@ -144,14 +144,19 @@ an abort of that Record (§3.2's critical-key failure mode) — a tag-aware
 parser and a constrained parser must never end up disagreeing about what
 Type a Record is.
 
-**Caution — the tag numbers are not QDEF's to give.** The Smart Route's
-"tag == Type ID" mapping collides with the IANA CBOR tag registry (RFC
-8949): the low numbers QDEF assigns to its own stdlib (§4) are already
-taken for bignums, decimal fractions, and dates. This is an unresolved
-wire-format issue surfaced (and reproduced against a real CBOR library)
-during review — see §9's "CBOR tag-number collision." The Constrained
-Route (key `0`) is unaffected and remains the mandatory, collision-free
-routing mechanism regardless of how the tag question is settled.
+**Caution — the tag numbers are not QDEF's to give; key `0` is.** The Smart
+Route's "tag == Type ID" mapping collides with the IANA CBOR tag registry
+(RFC 8949 §9.2): the low numbers QDEF assigns to its own stdlib (§4) are
+already taken for bignums, decimal fractions, and dates. This is a real,
+reproduced collision, not a theoretical one — see §9's "CBOR tag-number
+collision" and FINDINGS.md #11 for a real decoder mangling a tagged Record.
+The Constrained Route (key `0`) has no such risk, and this isn't luck: CBOR
+has an IANA registry for tag numbers, but none for map keys — a bare map
+carries no built-in semantic layer for a generic decoder to misinterpret,
+which FINDINGS.md #11 also verifies directly (the identical Record map,
+tagged vs. untagged, round-trips cleanly only when untagged). Key `0`
+remains the mandatory, unconditionally collision-free routing mechanism
+regardless of how the tag question in §9 is eventually settled.
 
 ### 3.2 The Extensibility Rule (Even/Odd Keys)
 
@@ -560,9 +565,15 @@ in `prototype/test/roundtrip.test.js`.
   than the byte string a bignum expects — a stricter conformant decoder,
   precisely the tag-aware audience the Smart Route exists for, may reject or
   mangle it instead. So the Smart Route is unreliable, possibly harmful, for
-  its own intended audience; the Constrained Route (key `0`) is untouched.
-  Three resolutions, none chosen (each changes the wire format, so this is
-  left open rather than fixed unilaterally):
+  its own intended audience; the Constrained Route (key `0`) is untouched,
+  and verifiably so — not by luck. CBOR's IANA Considerations register tag
+  numbers (and simple values); there is no equivalent registry for map
+  keys, because a bare map has no built-in semantic layer for a generic
+  decoder to apply. The identical Record map decodes as inert, uncoerced
+  data when untagged, and as `Invalid Date` when wrapped in tag `0` — see
+  FINDINGS.md #11. Whatever this open question resolves to, key `0` is not
+  at risk from it. Three resolutions, none chosen (each changes the wire
+  format, so this is left open rather than fixed unilaterally):
   - **One registered QDEF tag.** Register a single IANA tag (the way tag
     `55799` means "self-describe CBOR") meaning only "the following map is a
     QDEF Record," and keep all routing in key `0`. Ends the collision with
