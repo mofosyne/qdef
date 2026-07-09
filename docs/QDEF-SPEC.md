@@ -114,39 +114,33 @@ malformed input could make lie.
 
 ## 3. The Record Architecture
 
-Every Record is a CBOR Map. The rules below (§3.1–§3.3) all constrain the
-same fixed shape:
+Every Record is a CBOR Map, at most two levels deep: an optional Tag around
+a mandatory Map, using §5's Wi-Fi Record (Type `100`) as the example:
 
 ```
-  Tag(TypeID)                    <- OPTIONAL: "Smart Route" (§3.1)
-       |
-       v
-  CBOR Map {
-    0   : TypeID (uint)          <- MUST; "Constrained Route" (§3.1)
-                                     even key -> always CRITICAL
-                                     must equal Tag above, if present
-    key : value                  <- key even -> CRITICAL if unrecognized
-                                     (abort this Record, §3.2)
-    key : value                  <- key odd  -> OPTIONAL if unrecognized
-                                     (silently ignored, §3.2)
-    ...
-  }
-
-  value ::= uint | negint | simple | float | definite-length string
-            (never array | map | tag -- §3.2 field-value-shape rule)
++--------------------------+---------------------------------------------+
+|      Tag (optional)      |                   CBOR Map                  |
++--------------------------+---------------------------------------------+
+|         Tag(100)         | { 0: 100, 2: ..., 4: ..., 6: ..., 1: ... }  |
+| "Smart Route" (§3.1)     | MUST contain key 0 = Type ID                |
+| SHOULD equal key 0       | ("Constrained Route", §3.1)                 |
++--------------------------+---------------------------------------------+
 ```
 
-Filled in with §5's Wi-Fi example (Type `100`):
+Expanding the Map's own keys (this is where §3.2's even/odd rule and
+field-value-shape rule apply — the "Type" column below is never array,
+map, or tag, by that rule):
 
 ```
-  Tag(100)
-  Map {
-    0: 100,                // even, CRITICAL -- Type ID, must match Tag
-    2: "My Coffee Shop",   // even, CRITICAL -- SSID
-    4: "guest123",         // even, CRITICAL -- Password
-    6: 2,                  // even, CRITICAL -- Auth Type
-    1: true                // odd,  OPTIONAL -- Hidden Network Flag
-  }
++-----+------------------------+-------+----------+-----------------------------+
+| Key | Value                  | Type  | Even/Odd | If unrecognized             |
++-----+------------------------+-------+----------+-----------------------------+
+| 0   | 100                    | uint  | even     | n/a -- always required      |
+| 2   | "My Coffee Shop"       | text  | even     | CRITICAL: abort Record      |
+| 4   | "guest123"             | text  | even     | CRITICAL: abort Record      |
+| 6   | 2                      | uint  | even     | CRITICAL: abort Record      |
+| 1   | true                   | bool  | odd      | OPTIONAL: silently ignored  |
++-----+------------------------+-------+----------+-----------------------------+
 ```
 
 Every Record — a plain content Record like this one or a stdlib Wrapper
