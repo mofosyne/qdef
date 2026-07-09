@@ -103,6 +103,14 @@ routing robustness, not a two-level type hierarchy (that's a different
 thing NDEF does — TNF category plus a separate Type string — which QDEF
 does not need, since "Record Type ID" is already the only dispatch key).
 
+Key `0` is MUST, not SHOULD, for a concrete reason, not just symmetry: many
+CBOR libraries and language bindings don't expose semantic tags to
+application code at all after decoding, or expose them awkwardly enough
+that treating tags as the only routing mechanism would silently break for
+their users. Key `0` is the routing mechanism every implementer can rely
+on regardless of what CBOR library they reach for; the tag is the optional
+accelerant for the libraries that do support it.
+
 **If the tag and `map[0]` disagree,** or `map[0]` is absent entirely, the
 Record cannot be routed consistently by every parser and MUST be treated as
 an abort of that Record (§3.2's critical-key failure mode) — a tag-aware
