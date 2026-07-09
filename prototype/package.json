@@ -1,0 +1,12 @@
+{
+  "name": "qdef-prototype",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Throwaway round-trip prototype for the QDEF wire format — not a reference implementation.",
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "cbor": "^10.0.12"
+  }
+}
