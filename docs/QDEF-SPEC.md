@@ -85,6 +85,18 @@ looking at. (Validated in the prototype: a bare CBOR Sequence with no magic
 prefix decodes through the exact same Record-routing logic as the full
 container.)
 
+**Deliberately no record count or total payload size in the header** —
+suggested more than once as a natural addition to a binary header, and
+deliberately left out. Either field would require an encoder to know its
+final size before writing the header, and a decoder to trust a value that
+duplicates information already recoverable by walking the Sequence, adding
+a way for the two to disagree with no benefit: the entire point of a CBOR
+*Sequence* over a wrapping array (above) is that a Record's presence is
+self-delimiting and a constrained parser can stream through Records one at
+a time without ever needing to know the total count up front. A count/size
+field would sit unused by that parser and be one more thing a fuzzer or a
+malformed input could make lie.
+
 ## 3. The Record Architecture
 
 Every Record is a CBOR Map.
@@ -482,10 +494,31 @@ in `prototype/test/roundtrip.test.js`.
 
 ## 9. Open questions (not resolved by this draft)
 
-- **Registry governance.** Who allocates application-specific Record Type
-  IDs (`100`+) if this is meant to be shared across unrelated projects? No
-  registry exists yet — IDs in this document are illustrative placeholders
-  only.
+- **Registry governance — allocation shape proposed, authority still
+  open.** Who allocates application-specific Record Type IDs (`100`+) if
+  this is meant to be shared across unrelated projects is still open — no
+  registry authority exists yet, and IDs in this document remain
+  illustrative placeholders. But the *shape* of the range has an answer:
+  tier it the way CBOR's own tag registry (RFC 8949 §9.2) already tiers
+  tag numbers — a small span requiring registration/review, then a larger
+  "first-come" span, then an explicit private-use span for
+  never-shared/internal Type IDs. QDEF already leans on CBOR tags for
+  routing (§3.1), so mirroring the tiering convention its host format
+  already uses is a natural fit, not a new pattern to learn. Two options
+  were weighed and this is the one to build the eventual policy on:
+  - **Tiered ranges (recommended):** e.g. `100`–`999` specification-required,
+    `1000`–`0xFFFF` first-come-first-served, `0x10000`+ private use — exact
+    boundaries are a policy decision for whoever ends up running the
+    registry, not a wire-format one.
+  - **Even/odd for governance tier (considered, rejected):** reuse the
+    even/odd convention itself to mean "pre-registered vs. free-for-all,"
+    the same way it already means critical-vs-optional for keys (§3.2).
+    Rejected for two reasons: it collides semantically with a convention
+    that already carries a specific, different, load-bearing meaning
+    elsewhere in this same spec — a reader would have to track two
+    unrelated meanings of "even/odd" depending on whether they're looking
+    at a key or a Type ID — and it halves the usable ID space for no
+    benefit a tiered range doesn't already provide more cheaply.
 - **Standard library governance.** Related but narrower (§4): who maintains
   the reserved `1`–`99` range itself — additions like §4.1/§4.2 need some
   process for becoming part of "the stdlib" rather than just another
@@ -515,6 +548,21 @@ in `prototype/test/roundtrip.test.js`.
   accepting the uniform-chunking constraint as a real limitation, or
   specifying a fragment-length manifest redundant enough to survive one
   missing fragment. Unresolved — see FINDINGS.md §3.
+- **Canonical encoding (new, prompted by outside review).** §4.1's `group_id`
+  is already a hash of encoded bytes, which silently assumes two conformant
+  encoders given the same logical content produce identical CBOR — true
+  today only because every worked example uses simple, unambiguous field
+  values. CBOR permits multiple valid encodings of the same value (e.g. an
+  integer encoded with a longer-than-necessary argument width), so this
+  isn't automatically true in general, and matters more if QDEF is ever
+  used for hashing/signing beyond `group_id`'s current narrow use (§8's
+  PGP-backup example already sits right next to that use case). Adopting
+  CBOR's own deterministic-encoding rules (RFC 8949 §4.2.1 — shortest-form
+  arguments, sorted map keys, etc.) as a MUST for encoders is the likely
+  answer; not yet written into the spec. Distinct from, and not solved by,
+  the field-value-shape rule (§3.2), which constrains *what shape* a value
+  may be, not which of several valid *encodings* of that shape an encoder
+  must pick.
 - **Nesting order enforcement — now answered, not open.** A prototype
   confirmed a generically-written decoder cannot detect or reject a
   non-conformant Wrapper nesting order (FINDINGS.md §7); §4.1's text has
