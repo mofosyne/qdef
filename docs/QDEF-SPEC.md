@@ -322,6 +322,41 @@ length can't be determined without doing the recursive walk the rule exists
 to avoid. Validated in [`rust/qdef-core`](../rust/qdef-core) — see
 FINDINGS.md for the size and code-shape difference this made in practice.
 
+### 3.4 Canonical Encoding
+
+**Encoders MUST produce CBOR meeting RFC 8949 §4.2.1's core deterministic
+encoding requirements** for every Record: the shortest-form argument for
+every integer, length, and tag; no indefinite-length items; and every
+Record Map's keys sorted in bytewise lexicographic order of their own
+encoded bytes. QDEF doesn't define a new canonical-encoding rule — it
+adopts CBOR's own, unchanged.
+
+This is a requirement on *encoders*, not decoders: a decoder reading field
+values back out of a Record MUST NOT reject an otherwise well-formed
+Record merely for being non-canonically encoded (key order on the wire
+never affects whether `map[N]` is findable — §3's Record Map is a
+CBOR map, not something position-dependent). The rule exists for a
+narrower, specific reason: anywhere QDEF hashes a Record's bytes for
+content-addressing (§4.1's `group_id`, and any future Sign mechanism,
+§9), that hash is only meaningful as "same logical content" across
+independent tools if those tools agree on what bytes "the same logical
+content" produces in the first place. Two conformant encoders handed
+identical field values but disagreeing on integer width or map key order
+would otherwise compute different hashes for content that's semantically
+identical — silently defeating `group_id`'s own stated purpose ("no
+coordination is needed between independent encoders," §4.1) the moment
+more than one encoder is ever involved, even though the narrower
+single-encoder reassembly-integrity check `group_id` performs today
+already works regardless of canonicalization.
+
+Not a new implementation burden in practice: most CBOR encoders already
+default to shortest-form arguments and definite-length items, since
+that's the common case for hand-written or generated values. The one
+requirement that needs explicit encoder discipline is map key
+ordering — sorting a Record's handful of keys before serializing is
+cheap, including on constrained hardware, and §3's Record Maps are small
+by construction (a flat set of fields, never nested).
+
 ## 4. The QDEF Standard Library
 
 QDEF is a *format plus a standard library*, not just the format — the same
@@ -360,8 +395,10 @@ Type 2: {                    // Split
   2: h'<group_id>',          // CRITICAL: content-addressed (a hash of the
                               //   full reassembled bytes) — never an issued
                               //   serial, so no coordination is needed
-                              //   between independent encoders. A decoder
-                              //   MUST recompute this hash after
+                              //   between independent encoders (relies on
+                              //   §3.4's canonical-encoding rule to actually
+                              //   hold across more than one encoder). A
+                              //   decoder MUST recompute this hash after
                               //   reassembly and reject a mismatch — it
                               //   doubles as the group's integrity check.
   4: 1,                      // CRITICAL: this fragment's index

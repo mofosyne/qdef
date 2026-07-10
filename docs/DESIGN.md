@@ -295,25 +295,41 @@ that general case still needs either accepting uniform-chunking as a real
 limitation, or specifying a fragment-length manifest redundant enough to
 survive one missing fragment. See FINDINGS.md #3.
 
-## Canonical encoding (new, prompted by outside review)
+## Canonical encoding (resolved — spec §3.4)
 
-Spec §4.1's `group_id` is already a hash of encoded bytes, which silently
-assumes two conformant encoders given the same logical content produce
-identical CBOR — true today only because every worked example uses
-simple, unambiguous field values. CBOR permits multiple valid encodings
-of the same value (e.g. an integer encoded with a longer-than-necessary
-argument width), so this isn't automatically true in general, and matters
-more if QDEF is ever used for hashing/signing beyond `group_id`'s current
-narrow use (spec §8's PGP-backup example already sits right next to that
-use case). Adopting CBOR's own deterministic-encoding rules (RFC 8949
-§4.2.1 — shortest-form arguments, sorted map keys, etc.) as a MUST for
-encoders is the likely answer; not yet written into the spec. Distinct
-from, and not solved by, the field-value-shape rule (spec §3.2), which
-constrains *what shape* a value may be, not which of several valid
-*encodings* of that shape an encoder must pick. Worth resolving on its own
-priority, separate from Sign below: it's already a live correctness gap
-for `group_id` today, in anything shipped now, not merely a prerequisite
-for a feature that doesn't exist yet.
+Spec §4.1's `group_id` was a hash of encoded bytes that silently assumed
+two conformant encoders given the same logical content produce identical
+CBOR — true only because every worked example used simple, unambiguous
+field values. CBOR permits multiple valid encodings of the same value
+(e.g. an integer encoded with a longer-than-necessary argument width, or
+a map with keys in a different order), so this wasn't automatically true
+in general, and matters more the moment QDEF is used for hashing/signing
+beyond `group_id`'s narrow use (spec §8's PGP-backup example already sits
+right next to that use case, and any future Sign mechanism below depends
+on it entirely).
+
+Resolved by adopting CBOR's own deterministic-encoding rules (RFC 8949
+§4.2.1 — shortest-form arguments, no indefinite-length items, map keys
+sorted in bytewise lexicographic order of their encoded bytes) as a MUST
+for encoders — nothing QDEF-specific invented, the same borrow-don't-
+invent instinct as everywhere else in this document. Distinct from, and
+not solved by, the field-value-shape rule (spec §3.2), which constrains
+*what shape* a value may be, not which of several valid *encodings* of
+that shape an encoder must pick — the two rules are complementary, not
+overlapping.
+
+Worth being precise about what was and wasn't actually broken: `group_id`
+verification was never *incorrect* for its narrowest existing use (a
+single encoder hashes bytes it's about to fragment, a decoder reassembles
+and re-hashes the identical bytes — pure corruption detection, unaffected
+by canonicalization either way). What canonical encoding actually fixes is
+the *stronger* property `group_id`'s own spec text already implicitly
+claimed — "content-addressed... no coordination is needed between
+independent encoders" only holds if independent encoders of equivalent
+content produce identical bytes, which nothing guaranteed before this
+rule existed. Closed proactively, before Split/group_id saw real
+production traffic, rather than after a cross-encoder mismatch surfaced
+one in the field.
 
 ## Sign / detached-authenticity wrapper (new, requested)
 
@@ -337,13 +353,13 @@ it first looks like, and that is the finding:
   bytes. The signed Records stay plain and readable; an unaware parser
   reads them normally and skips the unrecognized signature Record by Type
   ID. This is the form that delivers "readable *and* verifiable" — but it
-  depends on two things QDEF lacks: the **canonical encoding** above (a
-  verifier must reconstruct the exact signed bytes) and a
+  depends on two things: **canonical encoding** (spec §3.4, now resolved
+  above — a verifier must reconstruct the exact signed bytes) and a
   **coverage-identification scheme** (which Records, addressed how — by
-  index? by content hash? — surviving reordering and unrelated siblings).
-  Coverage identification is the same signed-bytes/verified-bytes
-  divergence hazard this project's origin story (TagDrop's signing bug) is
-  a caution about, so it must not be hand-waved.
+  index? by content hash? — surviving reordering and unrelated siblings,
+  still open). Coverage identification is the same signed-bytes/verified-
+  bytes divergence hazard this project's origin story (TagDrop's signing
+  bug) is a caution about, so it must not be hand-waved.
 
 **Coverage-identification scheme — direction decided, not yet built.**
 Cover by content hash of each covered Record's own canonical bytes, never

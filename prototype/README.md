@@ -10,7 +10,9 @@ found.
 
 - `src/core.js` — the mandatory core: magic/version framing, CBOR-Sequence
   encode/decode, `map[0]` routing, the even/odd criticality rule
-  (spec §2–§3). No knowledge of any specific Record Type.
+  (spec §2–§3). No knowledge of any specific Record Type. Encodes every
+  Record with RFC 8949 §4.2.1 canonical CBOR (spec §3.4), not just
+  whatever the `cbor` package's default encoder happens to produce.
 - `src/wrappers.js` — the optional standard library's Wrapper Records:
   Split (with XOR single-fragment parity), Compress, Encrypt, plus a
   generic recursive `resolveStack` resolver (spec §4.1).
@@ -39,6 +41,11 @@ found.
   Algorithm fields (keys 5/7, spec §4.1): both COSE-numeric and
   plain-string forms round-trip, and a decoder built before these fields
   existed ignores them via the ordinary odd-key path rather than aborting.
+- `test/canonical-encoding.test.js` — proves §3.4's actual point: Records
+  built from the same fields in different insertion order encode to
+  byte-identical output, so a content hash like `group_id` means "same
+  logical content" across independent encoders, not just "same encoder,
+  same run."
 
 ## Running
 
