@@ -237,9 +237,12 @@ coverage scheme (§9). No version marker is needed to record whether a
 given ID used this convention: verification is opportunistic — if the hash
 matches, the binding is confirmed; if it doesn't, `key 1` simply degrades
 to a plain, unverified label, exactly as if this convention weren't in use
-at all. Not yet prototyped; the hash width needed to keep collision
-probability negligible at whatever scale this tier actually sees is an
-open parameter, not a wire-format decision.
+at all. Prototyped in `prototype/src/typeHint.js` (round-trip, opportunistic
+verify, and graceful degradation on both a non-hash-derived ID and a
+non-string hint all pass — see `prototype/test/type-hint.test.js`) using a
+4-byte truncation as an illustrative width, not a spec decision — the hash
+width needed to keep collision probability negligible at whatever scale
+this tier actually sees remains an open parameter.
 
 ### 3.2 The Extensibility Rule (Even/Odd Keys)
 

@@ -17,6 +17,10 @@ found.
 - `src/recordTypes.js` — the small set of application Record Type schemas
   used by the tests (Wi-Fi §5, a generic third-party-payload registration
   §6, a secret-key backup §8).
+- `src/typeHint.js` — the optional, self-certifying strengthening for
+  key 1's Type Hint (spec §3.1): deriving a private-use-random Type ID from
+  a truncated hash of its own name, and opportunistically verifying that
+  binding without needing a version marker.
 - `test/roundtrip.test.js` — the four required scenarios: a plain Record,
   a Record wrapping an opaque third-party payload, the full
   Split(parity)→Encrypt→plain stack with fragment-drop recovery, and the
@@ -27,6 +31,10 @@ found.
   claim.
 - `test/nesting-order.test.js` — whether a generic decoder can detect a
   non-conformant Wrapper nesting order (spec finding: it can't).
+- `test/type-hint.test.js` — proves key 1 needs zero special-case code in
+  the core (a decoder that's never heard of Type Hint just skips it via
+  the ordinary unrecognized-odd-key path), the old-reader/promoted-Type
+  recognition scenario, and the hash-derivation verify/degrade behavior.
 
 ## Running
 
