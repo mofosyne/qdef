@@ -16,6 +16,17 @@ today: text barcode schemas (`WIFI:S:...;;`, `BEGIN:VCARD`) are rigid,
 single-purpose, and text-only; NDEF solves multi-record framing but only
 for NFC.
 
+Without a format field to dispatch on, a general-purpose QR reader has no
+choice but to *guess* what a scanned payload is — is this a URL? a `WIFI:`
+string? a vCard? raw text? — by sniffing prefixes. Every new payload type
+it wants to recognize is one more heuristic bolted onto that guesswork, a
+list that only grows and never gets more reliable, because nothing in the
+payload itself ever says what it is. NDEF sidestepped this for NFC decades
+ago with its MIME-type/TNF field; QR never had the equivalent, so readers
+inherited the sniffing problem instead. QDEF's magic header plus key-`0`
+Type-ID routing (§3) gives byte-mode QR that same explicit, extensible
+dispatch — a reader checks one field instead of accumulating heuristics.
+
 QDEF is meant to be adopted by unrelated applications with no shared
 history — a Wi-Fi provisioning sticker, an event ticket, a passphrase-
 protected key backup spread across several printed codes (worked example in
