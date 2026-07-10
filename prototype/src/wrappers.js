@@ -12,14 +12,33 @@ const SPLIT_TYPE = 2;
 const COMPRESS_TYPE = 3;
 const ENCRYPT_TYPE = 4;
 const FALLBACK_HINT_TYPE = 5;
+const MEDIA_PAYLOAD_TYPE = 6;
 
 const SPLIT_KNOWN_KEYS = new Set([0, 2, 4, 6, 8, 9, 11]);
 const COMPRESS_KNOWN_KEYS = new Set([0, 2]);
-const ENCRYPT_KNOWN_KEYS = new Set([0, 2, 4]);
+const ENCRYPT_KNOWN_KEYS = new Set([0, 2, 4, 5, 7]);
 const FALLBACK_HINT_KNOWN_KEYS = new Set([0, 1, 2]);
+const MEDIA_PAYLOAD_KNOWN_KEYS = new Set([0, 2, 4]);
 
 const PARITY_SCHEME_NONE = 0;
 const PARITY_SCHEME_XOR = 1; // prototype-only single-parity-fragment scheme
+
+// COSE Algorithm IDs (RFC 9053/9054, IANA "COSE Algorithms" registry) —
+// borrowed, not invented; see spec §4.1 and DESIGN.md's "Encrypt key
+// provisioning" entry for why keys 5/7 use this registry instead of a
+// QDEF-specific one.
+const COSE_ALG_A256GCM = 3;
+const COSE_ALG_ECDH_ES_HKDF_256 = -25;
+const COSE_ALG_DIRECT_HKDF_SHA_256 = -10;
+
+// CoAP Content-Format IDs (RFC 7252 §12.3 / RFC 9876, IANA "CoAP
+// Content-Formats" registry) — borrowed for §4.3's Media Type field, same
+// reasoning as the COSE IDs above. text/vcard is deliberately absent from
+// this list: confirmed not present in the real registry (spec §4.3,
+// DESIGN.md), so it's the fixture for the plain-string fallback path.
+const COAP_CONTENT_FORMAT_IMAGE_JPEG = 22;
+const COAP_CONTENT_FORMAT_IMAGE_PNG = 23;
+const COAP_CONTENT_FORMAT_APPLICATION_CBOR = 60;
 
 // ---- Compress (Type 3) -----------------------------------------------
 
@@ -42,7 +61,7 @@ function compressDecode(map) {
 // (see docs/FINDINGS.md) since "Encrypt" wrapper is meaningless without it.
 // The prototype takes a raw 32-byte key as given.
 
-function encryptEncode(innerBytes, key) {
+function encryptEncode(innerBytes, key, { algorithm, keyAlgorithm } = {}) {
   const nonce = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv('aes-256-gcm', key, nonce);
   const ciphertext = Buffer.concat([cipher.update(innerBytes), cipher.final()]);
@@ -51,6 +70,8 @@ function encryptEncode(innerBytes, key) {
     [0, ENCRYPT_TYPE],
     [2, nonce],
     [4, Buffer.concat([ciphertext, authTag])], // "ciphertext+tag" per spec
+    ...(algorithm !== undefined ? [[5, algorithm]] : []),
+    ...(keyAlgorithm !== undefined ? [[7, keyAlgorithm]] : []),
   ]);
 }
 
@@ -294,12 +315,20 @@ module.exports = {
   COMPRESS_TYPE,
   ENCRYPT_TYPE,
   FALLBACK_HINT_TYPE,
+  MEDIA_PAYLOAD_TYPE,
   SPLIT_KNOWN_KEYS,
   COMPRESS_KNOWN_KEYS,
   ENCRYPT_KNOWN_KEYS,
   FALLBACK_HINT_KNOWN_KEYS,
+  MEDIA_PAYLOAD_KNOWN_KEYS,
   PARITY_SCHEME_NONE,
   PARITY_SCHEME_XOR,
+  COSE_ALG_A256GCM,
+  COSE_ALG_ECDH_ES_HKDF_256,
+  COSE_ALG_DIRECT_HKDF_SHA_256,
+  COAP_CONTENT_FORMAT_IMAGE_JPEG,
+  COAP_CONTENT_FORMAT_IMAGE_PNG,
+  COAP_CONTENT_FORMAT_APPLICATION_CBOR,
   compressEncode,
   compressDecode,
   encryptEncode,

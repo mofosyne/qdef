@@ -120,11 +120,15 @@ not just on AES-GCM but on how the key got there. The prototype sidesteps
 this entirely (tests pass a raw 32-byte key directly) — which is precisely
 how prose review missed that the spec never actually answers it.
 
-**Not fixed** — this is a real open question now added to DESIGN.md, not
-resolved by this prototype pass. Candidates: leave key provisioning explicitly
-out-of-scope of the wrapper (an application-layer concern, documented as
-such rather than silently assumed), or add an optional key-hint/KDF-params
-field to Type 4.
+**Update:** resolved — spec §4.1 adds an optional Algorithm field (key `5`)
+and Key Algorithm field (key `7`) to Type 4, both a COSE Algorithm ID
+(RFC 9053/9054) or a plain string. Borrows an existing, actively
+maintained IANA registry rather than inventing a QDEF-specific one — the
+same pattern §4.3's Media Type uses, and for the same reason: a cipher
+and a key-agreement scheme both already have a stable identity independent
+of QDEF. See DESIGN.md's "Encrypt key provisioning" entry for the full
+reasoning, including why this doesn't need Type Hint's decentralized-ID
+layer either.
 
 ### 7. Nesting order is *not* decoder-detectable — confirmed, not just assumed
 
@@ -344,6 +348,44 @@ individual field's byte-string *value* — was never affected by any of
 this: it's a Record-Type author's own opt-in annotation about one field's
 content, exactly the "predefined, universal meaning" use tags are
 correctly for, not a mechanism QDEF's core routing depends on.
+
+### 13. A Wrapper Record's Type ID is itself a public declaration — fine for Split/Compress, a real problem for Encrypt when deniability matters
+
+Checked against a real adopter's threat model, not surfaced by prototyping
+or prose review: `mofosyne/tagdrop`'s own encryption (SPEC.md §9) uses
+AES-256-GCM — an exact match for COSE's `A256GCM` (= 3), confirming §4.1's
+Encrypt Algorithm field picked the right registry and the right value for
+at least one real cipher choice. But TagDrop's `encryption` field is
+explicitly documented as "an optional hint, not a precondition": the real
+mechanism is trial decryption against known keys, confirmed only by
+AES-GCM's own auth-tag success ("discovery, not declaration"), because
+SPEC.md's stated goal is that ciphertext stays indistinguishable from
+random. A QDEF Encrypt Wrapper can't preserve that property regardless of
+how its fields are shaped: being wrapped in a Type-`4` Record at all is
+itself a visible declaration — "this is encrypted" — to any QDEF-aware
+parser walking the Sequence, even one that can't decode the payload,
+because Type ID routing (§3.1) is unconditional and happens before any
+per-Record-Type logic runs. Every Wrapper Record makes this same kind of
+declaration (Split says "this is one fragment of something," Compress
+says "this is compressed") — it's simply invisible as a cost for those,
+since neither Split nor Compress has a reason to want to look like
+un-fragmented, uncompressed data. Encrypt is the one Wrapper where an
+adopter might specifically need the opposite: to not be identifiable as
+encrypted at all.
+
+**Not a bug to fix — a genuine, principled scope boundary**, the same
+category as §1's "when QDEF earns its place": an application whose threat
+model requires ciphertext indistinguishable from random has a requirement
+QDEF's routing model is structurally unable to satisfy, since self-
+describing dispatch is the format's entire reason for existing. TagDrop's
+own §6 registration already sidesteps this correctly — its encryption
+happens entirely inside the opaque registered blob, never at the QDEF
+layer — which is exactly the right call, not a workaround. Also confirmed
+directly against the IANA COSE Algorithms registry: PBKDF2 (TagDrop's
+passphrase-based key-provisioning mode) has no COSE algorithm ID at all —
+COSE's key-derivation entries are all HKDF variants — so even an adopter
+without TagDrop's deniability requirement would hit Key Algorithm's
+plain-string fallback for this specific case, not the numeric one.
 
 ## Confirmed working as designed (no fix needed)
 

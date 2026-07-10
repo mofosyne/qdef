@@ -237,12 +237,73 @@ Wrapping literal NDEF bytes would add NDEF's tag-session-oriented framing
 atomically in a single scan) on top, without saving QDEF's actual
 contribution.
 
-## Encrypt key provisioning (new, from the prototype)
+## Encrypt key provisioning (resolved — Algorithm/Key Algorithm fields, borrowing COSE)
 
-Type 4 names a cipher (e.g. AES-GCM) but never specifies where the key
-comes from. Left out of scope of the wrapper record entirely (an
-application-layer concern), or given an optional key-hint/KDF-params
-field? Unresolved — see FINDINGS.md #6.
+Type 4 originally named a cipher only in a comment (`e.g. AES-GCM`), with
+no field for it, and never specified where the key comes from at all — see
+FINDINGS.md #6 for how the prototype surfaced this. Considered leaving it
+out of scope entirely (an application-layer concern) versus adding a
+field; resolved toward a field, but not a QDEF-specific one.
+
+The same asymmetry check that killed Media Type's decentralized-ID layer
+applies here identically: a cipher and a key-agreement scheme are both
+things with a stable identity independent of QDEF, so there's no opacity
+problem for a hint-plus-hash layer to solve — just borrow an existing
+numbering scheme, the same playbook as Media Type. The fit is even
+tighter than CoAP was for Media Type, because it's the same domain:
+IANA's COSE Algorithms registry (RFC 9053/9054) already covers both the
+content-encryption algorithm and the key-agreement/wrap/derivation
+algorithm, is CBOR-native (COSE structures are CBOR), and is actively
+governed with the same tiered structure QDEF's own Type ID space uses.
+
+Spec §4.1 adds two optional fields to Type 4 (key `5` Algorithm, key `7`
+Key Algorithm — a COSE Algorithm ID or a plain string, encoder's choice)
+and keeps both odd/optional rather than critical, deliberately matching
+`parity_scheme`'s precedent over nonce/ciphertext's: two apps that already
+agree out of band (§8's worked example) pay nothing, and a decoder that
+doesn't recognize either field just falls back to its own assumption,
+which fails safely regardless since AEAD's own auth tag catches a
+wrong-algorithm attempt. The fields exist specifically for the
+interoperable-key-transfer case an unrelated adopter would need — flagged
+during a discussion of what "QDEF spreading to more QR apps" would
+actually require in practice, not a hypothetical gap.
+
+Worth flagging as an implementation caution, not a wire-format concern:
+a decoder that *does* honor these fields must not let them broaden which
+algorithms it's willing to run — the same "alg" confusion vulnerability
+class JOSE/JWT is known for. Treat the value as something to check against
+an application-chosen allowlist, never as an instruction to trust
+outright.
+
+**Checked against a real adopter after the fact, surfacing a limitation
+worth keeping:** `mofosyne/tagdrop` uses AES-256-GCM (exact match for
+`A256GCM` = 3, confirming the cipher-ID choice) and PBKDF2 for
+passphrase-based key derivation — the latter has no COSE algorithm ID at
+all (COSE's key-derivation entries are all HKDF variants), so Key
+Algorithm's plain-string fallback covers this case, not the numeric one.
+More significantly, TagDrop's encryption is deliberately *undeclared* —
+"discovery, not declaration," confirmed via trial decryption rather than
+a stated algorithm, specifically so ciphertext stays indistinguishable
+from random. A Type-4 Wrapper can't preserve that regardless of field
+shape: being wrapped in Type `4` at all is itself a visible declaration to
+any QDEF-aware parser walking the Sequence. See FINDINGS.md #13 for the
+full reasoning — a genuine, principled scope boundary, not a gap to close,
+and confirmation that TagDrop's own §6 registration (encryption entirely
+inside the opaque blob, invisible to QDEF) was already the right call.
+
+## Media Payload: checked against a real adopter, confirmed compatible but never reached
+
+`mofosyne/tagdrop` does have typed content-tagging (`mime_type`, a
+free-form string, never a numeric ID) — confirming that if this were ever
+exposed at the QDEF layer, it would use Media Type's plain-string
+fallback, not CoAP's numeric registry. But it can't come up for TagDrop's
+actual §6 registration at all: that registration already carries TagDrop's
+entire existing CBOR sequence (`mime_type` included) as one opaque blob
+under a single key, deliberately invisible to QDEF by the same reasoning
+§7 settled for compression and splitting generally. Not a gap — Media
+Payload was never going to be reached by an adopter whose own format is
+already opaque to QDEF by design; it's aimed at an adopter with no
+existing format of its own to protect (§1's "when QDEF earns its place").
 
 ## Split chunking vs. per-code capacity — costs nothing against at least one real adopter's design, general case still open
 
@@ -264,25 +325,41 @@ that general case still needs either accepting uniform-chunking as a real
 limitation, or specifying a fragment-length manifest redundant enough to
 survive one missing fragment. See FINDINGS.md #3.
 
-## Canonical encoding (new, prompted by outside review)
+## Canonical encoding (resolved — spec §3.4)
 
-Spec §4.1's `group_id` is already a hash of encoded bytes, which silently
-assumes two conformant encoders given the same logical content produce
-identical CBOR — true today only because every worked example uses
-simple, unambiguous field values. CBOR permits multiple valid encodings
-of the same value (e.g. an integer encoded with a longer-than-necessary
-argument width), so this isn't automatically true in general, and matters
-more if QDEF is ever used for hashing/signing beyond `group_id`'s current
-narrow use (spec §8's PGP-backup example already sits right next to that
-use case). Adopting CBOR's own deterministic-encoding rules (RFC 8949
-§4.2.1 — shortest-form arguments, sorted map keys, etc.) as a MUST for
-encoders is the likely answer; not yet written into the spec. Distinct
-from, and not solved by, the field-value-shape rule (spec §3.2), which
-constrains *what shape* a value may be, not which of several valid
-*encodings* of that shape an encoder must pick. Worth resolving on its own
-priority, separate from Sign below: it's already a live correctness gap
-for `group_id` today, in anything shipped now, not merely a prerequisite
-for a feature that doesn't exist yet.
+Spec §4.1's `group_id` was a hash of encoded bytes that silently assumed
+two conformant encoders given the same logical content produce identical
+CBOR — true only because every worked example used simple, unambiguous
+field values. CBOR permits multiple valid encodings of the same value
+(e.g. an integer encoded with a longer-than-necessary argument width, or
+a map with keys in a different order), so this wasn't automatically true
+in general, and matters more the moment QDEF is used for hashing/signing
+beyond `group_id`'s narrow use (spec §8's PGP-backup example already sits
+right next to that use case, and any future Sign mechanism below depends
+on it entirely).
+
+Resolved by adopting CBOR's own deterministic-encoding rules (RFC 8949
+§4.2.1 — shortest-form arguments, no indefinite-length items, map keys
+sorted in bytewise lexicographic order of their encoded bytes) as a MUST
+for encoders — nothing QDEF-specific invented, the same borrow-don't-
+invent instinct as everywhere else in this document. Distinct from, and
+not solved by, the field-value-shape rule (spec §3.2), which constrains
+*what shape* a value may be, not which of several valid *encodings* of
+that shape an encoder must pick — the two rules are complementary, not
+overlapping.
+
+Worth being precise about what was and wasn't actually broken: `group_id`
+verification was never *incorrect* for its narrowest existing use (a
+single encoder hashes bytes it's about to fragment, a decoder reassembles
+and re-hashes the identical bytes — pure corruption detection, unaffected
+by canonicalization either way). What canonical encoding actually fixes is
+the *stronger* property `group_id`'s own spec text already implicitly
+claimed — "content-addressed... no coordination is needed between
+independent encoders" only holds if independent encoders of equivalent
+content produce identical bytes, which nothing guaranteed before this
+rule existed. Closed proactively, before Split/group_id saw real
+production traffic, rather than after a cross-encoder mismatch surfaced
+one in the field.
 
 ## Sign / detached-authenticity wrapper (new, requested)
 
@@ -306,13 +383,13 @@ it first looks like, and that is the finding:
   bytes. The signed Records stay plain and readable; an unaware parser
   reads them normally and skips the unrecognized signature Record by Type
   ID. This is the form that delivers "readable *and* verifiable" — but it
-  depends on two things QDEF lacks: the **canonical encoding** above (a
-  verifier must reconstruct the exact signed bytes) and a
+  depends on two things: **canonical encoding** (spec §3.4, now resolved
+  above — a verifier must reconstruct the exact signed bytes) and a
   **coverage-identification scheme** (which Records, addressed how — by
-  index? by content hash? — surviving reordering and unrelated siblings).
-  Coverage identification is the same signed-bytes/verified-bytes
-  divergence hazard this project's origin story (TagDrop's signing bug) is
-  a caution about, so it must not be hand-waved.
+  index? by content hash? — surviving reordering and unrelated siblings,
+  still open). Coverage identification is the same signed-bytes/verified-
+  bytes divergence hazard this project's origin story (TagDrop's signing
+  bug) is a caution about, so it must not be hand-waved.
 
 **Coverage-identification scheme — direction decided, not yet built.**
 Cover by content hash of each covered Record's own canonical bytes, never

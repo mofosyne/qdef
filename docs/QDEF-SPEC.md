@@ -322,6 +322,41 @@ length can't be determined without doing the recursive walk the rule exists
 to avoid. Validated in [`rust/qdef-core`](../rust/qdef-core) — see
 FINDINGS.md for the size and code-shape difference this made in practice.
 
+### 3.4 Canonical Encoding
+
+**Encoders MUST produce CBOR meeting RFC 8949 §4.2.1's core deterministic
+encoding requirements** for every Record: the shortest-form argument for
+every integer, length, and tag; no indefinite-length items; and every
+Record Map's keys sorted in bytewise lexicographic order of their own
+encoded bytes. QDEF doesn't define a new canonical-encoding rule — it
+adopts CBOR's own, unchanged.
+
+This is a requirement on *encoders*, not decoders: a decoder reading field
+values back out of a Record MUST NOT reject an otherwise well-formed
+Record merely for being non-canonically encoded (key order on the wire
+never affects whether `map[N]` is findable — §3's Record Map is a
+CBOR map, not something position-dependent). The rule exists for a
+narrower, specific reason: anywhere QDEF hashes a Record's bytes for
+content-addressing (§4.1's `group_id`, and any future Sign mechanism,
+§9), that hash is only meaningful as "same logical content" across
+independent tools if those tools agree on what bytes "the same logical
+content" produces in the first place. Two conformant encoders handed
+identical field values but disagreeing on integer width or map key order
+would otherwise compute different hashes for content that's semantically
+identical — silently defeating `group_id`'s own stated purpose ("no
+coordination is needed between independent encoders," §4.1) the moment
+more than one encoder is ever involved, even though the narrower
+single-encoder reassembly-integrity check `group_id` performs today
+already works regardless of canonicalization.
+
+Not a new implementation burden in practice: most CBOR encoders already
+default to shortest-form arguments and definite-length items, since
+that's the common case for hand-written or generated values. The one
+requirement that needs explicit encoder discipline is map key
+ordering — sorting a Record's handful of keys before serializing is
+cheap, including on constrained hardware, and §3's Record Maps are small
+by construction (a flat set of fields, never nested).
+
 ## 4. The QDEF Standard Library
 
 QDEF is a *format plus a standard library*, not just the format — the same
@@ -360,8 +395,10 @@ Type 2: {                    // Split
   2: h'<group_id>',          // CRITICAL: content-addressed (a hash of the
                               //   full reassembled bytes) — never an issued
                               //   serial, so no coordination is needed
-                              //   between independent encoders. A decoder
-                              //   MUST recompute this hash after
+                              //   between independent encoders (relies on
+                              //   §3.4's canonical-encoding rule to actually
+                              //   hold across more than one encoder). A
+                              //   decoder MUST recompute this hash after
                               //   reassembly and reject a mismatch — it
                               //   doubles as the group's integrity check.
   4: 1,                      // CRITICAL: this fragment's index
@@ -385,12 +422,69 @@ Type 3: {                    // Compress (DEFLATE)
 Type 4: {                    // Encrypt (e.g. AES-GCM)
   0: 4,
   2: h'<nonce>',             // CRITICAL
-  4: h'<ciphertext+tag>'     // CRITICAL
-  // Key provisioning (passphrase KDF? pre-shared key? recipient public-key
-  // wrap?) is NOT specified here — open question, see §9. Two independent
-  // apps using Type 4 need to agree on this out of band today.
+  4: h'<ciphertext+tag>',    // CRITICAL
+  5: 3,                      // OPTIONAL: Algorithm — 3 = A256GCM
+  7: -25                     // OPTIONAL: Key Algorithm — -25 = ECDH-ES+HKDF-256
 }
 ```
+
+**Keys `5` (Algorithm) and `7` (Key Algorithm)** are each a uint or a text
+string, an encoder's choice — the same two-form pattern as §4.3's Media
+Type, and for the same reason: both name something with a stable identity
+independent of QDEF, so there's no opacity for a decentralized-ID-plus-
+hint layer to resolve, just a compact number when one's registered and a
+plain string otherwise.
+
+- **A uint** is a [COSE Algorithm
+  ID](https://www.iana.org/assignments/cose/cose.xhtml) (RFC 9053/9054) —
+  an existing, actively maintained IANA registry, tiered by governance
+  strictness the same way CoAP's Content-Formats and QDEF's own Type ID
+  space are. It already covers both halves of this problem: content
+  encryption algorithms (`1`/`2`/`3` = A128GCM/A192GCM/A256GCM) *and*
+  key-agreement/wrap/derivation algorithms (`-25` = ECDH-ES+HKDF-256,
+  recipient-public-key wrap; `-10` = direct+HKDF-SHA-256, a shared
+  secret/passphrase; `-5` = A256KW, key wrap) — including negative
+  integers, which §3.2's field-value-shape rule already permits.
+- **A text string** names the algorithm directly for anything not
+  registered there.
+
+Key `5` resolves this Wrapper's other long-standing gap: which cipher was
+actually used was previously only ever an implicit, out-of-band
+assumption (the `(e.g. AES-GCM)` comment above was illustrative, not a
+field). Key `7` is the fix for the key-provisioning gap specifically: two
+independent apps can now interoperate on *how* the symmetric key was
+obtained, not just agree that something called "Encrypt" happened.
+
+Both keys are odd/optional, matching `parity_scheme`'s precedent (§4.1's
+Split fields) rather than nonce/ciphertext's: absent, everything works
+exactly as before (two ends that already agree out of band, as in §8's
+worked example, need neither field), and a decoder that doesn't recognize
+either key simply falls back to whatever algorithm it already assumed —
+which fails safely either way, since AEAD's own authentication tag check
+already catches a wrong-algorithm or wrong-key attempt. They exist for
+when unrelated apps need self-description, not to tax the case that
+already works.
+
+**A decoder that does honor key `5`/`7` MUST NOT let them broaden which
+algorithms it's willing to run** — the same "alg" confusion class of
+vulnerability JOSE/JWT is well known for (an attacker-controlled
+algorithm identifier tricking a verifier into a weaker or inappropriate
+algorithm than it intended). Treat the field as a hint to check against
+an application-chosen allowlist, never as an instruction to trust
+outright.
+
+**Encrypt cannot provide deniability, and that's a scope boundary, not a
+gap.** Being wrapped in a Type-`4` Record at all is itself a visible
+declaration — "this is encrypted content" — to any QDEF-aware parser
+walking the Sequence, whether or not it can decode the payload, because
+Type ID routing (§3.1) happens unconditionally before any per-Record-Type
+logic runs. An application whose threat model requires ciphertext
+indistinguishable from random has a requirement this wrapper structurally
+cannot satisfy no matter how its fields are shaped — self-describing
+dispatch is the format's entire reason for existing. Such an application
+should keep its own encryption entirely inside an opaque registered blob
+(§6) rather than use this wrapper, the same way any application with its
+own proven mechanism should (§7). See FINDINGS.md #13.
 
 **Fragment chunking (Type 2).** The spec must fix *how* the original bytes
 are sliced, not just what fields describe the result, or two independent
@@ -525,6 +619,12 @@ periodic mirror of CoAP's Content-Formats table (even just checked into a
 repo alongside their own code) — cheap insurance so the numbering can be
 forked and kept alive independently if that registry ever does go
 unmaintained, rather than leaving every uint in this field meaningless.
+
+Prototyped in `prototype/test/media-payload.test.js`: both the
+CoAP-numeric and plain-string forms round-trip, and an application with
+no interest in Media Payload skips the whole Record cleanly by Type ID
+alone — the same "unaware decoder pays nothing" guarantee every other
+stdlib Record Type gets, not just an aspiration.
 
 ## 5. Record Type Registry (informative examples)
 
@@ -688,7 +788,11 @@ content. The app wrote **zero** reassembly, parity, or AES-GCM code of its
 own for the container format — all of it is the shared QDEF Wrapper
 resolver from §4.1, exercised through the exact same recursive "unwrap
 bytes → re-parse as a Record" step, regardless of what Type 950 turns out
-to mean.
+to mean. This is exactly the case Encrypt's Algorithm/Key Algorithm fields
+(§4.1) are optional for: the app's own passphrase-KDF scheme is only ever
+read by itself, so it has nothing to gain from self-describing it — those
+fields exist for the *different* case of two unrelated apps needing to
+interoperate on a key transfer, not this one.
 
 This exact scenario — 3 data fragments + 1 XOR parity fragment, one
 fragment deliberately dropped and recovered, then the full

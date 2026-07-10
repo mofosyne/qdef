@@ -26,7 +26,11 @@ function encodeRecordBytes({ typeId, fields }) {
   const map = new Map(fields);
   map.set(0, typeId); // Key 0 MUST carry the Record Type ID — the only routing mechanism
   if (map.get(0) !== typeId) throw new Error('key 0 must equal typeId');
-  return cbor.encode(map);
+  // §3.4: encoders MUST produce RFC 8949 §4.2.1 deterministic CBOR (shortest-
+  // form arguments, sorted map keys) — not a style preference, it's what
+  // makes a content hash like group_id (§4.1) mean "same logical content"
+  // across independent encoders rather than just "same encoder, same run."
+  return cbor.encodeCanonical(map);
 }
 
 /**
