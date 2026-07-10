@@ -14,9 +14,10 @@ recognizes its type and ignored by every app that doesn't.
 
 ## Status
 
-**Draft, not yet implemented as a reference library.** The design in
-[`docs/QDEF-SPEC.md`](docs/QDEF-SPEC.md) has been validated by two
-throwaway prototypes:
+**Draft, not yet implemented as a reference library — but the design is
+validated, not just written.** The core wire format and the full standard
+library (Split, Compress, Encrypt, Fallback Hint, Media Payload) are all
+round-trip tested, across two independent throwaway prototypes:
 
 - [`/prototype`](prototype) (Node) — real code encoding and decoding real
   QDEF bytes end to end, including the multi-fragment split/encrypt worked
@@ -34,7 +35,8 @@ placeholders, not an allocated registry.
 
 See [`docs/FINDINGS.md`](docs/FINDINGS.md) for what both prototypes found
 and fixed — several real interop and hardening gaps that careful prose
-review alone hadn't caught.
+review alone hadn't caught — and [`docs/ROADMAP.md`](docs/ROADMAP.md) for
+what's done, what's deliberately not done yet, and where this is headed.
 
 ## Why QDEF
 
@@ -84,6 +86,8 @@ MIME type already routing it.
   what's still unresolved. Non-normative.
 - [`docs/FINDINGS.md`](docs/FINDINGS.md) — what the round-trip prototype
   found and changed in the spec.
+- [`docs/ROADMAP.md`](docs/ROADMAP.md) — what's done, what's deliberately
+  deferred, and where the project is headed.
 - [`prototype/`](prototype) — a throwaway Node.js implementation used to
   validate the design by actually encoding and decoding QDEF bytes. Not a
   reference library; see its own README for scope and how to run it.
@@ -91,6 +95,19 @@ MIME type already routing it.
   reimplementation of just the mandatory core, used to check that layer's
   "genuinely minimal, no CBOR library required" claim against a real
   bare-metal target. Not a reference library either; see its own README.
+
+## Roadmap
+
+Near-term: `mofosyne/tagdrop` adopting the §6 registration pattern in its
+real codebase is the next milestone — a live pressure test, not another
+design pass. Spec stewardship is intended to move to **NFCDAB**, a
+wireless-art collective in the same spirit as existing QR-art and
+NFC-art communities, taking on the registry-governance role that's
+explicitly unresolved today (see `docs/DESIGN.md`). Longer-term, the aim
+is eventual formal standardization — an IANA registry and an RFC — once
+the format has real-world adoption and a stable maintaining body behind
+it. Full detail, including what's deliberately not built yet and why, in
+[`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## Origin
 
