@@ -77,7 +77,11 @@ MIME type already routing it.
 
 ## Repository layout
 
-- [`docs/QDEF-SPEC.md`](docs/QDEF-SPEC.md) — the format specification.
+- [`docs/QDEF-SPEC.md`](docs/QDEF-SPEC.md) — the format specification
+  (normative).
+- [`docs/DESIGN.md`](docs/DESIGN.md) — why the spec looks the way it does:
+  mechanisms tried and removed, alternatives weighed and rejected, and
+  what's still unresolved. Non-normative.
 - [`docs/FINDINGS.md`](docs/FINDINGS.md) — what the round-trip prototype
   found and changed in the spec.
 - [`prototype/`](prototype) — a throwaway Node.js implementation used to

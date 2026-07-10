@@ -1,6 +1,7 @@
 'use strict';
-// Investigates docs §9's open question: "Is nesting order just documented
-// convention, or should decoders detect/reject a non-conformant order?"
+// Investigates docs/DESIGN.md's open question: "Is nesting order just
+// documented convention, or should decoders detect/reject a non-conformant
+// order?"
 //
 // Uses wrappers.resolveStack — a generic, type-directed recursive resolver
 // (exactly the "one resolver, written once" mechanism §4.1 describes) — to

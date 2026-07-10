@@ -75,7 +75,7 @@ uniform chunk length within a split group (verified directly against
 `mofosyne/tagdrop`'s SPEC.md), so this tension doesn't cost that
 adopter anything; QDEF's rule matches what its format already does. That's
 evidence for one usage pattern, not a general resolution — see
-QDEF-SPEC.md §9's updated entry.
+DESIGN.md's updated entry.
 
 ### 4. `total_bytes` (key 9) is documented OPTIONAL but isn't, once `parity_scheme` is set
 
@@ -120,17 +120,17 @@ not just on AES-GCM but on how the key got there. The prototype sidesteps
 this entirely (tests pass a raw 32-byte key directly) — which is precisely
 how prose review missed that the spec never actually answers it.
 
-**Not fixed** — this is a real open question now added to §9, not resolved
-by this prototype pass. Candidates: leave key provisioning explicitly
+**Not fixed** — this is a real open question now added to DESIGN.md, not
+resolved by this prototype pass. Candidates: leave key provisioning explicitly
 out-of-scope of the wrapper (an application-layer concern, documented as
 such rather than silently assumed), or add an optional key-hint/KDF-params
 field to Type 4.
 
 ### 7. Nesting order is *not* decoder-detectable — confirmed, not just assumed
 
-§9 already asked whether `Split → Encrypt → Compress` is "just documented
-convention" or something a decoder could reject if violated, and leaned
-("not resolved") toward trusting the encoder. The prototype turned this
+The spec (now DESIGN.md) already asked whether `Split → Encrypt → Compress`
+is "just documented convention" or something a decoder could reject if
+violated, and leaned ("not resolved") toward trusting the encoder. The prototype turned this
 from a guess into a demonstrated fact: `prototype/src/wrappers.js`'s
 `resolveStack` is a generic, type-directed resolver (unwrap whatever
 wrapper Type ID is next, recurse, stop at the first non-wrapper Record) —
@@ -149,7 +149,7 @@ a separate nonce/auth-tag per fragment instead of one for the whole
 payload. The real reason to prefer Split-outermost is efficiency and
 simplicity (one encrypt/compress operation instead of N), not correctness.
 
-**Fix:** §9's open question is now answered, not open — "trust the
+**Fix:** DESIGN.md's open question is now answered, not open — "trust the
 encoder" is confirmed correct, but for a different reason than stated:
 non-conformant order isn't just *undetected*, it's *unenforceable* by any
 decoder built the natural (generic, recursive) way, and there is no

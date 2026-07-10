@@ -221,7 +221,7 @@ function splitDecode(fragmentMaps) {
 // wrapper Type ID it finds until it hits a non-wrapper (terminal) Record.
 //
 // Prototype finding: this means nesting order (§4.1's "fixed nesting
-// order", §9's last open question) is genuinely unenforceable/undetectable
+// order", DESIGN.md's nesting-order question) is genuinely unenforceable/undetectable
 // by a generically-written decoder — both the documented order
 // (Split-outermost) and a deliberately reversed order (Encrypt applied
 // per-code, Split innermost) round-trip through this exact same resolver

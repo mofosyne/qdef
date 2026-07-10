@@ -5,7 +5,10 @@ prototype covering the full design ([`/prototype`](../prototype)) and a
 `no_std`, zero-dependency Rust prototype of the mandatory core specifically
 ([`/rust/qdef-core`](../rust/qdef-core)), which also builds for a bare-metal
 Cortex-M0 target (see [FINDINGS.md](FINDINGS.md)); not yet implemented as a
-reference library, not yet used in production anywhere.**
+reference library, not yet used in production anywhere. This document is
+normative; the reasoning behind its decisions — mechanisms tried and
+removed, alternatives weighed, and what's still unresolved — lives in
+[DESIGN.md](DESIGN.md).**
 
 QDEF is a general-purpose binary container for multi-action 2D barcodes
 (QR, Data Matrix, Aztec) and NFC tags. Think of it as filling the gap NDEF
@@ -162,18 +165,11 @@ critical-key failure mode).
 
 An earlier draft also wrapped the Record Map in a CBOR semantic Tag
 matching the Type ID, as a second, redundant routing path for tag-aware
-CBOR libraries. That mechanism has been removed: CBOR tag numbers are a
-shared IANA registry meant for predefined, universal interpretations of a
-data item (a byte string *is* a bignum, a text string *is* a date) — not a
-private, per-application enumeration space, which is what treating "tag
-number" as "Type ID" actually asked of it. It also collided in practice:
-QDEF's own low Type IDs landed on tag numbers IANA already assigns to
-bignums, decimal fractions, and dates, verified against a real decoder
-mangling the result. See §9's "CBOR tag-number collision (resolved)" and
-FINDINGS.md #11 for the full reasoning and the decision. Key `0` was never
-part of the problem — there is no IANA registry for map keys, only for
-tags, so this simplification costs nothing: every prototype test already
-routed through key `0` alone.
+CBOR libraries. That mechanism has been removed — see
+[DESIGN.md's "CBOR tag-number collision"](DESIGN.md#cbor-tag-number-collision-resolved--the-tag-route-was-removed)
+and FINDINGS.md #11 for why. Key `0` was never part of the problem — this
+simplification costs nothing: every prototype test already routed through
+key `0` alone.
 
 **Key `1` (odd, OPTIONAL) is reserved, globally, as the Type Hint.** Unlike
 every other key besides `0`, key `1`'s meaning is fixed across *every*
@@ -212,19 +208,10 @@ requires it to be skip-safe either way). Only a reader that specifically
 wants to *interpret* key `1` needs to branch on its CBOR major type, and
 that's opportunistic tooling, not the baseline parser.
 
-An alternative was considered — folding the hint into key `0` itself
-(making it sometimes a compound value instead of a bare uint) so key `1`
-stays free for each Type's own use — and rejected: key `0` is the one
-field read unconditionally for *every* Record, including ones about to be
-skipped, so complicating its shape reintroduces exactly the recursion-
-adjacent cost §3.2 eliminated, on the single least-skippable code path in
-the format. It also isn't additive — every existing implementation
-(including this repo's own Rust prototype) hard-codes "key `0` is a uint,"
-so redefining it would break every parser written against this spec today.
-Reserving key `1` instead costs only one non-critical, per-Type-unbounded
-integer — every parser already implements "skip an unrecognized odd key"
-as baseline behavior, so the tax is paid once, in the spec text, not
-repeatedly at runtime by implementations that don't care about it.
+Folding this hint into key `0` itself instead of reserving key `1` was
+considered and rejected — see
+[DESIGN.md's "Type Hint (Key 1)"](DESIGN.md#type-hint-key-1-folding-into-key-0-instead--considered-rejected)
+for why.
 
 **Optional, self-certifying strengthening (not required):** a private-use-
 random Type ID MAY be derived as a truncated hash of its own `key 1` name
@@ -432,15 +419,10 @@ Compress-before-encrypt is the only sound order between those two
 the whole payload instead of one per fragment — but **it is not structurally
 required and a decoder cannot detect or reject a different order**: the
 generic resolver described above has no notion of "correct" order, it just
-keeps unwrapping whatever Wrapper Type ID it finds next. A prototype run
-confirmed both the documented order and a deliberately reversed one
-(Encrypt applied per-fragment, Split innermost) decode identically through
-the same resolver with no error (see FINDINGS.md §7). This is a corrected
-claim from an earlier draft, which described Split-outermost as required
-"because decompression/decryption need the complete byte string" — that
-described the recommended case, not a hard constraint; encrypting each
-fragment individually is well-defined too, just less efficient and without
-a single whole-payload integrity tag.
+keeps unwrapping whatever Wrapper Type ID it finds next — confirmed
+against a prototype run of both the documented order and a deliberately
+reversed one (see FINDINGS.md §7 and
+[DESIGN.md's "Nesting order enforcement"](DESIGN.md#nesting-order-enforcement--now-answered-not-open)).
 
 **Why a wrapper, not a reserved key range on the inner record itself:**
 wrapping avoids a cross-record correctness hazard a sibling/key-range
@@ -648,275 +630,12 @@ fragment deliberately dropped and recovered, then the full
 Split→Encrypt→plain chain decrypted and re-parsed — is exercised end to end
 in `prototype/test/roundtrip.test.js`.
 
-## 9. Open questions (not resolved by this draft)
+## 9. Design rationale and open questions
 
-- **Registry governance — allocation shape proposed, authority still
-  open.** Who allocates application-specific Record Type IDs (`100`+) if
-  this is meant to be shared across unrelated projects is still open — no
-  registry authority exists yet, and IDs in this document remain
-  illustrative placeholders. But the *shape* of the range has an answer:
-  tier it the way CBOR's own tag registry (RFC 8949 §9.2) tiers tag
-  numbers — a small span requiring registration/review, then a larger
-  "first-come" span, then an explicit private-use span for
-  never-shared/internal Type IDs. QDEF doesn't use CBOR tags itself
-  (§3.1, §9's "CBOR tag-number collision"), but the *governance pattern*
-  a mature numeric-ID registry uses is worth borrowing on its own merits,
-  independent of whether QDEF's wire format happens to touch tags at all.
-  Two options were weighed and this is the one to build the eventual
-  policy on:
-  - **Tiered ranges (recommended):** four tiers, not two, each with a
-    different reason to exist:
-    - `1`–`99`: mechanism/plumbing (already spec'd, §4) — Wrapper Records
-      and other stdlib infrastructure, not application content.
-    - `100`–`999`: **common vocabulary** — reviewed, widely-recognized
-      content types (Wi-Fi, a URL/URI record, the kind of thing NDEF calls
-      a "Well Known Type"). This is the tier for a Record Type enough
-      unrelated implementers would want to recognize that it's worth a
-      shared, reviewed number rather than everyone reinventing their own —
-      today's §5 examples (`100`, `105`) already sit here informally.
-    - `1000`–`0xFFFF`: first-come-first-served — registered, but no review
-      gate beyond "not already taken."
-    - `0x10000`+: **private-use, via a large random value, not a
-      registry.** This tier needs no allocation authority at all: because
-      Type IDs are CBOR uints with no fixed width, an implementer who picks
-      a sufficiently large (e.g. 32- or 64-bit) *random* number gets
-      collision avoidance from the sheer size of the number space, the same
-      way a UUID does — not from anyone checking a list. This is the
-      correct answer for closed/internal Record Types that will never be
-      published or need to interoperate with an unrelated implementer, and
-      it's only viable because the wire format never fixed Type IDs to a
-      small byte-width field.
-    Exact boundaries remain a policy decision for whoever ends up running
-    the registry, not a wire-format one.
-  - **Even/odd for governance tier (considered, rejected):** reuse the
-    even/odd convention itself to mean "pre-registered vs. free-for-all,"
-    the same way it already means critical-vs-optional for keys (§3.2).
-    Rejected for two reasons: it collides semantically with a convention
-    that already carries a specific, different, load-bearing meaning
-    elsewhere in this same spec — a reader would have to track two
-    unrelated meanings of "even/odd" depending on whether they're looking
-    at a key or a Type ID — and it halves the usable ID space for no
-    benefit a tiered range doesn't already provide more cheaply.
-- **CBOR tag-number collision (resolved — the tag route was removed).** An
-  earlier draft wrapped every Record Map in a CBOR semantic tag equal to
-  its Type ID (the "Smart Route"), alongside the mandatory key `0`. Found
-  broken on two independent grounds, not one:
-  - **Empirical.** CBOR tag numbers are a shared IANA registry (RFC 8949
-    §3.4), and the low numbers QDEF's stdlib picked are already assigned:
-    tag `2`/`3` are bignums, tag `4` is a decimal fraction, tag `5` is a
-    bigfloat — exactly Types 2 (Split), 3 (Compress), 4 (Encrypt), 5
-    (Fallback Hint). Type `100` (Wi-Fi) collides with RFC 8943's
-    days-since-epoch date; tag `0` additionally makes Type ID `0` unusable.
-    Reproduced against a real decoder, not just asserted: `Tagged(2, <byte
-    string>)` decodes to a `BigInt`, and wrapping an actual Record Map in
-    tag `0` decodes to `Invalid Date` — see FINDINGS.md #11.
-  - **Conceptual, and the deeper reason.** Even numbers with no *current*
-    collision were the wrong fix, not just a smaller one. A tag number is
-    meant to carry one predefined, universal interpretation (a byte string
-    *is* a bignum, a text string *is* a date) that any implementation can
-    look up and apply — not a private, per-application enumeration handed
-    out in bulk. Treating "tag == Type ID" as QDEF's own extensible ID
-    space was asking the registry to be something it isn't, independent of
-    which specific numbers happened to be free. No legitimate registry
-    grants thousands of slots to one application's internal dispatch
-    table.
-
-  Key `0` was never implicated by either argument: there is no IANA
-  registry for map keys, only for tags, so a bare Record Map has no
-  built-in semantic layer for a generic decoder to misinterpret — verified
-  directly (FINDINGS.md #11): the identical Record Map round-trips cleanly
-  when untagged, and decodes to `Invalid Date` only when wrapped in a tag.
-  **Decision: the tag route is removed. Key `0` is the sole routing
-  mechanism** (§3.1) — simpler, and every prototype test already routed
-  through it alone, tag or no tag. The one place a CBOR tag still
-  legitimately appears in QDEF is unrelated to routing: §3.2's optional
-  tag-24 hint on a field's own byte-string *value*, a Record-Type author's
-  own opt-in choice about one field's content, which is exactly the
-  "predefined, universal meaning" use tags are for — not a mechanism
-  QDEF's core depends on. A single shared "this map is a QDEF Record" tag
-  (the way tag `55799` means "self-describe CBOR") was considered as a
-  middle ground and set aside for the same reason: one more optional
-  mechanism to document and implement, for a benefit key `0` already
-  provides unconditionally.
-- **Standard library governance.** Related but narrower (§4): who maintains
-  the reserved `1`–`99` range itself — additions like §4.1/§4.2 need some
-  process for becoming part of "the stdlib" rather than just another
-  vendor's Record Type squatting on a low number.
-- **Magic-header overhead for QR.** 5 bytes fixed cost matters for a
-  single-record payload in a size-constrained QR version; is it worth
-  gating on payload size (e.g. omit magic when embedded via a scheme that
-  already identifies the format, mirroring the NFC case in §2)? A real
-  data point from an adopter comparison (verified directly against
-  `mofosyne/tagdrop`'s SPEC.md): TagDrop's native envelope costs 2 bytes
-  total (`version`+`type`, both small CBOR uints, SPEC.md §2), against
-  roughly 10–15 bytes for QDEF's
-  magic+version+map-framing overhead (key `0` plus key `2`'s length
-  header) on the same small payload — a large proportional cost for
-  TagDrop's smallest codes (a short text snippet can be under 50 bytes
-  total). Doesn't change the conclusion elsewhere in this spec that QDEF
-  wrapping stays strictly opt-in, never the default framing (§6, §7) — but
-  it's a concrete number to weigh if the conditional-magic-header idea
-  above is ever worth building.
-- **Relationship to existing standards.** NDEF already solves "multiple
-  typed records, one message" for NFC (§2's `application/vnd.qdef` MIME
-  framing leans on this directly). This draft's actual net-new contribution
-  is narrower than it first appears: a *magic-header-plus-CBOR-Sequence*
-  convention for the optical/QR case specifically, plus the even/odd
-  criticality rule, which NDEF itself does not have (NDEF has no per-key
-  criticality signal at all, only per-record TNF/Type). The closest shipped
-  analog for the QR case specifically is [BBQr](https://bbqr.org/BBQr.html)
-  (magic header + single-char file-type byte + QR-series splitting, used
-  for Bitcoin PSBTs/transactions) — but it identifies exactly one file type
-  per *entire QR series*, not multiple heterogeneous Records within one
-  payload, has no per-field criticality or versioning signal, and encodes
-  alphanumeric rather than native byte-mode. QDEF's multi-Record-per-payload
-  model and even/odd rule are real deltas against it, not restatements. The
-  general "magic bytes + sequence of self-describing typed records" pattern
-  itself is well-proven elsewhere (e.g. [MCAP](https://mcap.dev/spec) for
-  robotics data logs) — QDEF's contribution is applying it to the
-  constrained-optical-scanner case, not inventing the pattern. The idea
-  itself predates this repo: `mofosyne/tagdrop` issue
-  [#16](https://github.com/mofosyne/tagdrop/issues/16) (2016) proposed an
-  NDEF-like binary header for QR codes a decade before this draft existed;
-  QDEF is the first attempt to actually build it out.
-- **Why not just carry a literal NDEF message as the QR byte-mode payload,
-  instead of a new format?** It's technically possible — nothing stops
-  encoding actual NDEF bytes into a QR code — but it wouldn't actually
-  avoid inventing anything, for three concrete reasons. First, byte
-  economics: NDEF's Type field is a URN, MIME string, or `domain:type`
-  string (TNF_WELL_KNOWN/MIME_MEDIA/EXTERNAL_TYPE), so every record pays
-  bytes proportional to a string's length for its type tag, where QDEF's
-  Type ID is a CBOR uint (often 1–3 bytes) — the same economics argument
-  as the magic-header-overhead entry above, one layer deeper. Second, a
-  structural mismatch: NDEF's chunk flag (CF) solves "this record's
-  payload is bigger than one read from a continuous tag session" — chunk
-  continuation requires TNF `0x06` and zero Type Length on every middle
-  chunk, a scheme that assumes one uninterrupted message stream. It does
-  not solve "this message is spread across several independently-scanned
-  physical codes, any one of which might fail to scan," which is what
-  §4.1's Split Wrapper (with XOR parity, fragment-loss recovery) actually
-  addresses — reusing NDEF's envelope wouldn't provide that mechanism at
-  all. Third, granularity: NDEF's TNF/Type gets you record-level dispatch
-  only — nothing inside an NDEF payload has any per-field optional/critical
-  signal, so an adopter would still need to invent their own internal
-  structure for "which fields are safe to ignore," which is exactly what
-  §3.2's even/odd rule already is. Wrapping literal NDEF bytes would add
-  NDEF's tag-session-oriented framing (MB/ME message-boundary flags,
-  meaningless for a payload delivered atomically in a single scan) on top,
-  without saving QDEF's actual contribution.
-- **Encrypt key provisioning (new, from the prototype).** Type 4 names a
-  cipher (e.g. AES-GCM) but never specifies where the key comes from. Left
-  out of scope of the wrapper record entirely (an application-layer
-  concern), or given an optional key-hint/KDF-params field? Unresolved —
-  see FINDINGS.md §6.
-- **Split chunking vs. per-code capacity — costs nothing against at least
-  one real adopter's design, general case still open.** The uniform
-  `chunkLen = ceil(total_bytes/count)` rule (§4.1) is what makes
-  single-fragment XOR parity well-defined, but it also prevents an encoder
-  from sizing each fragment to match that specific code's actual capacity
-  (different QR version/ECC level per code, or a QR code alongside a
-  smaller-capacity NFC tag in the same group). Checked against a real
-  adopter rather than left as a hypothetical concern: `mofosyne/tagdrop`'s
-  own sectorization already assumes uniform chunk length across a split
-  group (every sector but the last is the same length, per its own spec —
-  verified directly against `mofosyne/tagdrop`'s SPEC.md), so QDEF's
-  uniform-chunking rule matches what that adopter's format
-  already does rather than imposing a new constraint on it. That's
-  evidence for one real usage pattern, not a general resolution — an
-  adopter that genuinely needs heterogeneous per-code capacity within one
-  group (the QR-alongside-smaller-NFC-tag case) still hits this
-  constraint. Resolving that general case still needs either accepting
-  uniform-chunking as a real limitation, or specifying a fragment-length
-  manifest redundant enough to survive one missing fragment. See
-  FINDINGS.md §3.
-- **Canonical encoding (new, prompted by outside review).** §4.1's `group_id`
-  is already a hash of encoded bytes, which silently assumes two conformant
-  encoders given the same logical content produce identical CBOR — true
-  today only because every worked example uses simple, unambiguous field
-  values. CBOR permits multiple valid encodings of the same value (e.g. an
-  integer encoded with a longer-than-necessary argument width), so this
-  isn't automatically true in general, and matters more if QDEF is ever
-  used for hashing/signing beyond `group_id`'s current narrow use (§8's
-  PGP-backup example already sits right next to that use case). Adopting
-  CBOR's own deterministic-encoding rules (RFC 8949 §4.2.1 — shortest-form
-  arguments, sorted map keys, etc.) as a MUST for encoders is the likely
-  answer; not yet written into the spec. Distinct from, and not solved by,
-  the field-value-shape rule (§3.2), which constrains *what shape* a value
-  may be, not which of several valid *encodings* of that shape an encoder
-  must pick. Worth resolving on its own priority, separate from Sign below:
-  it's already a live correctness gap for `group_id` today, in anything
-  shipped now, not merely a prerequisite for a feature that doesn't exist
-  yet.
-- **Sign / detached-authenticity wrapper (new, requested).** There is no
-  way today to prove a *plain, readable* Record is authentic without also
-  hiding it: the Encrypt wrapper's AES-GCM tag provides integrity only as a
-  side effect of confidentiality, and there is no standalone sign primitive.
-  Adding one is not the clean parallel to Encrypt it first looks like, and
-  that is the finding:
-  - **Sign-as-wrapper (opaque form).** Mechanically identical to Encrypt
-    (Type 4) — the signed Record's bytes become the wrapper's opaque
-    payload, plus a signature/MAC field. It inherits Encrypt's visibility,
-    though: an unaware parser skips the whole thing and sees *nothing*. That
-    is fine only when the inner Record was going to be opaque anyway (a
-    Type-950 key backup, a proprietary blob), where it *is* a clean
-    parallel. It cannot achieve "sign a Wi-Fi record and keep it readable" —
-    being readable and being a wrapper payload are mutually exclusive.
-  - **Sign-as-sibling (detached form).** The signature is a *separate*
-    Record (like the Fallback Hint §4.2 is a sibling, not a wrapper),
-    carrying a reference to which Record(s) it covers plus the signature
-    bytes. The signed Records stay plain and readable; an unaware parser
-    reads them normally and skips the unrecognized signature Record by Type
-    ID. This is the form that delivers "readable *and* verifiable" — but it
-    depends on two things QDEF lacks: the **canonical encoding** above (a
-    verifier must reconstruct the exact signed bytes) and a
-    **coverage-identification scheme** (which Records, addressed how — by
-    index? by content hash? — surviving reordering and unrelated siblings).
-    Coverage identification is the same signed-bytes/verified-bytes
-    divergence hazard this project's origin story (TagDrop's signing bug) is
-    a caution about, so it must not be hand-waved.
-
-  **Coverage-identification scheme — direction decided, not yet built.**
-  Cover by content hash of each covered Record's own canonical bytes, never
-  by Sequence index: an index breaks the moment anything is reordered or an
-  unrelated Record is inserted, while a hash doesn't care where a Record
-  sits. This also reuses the canonical-encoding machinery `group_id` already
-  needs (above) rather than inventing a second addressing concept. Two
-  refinements this needs to get right, both surfaced by checking the
-  proposal against rules already settled elsewhere in this spec rather than
-  taking the shape on faith:
-  - **The hash list MUST be a packed, fixed-width byte string, not a bare
-    CBOR array.** §3.2's field-value-shape rule forbids a bare array as a
-    field value — `N` concatenated 32-byte SHA-256 hashes in one
-    definite-length byte string (skip-safe, decoded by whatever
-    Sign-Record-aware handler chooses to) is the compliant shape; a naive
-    CBOR array of hashes is not, and a conformant core parser would reject
-    it outright (§3.3).
-  - **A hash covers a Record's fully unwrapped, reassembled canonical
-    bytes — never a Wrapper's per-fragment or per-code bytes.** Hashing
-    Split-fragment bytes directly would make a signature depend on how many
-    physical codes the content happened to be fragmented into, an
-    implementation/transport detail with no business affecting whether a
-    signature verifies. Sign a Record after any Wrapper stack resolves, the
-    same layer `group_id`'s own hash already operates on.
-
-  Strippable-but-not-forgeable is an accepted property of this design, not
-  a gap to close: deleting a sibling Sign Record from the Sequence
-  downgrades signed to unsigned, trivially, the same way `mofosyne/tagdrop`
-  already documents "signature can be stripped but not forged or
-  retargeted" as an accepted limitation of its own scheme (§6) rather than
-  something it structurally prevents.
-
-  Direction when taken up: specify the sibling form (it is the one worth
-  having), but only *after* the canonical-encoding question is resolved —
-  a detached signature is meaningless without it. The wrapper form can be
-  dropped in at any time as a straight parallel to Encrypt if an
-  opaque-payload use case ever wants it. Prototype it the same way
-  everything else here was: sign two sibling Records, reorder them, insert
-  an unrelated third Record, and confirm verification still finds exactly
-  the right two — the sort of end-to-end check that catches what design
-  review alone doesn't (see FINDINGS.md).
-- **Nesting order enforcement — now answered, not open.** A prototype
-  confirmed a generically-written decoder cannot detect or reject a
-  non-conformant Wrapper nesting order (FINDINGS.md §7); §4.1's text has
-  been corrected accordingly. This bullet is resolved and kept here only as
-  a record of the change from the prior draft's "leaning toward" language.
+Moved to [`DESIGN.md`](DESIGN.md): why mechanisms were removed (the CBOR
+tag route, folding Type Hint into key `0`), alternatives weighed and
+rejected, comparisons against NDEF/BBQr/MCAP and `mofosyne/tagdrop`, and
+what this draft still hasn't resolved (registry governance, canonical
+encoding, the Sign wrapper, Encrypt key provisioning, Split's per-code
+capacity limits). None of it is required reading to implement a
+conformant parser — everything normative is above this line.
