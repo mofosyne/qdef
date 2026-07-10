@@ -694,7 +694,22 @@ in `prototype/test/roundtrip.test.js`.
   is narrower than it first appears: a *magic-header-plus-CBOR-Sequence*
   convention for the optical/QR case specifically, plus the even/odd
   criticality rule, which NDEF itself does not have (NDEF has no per-key
-  criticality signal at all, only per-record TNF/Type).
+  criticality signal at all, only per-record TNF/Type). The closest shipped
+  analog for the QR case specifically is [BBQr](https://bbqr.org/BBQr.html)
+  (magic header + single-char file-type byte + QR-series splitting, used
+  for Bitcoin PSBTs/transactions) — but it identifies exactly one file type
+  per *entire QR series*, not multiple heterogeneous Records within one
+  payload, has no per-field criticality or versioning signal, and encodes
+  alphanumeric rather than native byte-mode. QDEF's multi-Record-per-payload
+  model and even/odd rule are real deltas against it, not restatements. The
+  general "magic bytes + sequence of self-describing typed records" pattern
+  itself is well-proven elsewhere (e.g. [MCAP](https://mcap.dev/spec) for
+  robotics data logs) — QDEF's contribution is applying it to the
+  constrained-optical-scanner case, not inventing the pattern. The idea
+  itself predates this repo: `mofosyne/tagdrop` issue
+  [#16](https://github.com/mofosyne/tagdrop/issues/16) (2016) proposed an
+  NDEF-like binary header for QR codes a decade before this draft existed;
+  QDEF is the first attempt to actually build it out.
 - **Encrypt key provisioning (new, from the prototype).** Type 4 names a
   cipher (e.g. AES-GCM) but never specifies where the key comes from. Left
   out of scope of the wrapper record entirely (an application-layer
