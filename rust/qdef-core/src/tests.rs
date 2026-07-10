@@ -33,6 +33,22 @@ fn wifi_record_routes_and_fields_extract() {
 }
 
 #[test]
+fn a_64_bit_class_private_use_type_id_decodes_correctly() {
+    // §3.1's `0x10000`+ private-use-random tier needs the full uint64
+    // range (§9 recommends 32- or 64-bit random values) — this crate's
+    // `type_id: Option<u64>` already supports it, but proving it against
+    // a fixture the Node encoder actually produced (not just an assumed
+    // capability) is what caught a real bug in the *Node* prototype's
+    // plain `cbor.encode()` path (docs/FINDINGS.md #14). The fixture here
+    // uses u64::MAX specifically, the top of the range.
+    let container = Container::parse(LARGE_TYPE_ID_CONTAINER).expect("valid container");
+    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].type_id, Some(u64::MAX));
+    assert!(!records[0].aborted);
+}
+
+#[test]
 fn unrecognized_even_key_aborts_the_record() {
     let container = Container::parse(WIFI_UNKNOWN_EVEN_KEY_CONTAINER).unwrap();
     let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();

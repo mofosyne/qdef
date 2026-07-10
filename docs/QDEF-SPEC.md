@@ -171,6 +171,17 @@ and FINDINGS.md #11 for why. Key `0` was never part of the problem — this
 simplification costs nothing: every prototype test already routed through
 key `0` alone.
 
+**Implementer caution for the `0x10000`+ tier specifically:** a Type ID
+wide enough to need a 64-bit (or bignum-capable) integer type in your
+implementation language MUST still be encoded as a native CBOR uint
+(major type 0), never wrapped in a bignum tag (CBOR tag `2`/`3`) — that
+would violate this section's own rule and §3.2's field-value-shape rule
+identically. Verify your specific encoder does this, not just that some
+CBOR library is present: this repo's own Node prototype had exactly this
+bug for its entire history, undetected because none of its own worked
+examples ever used a Type ID large enough to trigger it. See FINDINGS.md
+#14.
+
 **Key `1` (odd, OPTIONAL) is reserved, globally, as the Type Hint.** Unlike
 every other key besides `0`, key `1`'s meaning is fixed across *every*
 Record Type, not defined per-Type — because its purpose only works if a

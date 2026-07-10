@@ -387,6 +387,65 @@ COSE's key-derivation entries are all HKDF variants — so even an adopter
 without TagDrop's deniability requirement would hit Key Algorithm's
 plain-string fallback for this specific case, not the numeric one.
 
+### 14. The Node prototype's own dependency mis-encodes large Type IDs — caught only because a real adopter used the private-use tier as recommended
+
+TagDrop is the first adopter actually using §9's `0x10000`+ private-use
+tier as intended — a real ~64-bit random Type ID, not an illustrative
+placeholder like every worked example in this repo (`100`, `105`, `2`–`5`,
+`900`, `950`) has ever been. Checking that against this repo's own
+prototype, not TagDrop's, surfaced a real bug: reproduced directly against
+the `cbor` npm package used throughout `prototype/src/`, `cbor.encode()`
+wraps *every* BigInt-typed input in CBOR tag 2 (bignum) — regardless of
+magnitude, confirmed from `100n` (which trivially fits as a one-byte
+native uint) up through `2n**64n - 1n`. Not a magnitude threshold, purely
+"BigInt in, tag 2 out."
+
+Why this would matter: any Type ID wide enough to need a JS BigInt (which
+is exactly what §9 recommends for this tier, and exactly what routes
+through `map.set(0, typeId)` in `core.encodeRecordBytes`) would violate
+both §3.1 (key `0` MUST be a plain uint) and §3.2's field-value-shape rule
+(a value MUST NOT be a CBOR tag) — for the one field the entire
+minimal-core-parser design depends on being trivially readable. It's the
+same underlying hazard findings #11/#12 already found and thought was
+closed by removing the old Smart-Route tag-wrapping mechanism, resurfacing
+through a completely different path: not QDEF's own wire-format design
+this time, but a widely-used library's default behavior for a JS type
+(`BigInt`) none of this repo's own worked examples ever needed, since
+every one of them fits comfortably in a plain `Number`.
+
+**Not currently live, but only by accident, not by design.** Checked
+directly: `core.encodeRecordBytes` uses `cbor.encodeCanonical`, not plain
+`cbor.encode` — a change made for an unrelated reason (§3.4's canonical-
+encoding requirement) — and `encodeCanonical` does not exhibit this bug at
+any magnitude tested. So the exact scenario reported (a real BigInt-class
+Type ID) currently encodes correctly, verified against the live code, not
+assumed. That's a fortunate side effect of the canonical-encoding switch,
+not something anyone verified or tested for at the time it happened —
+before that change (i.e. for this repo's entire history prior to this
+session's canonical-encoding work), this bug would have been live for any
+adopter following §9's own advice.
+
+**Fix:** added a regression test suite
+(`prototype/test/large-type-id.test.js`) that locks this in rather than
+leaving it as an unverified side effect — including a test that documents
+the dependency bug directly, so a future change back toward plain
+`cbor.encode()` (for any reason) would be caught immediately rather than
+rediscovered the same way this was. Also added a cross-implementation
+fixture (`LARGE_TYPE_ID_CONTAINER`, Type ID = `u64::MAX`) proving the Rust
+decoder reads a real large Type ID correctly too, not just assumed to
+handle the full `u64` range from its `type_id: Option<u64>` field type.
+
+**Worth generalizing as implementer guidance, not just a fixed bug:** any
+QDEF implementation in a language with a similar split between "small
+integer" and "big integer" CBOR encoding paths should verify its specific
+encoder — not just its CBOR library's existence — actually produces a
+native uint for a Type ID wide enough to need the bigger path, especially
+for §9's private-use tier where that's the expected, recommended case,
+not an edge case. This repo's own reference prototype had exactly this
+gap for its entire history until now, never caught by any of its own
+worked examples, only surfaced by a real adopter following the spec's own
+advice literally.
+
 ## Confirmed working as designed (no fix needed)
 
 - **Magic + version + CBOR-Sequence-of-Records** round-trips exactly as

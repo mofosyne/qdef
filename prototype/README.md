@@ -55,6 +55,11 @@ found.
   absent from that registry, not a hypothetical fixture), and that an
   application with no interest in it skips the whole Record by Type ID
   alone, same as any other unrecognized Type.
+- `test/large-type-id.test.js` — a real ~64-bit private-use Type ID
+  (§3.1, §9's `0x10000`+ tier) encodes as a native uint, never a CBOR
+  bignum tag, locking in a real bug found checking against a real adopter
+  (`cbor.encode()`'s BigInt handling — see FINDINGS.md #14) rather than
+  leaving it as an unverified side effect of an unrelated change.
 
 ## Running
 
