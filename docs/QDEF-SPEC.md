@@ -141,7 +141,7 @@ rule):
 | 2   | "My Coffee Shop"       | text  | even     | CRITICAL: abort Record      |
 | 4   | "guest123"             | text  | even     | CRITICAL: abort Record      |
 | 6   | 2                      | uint  | even     | CRITICAL: abort Record      |
-| 1   | true                   | bool  | odd      | OPTIONAL: silently ignored  |
+| 3   | true                   | bool  | odd      | OPTIONAL: silently ignored  |
 +-----+------------------------+-------+----------+-----------------------------+
 ```
 
@@ -151,7 +151,7 @@ are always scalar-or-string, never structure to walk into. That fixed
 shape is what §3.3 means by "a conformant core parser never needs
 recursion at all."
 
-### 3.1 Record Type ID (Key 0)
+### 3.1 Record Type ID (Key 0) and Type Hint (Key 1)
 
 The Record Map MUST contain Key `0` (uint), the Record Type ID. This is
 the *only* routing mechanism — a parser reads `map[0]` to decide what kind
@@ -174,6 +174,72 @@ FINDINGS.md #11 for the full reasoning and the decision. Key `0` was never
 part of the problem — there is no IANA registry for map keys, only for
 tags, so this simplification costs nothing: every prototype test already
 routed through key `0` alone.
+
+**Key `1` (odd, OPTIONAL) is reserved, globally, as the Type Hint.** Unlike
+every other key besides `0`, key `1`'s meaning is fixed across *every*
+Record Type, not defined per-Type — because its purpose only works if a
+reader with zero prior knowledge of a specific Type's schema can still find
+it. It carries "the other identity" of this Record Type, and its CBOR
+shape depends on which identity key `0` currently holds:
+
+- If `key 0` is in the private-use-random tier (`0x10000`+, §9 — self-
+  assigned, no registry involved), `key 1`, if present, is a **text
+  string**: a human-readable name the original author chose for this Type
+  (e.g. a reverse-domain string). This lets a future registry curator, or
+  anyone who finds a stray code, recover intent even if the original
+  author is unreachable — the "the ID means nothing without a working
+  registry lookup" failure mode this tier is otherwise exposed to.
+- If `key 0` is below `0x10000` (came through registration, however
+  informal), `key 1`, if present, is a **uint**: the Type ID this Type was
+  previously known by (typically a `0x10000`+ value, from before
+  promotion). A reader built *before* the promotion happened — and so only
+  recognizes the old random ID — can still route the Record by checking
+  `key 1` against its own known-ID table when `key 0` itself comes back
+  unrecognized.
+
+A Record never needs both forms at once: the name matters before
+promotion, the legacy-ID pointer matters only for a transitional window
+after it, and the full history (name ↔ old ID ↔ new ID) is expected to
+live in registry documentation, not persist in every future-minted code.
+Key `1` MUST stay odd/optional — it is pure metadata a reader is always
+free to ignore; routing MUST always happen through key `0` alone, never
+key `1`.
+
+This type-polymorphism (uint or text string, depending on context) doesn't
+cost the mandatory core anything: a parser skipping an unrecognized odd
+key never inspects its shape at all (§3.2's field-value-shape rule already
+requires it to be skip-safe either way). Only a reader that specifically
+wants to *interpret* key `1` needs to branch on its CBOR major type, and
+that's opportunistic tooling, not the baseline parser.
+
+An alternative was considered — folding the hint into key `0` itself
+(making it sometimes a compound value instead of a bare uint) so key `1`
+stays free for each Type's own use — and rejected: key `0` is the one
+field read unconditionally for *every* Record, including ones about to be
+skipped, so complicating its shape reintroduces exactly the recursion-
+adjacent cost §3.2 eliminated, on the single least-skippable code path in
+the format. It also isn't additive — every existing implementation
+(including this repo's own Rust prototype) hard-codes "key `0` is a uint,"
+so redefining it would break every parser written against this spec today.
+Reserving key `1` instead costs only one non-critical, per-Type-unbounded
+integer — every parser already implements "skip an unrecognized odd key"
+as baseline behavior, so the tax is paid once, in the spec text, not
+repeatedly at runtime by implementations that don't care about it.
+
+**Optional, self-certifying strengthening (not required):** a private-use-
+random Type ID MAY be derived as a truncated hash of its own `key 1` name
+string (`TypeID = truncate(hash(name), N)`) rather than pure randomness.
+This upgrades the name from an unverifiable claim into something anyone
+can independently check — recompute the hash, compare to `key 0` — without
+trusting a registry or a possibly-unreachable original author, the same
+"hash as proof" instinct already behind `group_id` (§4.1) and the Sign
+coverage scheme (§9). No version marker is needed to record whether a
+given ID used this convention: verification is opportunistic — if the hash
+matches, the binding is confirmed; if it doesn't, `key 1` simply degrades
+to a plain, unverified label, exactly as if this convention weren't in use
+at all. Not yet prototyped; the hash width needed to keep collision
+probability negligible at whatever scale this tier actually sees is an
+open parameter, not a wire-format decision.
 
 ### 3.2 The Extensibility Rule (Even/Odd Keys)
 
@@ -400,7 +466,7 @@ Type 5: {                          // Fallback Hint (stdlib)
   0: 5,
   2: "https://example.com/open-this",  // CRITICAL: a URI a generic tool
                                         //   or browser can follow
-  1: "Open in MyApp"                   // OPTIONAL: human-readable label
+  3: "Open in MyApp"                   // OPTIONAL: human-readable label
 }
 ```
 
@@ -420,7 +486,7 @@ Wrapper's opaque payload would defeat.
   2: "My Coffee Shop",  // CRITICAL: SSID
   4: "guest123",        // CRITICAL: Password
   6: 2,                 // CRITICAL: Auth Type (0=Open, 1=WEP, 2=WPA2/3)
-  1: true                // OPTIONAL: Hidden Network Flag
+  3: true                // OPTIONAL: Hidden Network Flag
 }
 ```
 
@@ -431,7 +497,7 @@ Wrapper's opaque payload would defeat.
   0: 105,                // CRITICAL: Record Type ID
   2: h'A7F90B...',       // CRITICAL: Ticket Hash/Token
   4: 1735689600,         // CRITICAL: Expiry Epoch Timestamp
-  1: "General Admit",    // OPTIONAL: UI Display Text
+  5: "General Admit",    // OPTIONAL: UI Display Text
   3: "Gate A"            // OPTIONAL: Wayfinding Hint
 }
 ```

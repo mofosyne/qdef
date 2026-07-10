@@ -7,7 +7,7 @@
 use super::fixtures::*;
 use super::*;
 
-const WIFI_KNOWN_KEYS: &[u64] = &[0, 1, 2, 4, 6];
+const WIFI_KNOWN_KEYS: &[u64] = &[0, 2, 3, 4, 6];
 
 #[test]
 fn wifi_record_routes_and_fields_extract() {

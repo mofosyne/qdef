@@ -4,7 +4,7 @@
 // minimum a decoder needs to apply the even/odd criticality rule (§3.2).
 
 const WIFI_TYPE = 100;
-const WIFI_KNOWN_KEYS = new Set([0, 1, 2, 4, 6]);
+const WIFI_KNOWN_KEYS = new Set([0, 2, 3, 4, 6]);
 
 const TAGDROP_REGISTRATION_TYPE = 900;
 const TAGDROP_REGISTRATION_KNOWN_KEYS = new Set([0, 2]);

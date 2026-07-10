@@ -19,7 +19,7 @@ test('Type 100 (Wi-Fi) record round-trips through a full container', () => {
         [2, 'My Coffee Shop'],
         [4, 'guest123'],
         [6, 2],
-        [1, true],
+        [3, true],
       ]),
     },
   ]);
@@ -36,7 +36,7 @@ test('Type 100 (Wi-Fi) record round-trips through a full container', () => {
   assert.equal(rec.map.get(2), 'My Coffee Shop');
   assert.equal(rec.map.get(4), 'guest123');
   assert.equal(rec.map.get(6), 2);
-  assert.equal(rec.map.get(1), true);
+  assert.equal(rec.map.get(3), true);
 });
 
 // ---------------------------------------------------------------------
