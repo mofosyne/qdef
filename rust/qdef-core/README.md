@@ -52,6 +52,15 @@ answered.
   `Iterator` over the Sequence by hand is what surfaced this; it's not
   visible when a library's "decode everything or throw" call hides the
   per-item boundary.
+- The field-value-shape rule's original ban on *every* CBOR tag was more
+  restrictive than the recursion-free guarantee it exists to protect
+  actually required (GitHub issue #8): tag 24 wrapping a definite-length
+  string directly is exactly as skip-safe as a bare string, checked with
+  one extra fixed header read rather than a walk. Adding it required one
+  careful bound, not just a blanket relaxation — tag 24 nesting inside
+  itself has to stay rejected, or the exception reopens the same
+  unbounded-recursion hazard the rule was built to close. See
+  FINDINGS.md #15.
 
 ## Layout
 

@@ -92,11 +92,12 @@ untagged, and decodes to `Invalid Date` only when wrapped in a tag.
 **Decision: the tag route is removed. Key `0` is the sole routing
 mechanism** (spec §3.1) — simpler, and every prototype test already routed
 through it alone, tag or no tag. The one place a CBOR tag still
-legitimately appears in QDEF is unrelated to routing: spec §3.2's optional
-tag-24 hint on a field's own byte-string *value*, a Record-Type author's
-own opt-in choice about one field's content, which is exactly the
-"predefined, universal meaning" use tags are for — not a mechanism QDEF's
-core depends on. A single shared "this map is a QDEF Record" tag (the way
+legitimately appears in QDEF is unrelated to routing: spec §3.2 allows
+tag `24` (and only tag `24`) to wrap a field's own definite-length string
+value directly, a Record-Type author's own opt-in choice about one
+field's content, which is exactly the "predefined, universal meaning" use
+tags are for — not a mechanism QDEF's core depends on. A single shared
+"this map is a QDEF Record" tag (the way
 tag `55799` means "self-describe CBOR") was considered as a middle ground
 and set aside for the same reason: one more optional mechanism to document
 and implement, for a benefit key `0` already provides unconditionally.

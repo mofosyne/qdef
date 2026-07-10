@@ -8,8 +8,9 @@
 //!
 //! Scope is deliberately narrow: read a head byte + argument, read a small
 //! uint or a definite-length string, and skip one *field value* — which,
-//! per docs/QDEF-SPEC.md §3.2's field-value-shape rule, is never an array,
-//! map, or tag. That rule is what keeps this module free of recursion
+//! per docs/QDEF-SPEC.md §3.2's field-value-shape rule, is never a bare
+//! array or map, and never a tag other than 24 wrapping a definite-length
+//! string directly. That rule is what keeps this module free of recursion
 //! entirely, not just bounded — see `skip_value` below and ../FINDINGS.md.
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -106,12 +107,18 @@ pub(crate) fn read_head(buf: &[u8]) -> Result<Head, Error> {
 }
 
 /// Skip one CBOR item that is a legal QDEF Record field value: a scalar
-/// (uint, negint, simple, or float) or a definite-length byte/text string.
-/// Anything that would require walking into nested structure to find its
-/// length — a bare array, a nested map, a tag, or an indefinite-length
-/// string — is refused immediately rather than walked, so this function
-/// can never recurse and never loops. That's the point: it's what makes
-/// skipping an unrecognized field O(1) instead of a stack-depth risk.
+/// (uint, negint, simple, or float), a definite-length byte/text string, or
+/// CBOR tag 24 ("encoded CBOR data item", RFC 8949 §3.4.5.1) wrapping
+/// exactly one definite-length byte/text string. Anything else that would
+/// require walking into nested structure to find its length — a bare
+/// array, a nested map, any other tag, an indefinite-length string, or tag
+/// 24 wrapping anything other than a string directly — is refused
+/// immediately rather than walked, so this function still never recurses
+/// and never loops: the tag-24 branch is two fixed header reads in
+/// sequence, not a call back into this function, so nesting tag 24 inside
+/// itself is rejected rather than silently accepted at unbounded depth.
+/// That's the point: skipping an unrecognized field stays O(1) instead of
+/// a stack-depth risk, tag included.
 pub(crate) fn skip_value(buf: &[u8]) -> Result<usize, Error> {
     let head = read_head(buf)?;
     match head.major {
@@ -122,6 +129,23 @@ pub(crate) fn skip_value(buf: &[u8]) -> Result<usize, Error> {
             let total = head
                 .head_len
                 .checked_add(len)
+                .ok_or(Error::LengthOverflow)?;
+            if buf.len() < total {
+                return Err(Error::UnexpectedEof);
+            }
+            Ok(total)
+        }
+        6 if head.arg == 24 => {
+            let rest = buf.get(head.head_len..).ok_or(Error::UnexpectedEof)?;
+            let inner = read_head(rest)?;
+            if (inner.major != 2 && inner.major != 3) || inner.is_indefinite() {
+                return Err(Error::DisallowedFieldValueShape);
+            }
+            let inner_len = inner.arg as usize;
+            let total = head
+                .head_len
+                .checked_add(inner.head_len)
+                .and_then(|n| n.checked_add(inner_len))
                 .ok_or(Error::LengthOverflow)?;
             if buf.len() < total {
                 return Err(Error::UnexpectedEof);
