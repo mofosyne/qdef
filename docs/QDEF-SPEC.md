@@ -231,6 +231,15 @@ non-string hint all pass — see `prototype/test/type-hint.test.js`) using a
 width needed to keep collision probability negligible at whatever scale
 this tier actually sees remains an open parameter.
 
+**Encoder etiquette (SHOULD, not required):** many optical codes are
+quantized into fixed-capacity classes (a QR Version's byte budget at a
+given error-correction level); when the payload doesn't fill that budget
+anyway, encoders SHOULD spend the otherwise-wasted bytes on key `1` rather
+than leave them as padding — the marginal cost is zero, and it's what
+makes decentralized Type IDs inferable at scale over time (via field
+telemetry correlating observed IDs to observed Hints) even with no
+registry coordinating any of it.
+
 ### 3.2 The Extensibility Rule (Even/Odd Keys)
 
 Borrowed from PNG's critical/ancillary chunk convention:
@@ -460,6 +469,62 @@ without the specific app" property. It **must** stay a plain sibling
 record, never nested inside a Wrapper — its entire value is being visible
 to a parser that understands nothing else in the container, which a
 Wrapper's opaque payload would defeat.
+
+### 4.3 Media Payload (optional)
+
+A plain stdlib Record Type — not a wrapper — for attaching a standard,
+already-widely-recognized media type (a JPEG thumbnail, a vCard, a PDF
+snippet) without registering a bespoke Type ID for every possible file
+format the way §5's examples do for application-specific content:
+
+```
+Type 6: {                          // Media Payload (stdlib)
+  0: 6,
+  2: 22,                           // CRITICAL: Media Type — uint or text,
+                                    //   see below (22 = image/jpeg)
+  4: h'<payload bytes>'            // CRITICAL: the content itself
+}
+```
+
+**Key `2` (Media Type) may be a uint or a text string** — an encoder's
+choice, and a decoder MUST accept either shape (both are already
+skip-safe under §3.2's field-value-shape rule regardless of which an
+encoder picks):
+
+- **A uint in `0`–`65535`** is a [CoAP Content-Format
+  ID](https://www.iana.org/assignments/core-parameters/core-parameters.xhtml)
+  (RFC 7252 §12.3, as amended by RFC 9876) — an existing, actively
+  maintained IANA registry that already assigns compact numeric IDs to
+  common media types (`application/cbor` = 60, `image/jpeg` = 22,
+  `image/png` = 23, `application/json` = 50, `text/plain;charset=utf-8` =
+  0, and hundreds more), tiered by its own governance the same way QDEF
+  tiers its own Type ID space. QDEF doesn't invent a numbering scheme
+  here; it borrows one that already exists and is already CBOR-friendly
+  (a plain small uint).
+- **A text string** is the literal MIME type, spelled out directly — used
+  whenever the media type isn't in CoAP's registry (e.g. `"text/vcard"`,
+  confirmed absent as of this writing). Deliberately *not* a decentralized
+  numeric ID paired with a hint field, unlike Type ID (§3.1): a media type
+  already has a stable, globally-meaningful name independent of any
+  numeric registry (defined by RFC 6838's Media Types registry, which
+  predates and doesn't depend on CoAP's numeric shortcut for it) — there's
+  no opacity problem here for a hint to solve. A private-use Type ID has
+  *no* other identity besides the number, which is exactly why Type Hint
+  has to exist; a media type not in CoAP's table already has its name, so
+  falling back to the plain string directly is sufficient, not a
+  workaround.
+
+**Depending on an external registry is a deliberate, conditional choice,
+not a default.** It's only justified here because CoAP's Content-Formats
+registry specifically has good prospects of staying maintained — IANA-run,
+IETF-governed, updated as recently as 2025 (RFC 9876) — not merely because
+*some* external registry existed to point at. QDEF should not casually
+crib from a numbering scheme with a shakier maintenance outlook just to
+avoid inventing one. Even so, adopters relying on this field should keep a
+periodic mirror of CoAP's Content-Formats table (even just checked into a
+repo alongside their own code) — cheap insurance so the numbering can be
+forked and kept alive independently if that registry ever does go
+unmaintained, rather than leaving every uint in this field meaningless.
 
 ## 5. Record Type Registry (informative examples)
 
