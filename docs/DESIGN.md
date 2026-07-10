@@ -440,3 +440,17 @@ reject a non-conformant Wrapper nesting order (FINDINGS.md #7); spec
 §4.1's text has been corrected accordingly. This entry is resolved and
 kept here only as a record of the change from the prior draft's "leaning
 toward" language.
+
+## A confession (Parkinson's Law of Triviality, self-reported)
+
+C. Northcote Parkinson's original example: a committee approves a
+multi-million-pound nuclear reactor in about two minutes, then spends
+forty-five debating the design of the bike shed. This repo is not immune.
+Removing the entire CBOR-tag routing mechanism — a genuine architectural
+reversal, half the core's routing model gone — took exactly one finding
+(FINDINGS.md #11) and one commit. Deciding whether a single reserved map
+key's decentralized-ID hint belonged on key `1` or key `3` took a
+multi-message negotiation, a rejected alternative design, and its own
+section above. Draw your own conclusions about which of those two
+decisions actually mattered more, and which one got more words spent on
+it in this very document.
