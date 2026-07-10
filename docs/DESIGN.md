@@ -118,12 +118,50 @@ parser already implements "skip an unrecognized odd key" as baseline
 behavior, so the tax is paid once, in the spec text, not repeatedly at
 runtime by implementations that don't care about it.
 
+## Media Payload (Type 6): reusing Type Hint's pattern one layer down, and why CoAP's registry specifically
+
+Spec §4.3's Media Type field reapplies Type Hint's decentralized-ID +
+Hint + opportunistic-hash-verify pattern (§3.1, above) to media types
+instead of Record Types — deliberately the same mechanism, not a parallel
+one invented from scratch, so an implementer who already built Type
+Hint's uint-or-string/hash-check logic gets Media Type's for close to
+free.
+
+**Why CoAP's Content-Format registry and not a fresh QDEF-specific one:**
+the entire premise of borrowing an existing numbering scheme rather than
+minting a new one only holds if the scheme being borrowed is real,
+actively governed, and already fits CBOR's native uint representation.
+CoAP's registry (RFC 7252 §12.3, amended by RFC 9876) is all three: IANA-
+maintained, updated as recently as 2025, and its identifiers are already
+plain integers in `0`–`65535` — no adaptation needed to drop them into a
+CBOR field. It also happens to be tiered by governance strictness (expert
+review / IETF review / first-come-first-served / experimental) the same
+way spec §9's Type ID tiering is, an independent confirmation that this
+general shape of numbering-registry governance is a well-worn pattern,
+not a QDEF-specific invention.
+
+**Why `0x10000` is a structural guarantee here, not just a convention:**
+CoAP's Content-Format option is itself a 16-bit field in the CoAP wire
+protocol, so IANA's registry is capped at `65535` by the protocol CoAP's
+registry serves, independent of anything QDEF does. Reusing the same
+`0x10000` floor already established for Type ID's private-use tier is
+therefore collision-free by construction for media types too, not merely
+by shared convention.
+
+**Left open, deliberately not built:** the reverse of Type Hint's
+promotion case — CoAP later registering an official Content-Format number
+for a media type that QDEF content already carried as a decentralized ID
+— would need the exact same old-reader/new-ID bridging Type Hint already
+solves at the Type-ID layer. Not fleshed out here to avoid speccing a
+mechanism for a case that hasn't happened yet; if it does, the fix is
+almost certainly "do what Type Hint already does," not a new design.
+
 ## Standard library governance
 
 Related but narrower (spec §4): who maintains the reserved `1`–`99` range
-itself — additions like §4.1/§4.2 need some process for becoming part of
-"the stdlib" rather than just another vendor's Record Type squatting on a
-low number.
+itself — additions like §4.1/§4.2/§4.3 need some process for becoming
+part of "the stdlib" rather than just another vendor's Record Type
+squatting on a low number.
 
 ## Magic-header overhead for QR
 

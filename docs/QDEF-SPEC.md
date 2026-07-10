@@ -231,6 +231,16 @@ non-string hint all pass — see `prototype/test/type-hint.test.js`) using a
 width needed to keep collision probability negligible at whatever scale
 this tier actually sees remains an open parameter.
 
+**Encoder etiquette (SHOULD, not required):** the same padding-slack
+argument as §4.3's Media Type Hint applies here identically. Many optical
+codes are quantized into fixed-capacity classes (a QR Version's byte
+budget at a given error-correction level); when the payload doesn't fill
+that budget anyway, encoders SHOULD spend the otherwise-wasted bytes on
+key `1` rather than leave them as padding — the marginal cost is zero,
+and it's what makes decentralized IDs inferable at scale over time (via
+field telemetry correlating observed IDs to observed Hints) even with no
+registry coordinating any of it.
+
 ### 3.2 The Extensibility Rule (Even/Odd Keys)
 
 Borrowed from PNG's critical/ancillary chunk convention:
@@ -460,6 +470,84 @@ without the specific app" property. It **must** stay a plain sibling
 record, never nested inside a Wrapper — its entire value is being visible
 to a parser that understands nothing else in the container, which a
 Wrapper's opaque payload would defeat.
+
+### 4.3 Media Payload (optional)
+
+A plain stdlib Record Type — not a wrapper — for attaching a standard,
+already-widely-recognized media type (a JPEG thumbnail, a vCard, a PDF
+snippet) without registering a bespoke Type ID for every possible file
+format the way §5's examples do for application-specific content:
+
+```
+Type 6: {                          // Media Payload (stdlib)
+  0: 6,
+  2: 22,                           // CRITICAL: Media Type — uint or text,
+                                    //   see below (22 = image/jpeg)
+  4: h'<payload bytes>',           // CRITICAL: the content itself
+  3: "image/jpeg"                  // OPTIONAL: Media Type Hint
+}
+```
+
+**Key `2` (Media Type) may be a uint or a text string** — an encoder's
+choice, and a decoder MUST accept either shape (both are already
+skip-safe under §3.2's field-value-shape rule regardless of which an
+encoder picks):
+
+- **A uint in `0`–`65535`** is a [CoAP Content-Format
+  ID](https://www.iana.org/assignments/core-parameters/core-parameters.xhtml)
+  (RFC 7252 §12.3, as amended by RFC 9876) — an existing, actively
+  maintained IANA registry that already assigns compact numeric IDs to
+  common media types (`application/cbor` = 60, `image/jpeg` = 22,
+  `image/png` = 23, `application/json` = 50, `text/plain;charset=utf-8` =
+  0, and hundreds more), tiered by its own governance the same way QDEF
+  tiers its own Type ID space. QDEF doesn't invent a numbering scheme
+  here; it borrows one that already exists and is already CBOR-friendly
+  (a plain small uint).
+- **A uint `0x10000`+** is a *decentralized* media-type ID — the exact
+  same private-use-random tier and rationale as Type ID's (§3.1, §9): for
+  a media type IANA hasn't registered a Content-Format number for (e.g.
+  `text/vcard`, confirmed absent from the registry as of this writing).
+  This boundary isn't an arbitrary QDEF convention layered on top: CoAP's
+  Content-Format field is a 16-bit value in the CoAP protocol itself, so
+  the registry can never exceed `65535` by construction — `0x10000` is
+  guaranteed collision-free against every current and future real
+  registration, not just conventionally reserved.
+- **A text string** is the literal MIME type, spelled out directly — the
+  simplest fallback when an encoder doesn't want to bother with a numeric
+  form at all, costing more bytes but always unambiguous.
+
+**Key `3` (Media Type Hint, odd/optional, local to this Record Type — not
+the globally-reserved key `1`)** carries the human-readable MIME string
+when key `2` is a decentralized (`0x10000`+) ID, mirroring Type Hint's
+own uint-vs-string duality (§3.1) at the media-type layer instead of the
+Type-ID layer. It reuses the identical optional self-certifying
+strengthening: a decentralized Media Type ID MAY be derived as a
+truncated hash of its own Hint string, checkable the same opportunistic
+way — recompute the hash, compare to key `2`, degrade to an unverified
+label on a mismatch, no version marker needed (§3.1 spells out the full
+mechanism; it isn't repeated here).
+
+This split into two fields — a compact canonical ID plus an *optional*
+recoverable name — is deliberate, not incidental: a single field could
+carry one or the other but never both at once, which would force an
+all-or-nothing choice between compactness and recoverability every time.
+Splitting them lets an encoder default to the cheap ID alone and add the
+Hint only when it's actually free to do so (see "Encoder etiquette"
+below) — exactly the tradeoff a single polymorphic field can't express.
+
+**Encoder etiquette (SHOULD, not required):** many optical codes are
+quantized into fixed-capacity classes (a QR Version's byte budget at a
+given error-correction level) — if the chosen payload doesn't fill that
+budget anyway, the remaining bytes are otherwise spent on padding.
+Encoders SHOULD detect this slack and spend it on key `3`'s Hint when key
+`2` is a decentralized ID, even though the Hint isn't required for this
+particular code to function on its own: the marginal cost is zero (those
+bytes were unused regardless), while the benefit compounds across the
+ecosystem. Even with no central registry at all, an app with enough
+install base to see many scans could infer a decentralized ID's meaning
+purely from field telemetry once enough codes happen to carry the Hint
+alongside it — a de facto, crowdsourced mapping emerging from voluntary
+etiquette rather than coordinated governance.
 
 ## 5. Record Type Registry (informative examples)
 
