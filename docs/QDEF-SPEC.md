@@ -666,10 +666,10 @@ in `prototype/test/roundtrip.test.js`.
   single-record payload in a size-constrained QR version; is it worth
   gating on payload size (e.g. omit magic when embedded via a scheme that
   already identifies the format, mirroring the NFC case in §2)? A real
-  data point from an adopter comparison (not independently re-verified
-  this session, relayed from `mofosyne/tagdrop`'s own spec): TagDrop's
-  native envelope costs 2 bytes total (`version`+`type`, both small CBOR
-  uints, SPEC.md §2), against roughly 10–15 bytes for QDEF's
+  data point from an adopter comparison (verified directly against
+  `mofosyne/tagdrop`'s SPEC.md): TagDrop's native envelope costs 2 bytes
+  total (`version`+`type`, both small CBOR uints, SPEC.md §2), against
+  roughly 10–15 bytes for QDEF's
   magic+version+map-framing overhead (key `0` plus key `2`'s length
   header) on the same small payload — a large proportional cost for
   TagDrop's smallest codes (a short text snippet can be under 50 bytes
@@ -699,8 +699,8 @@ in `prototype/test/roundtrip.test.js`.
   adopter rather than left as a hypothetical concern: `mofosyne/tagdrop`'s
   own sectorization already assumes uniform chunk length across a split
   group (every sector but the last is the same length, per its own spec —
-  not independently re-verified this session, relayed from that project),
-  so QDEF's uniform-chunking rule matches what that adopter's format
+  verified directly against `mofosyne/tagdrop`'s SPEC.md), so QDEF's
+  uniform-chunking rule matches what that adopter's format
   already does rather than imposing a new constraint on it. That's
   evidence for one real usage pattern, not a general resolution — an
   adopter that genuinely needs heterogeneous per-code capacity within one

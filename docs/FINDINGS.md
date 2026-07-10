@@ -71,8 +71,8 @@ it currently does neither.
 
 **Update:** checked against a real adopter rather than left purely
 hypothetical — `mofosyne/tagdrop`'s own sectorization already assumes
-uniform chunk length within a split group (relayed from that project, not
-independently re-verified this session), so this tension doesn't cost that
+uniform chunk length within a split group (verified directly against
+`mofosyne/tagdrop`'s SPEC.md), so this tension doesn't cost that
 adopter anything; QDEF's rule matches what its format already does. That's
 evidence for one usage pattern, not a general resolution — see
 QDEF-SPEC.md §9's updated entry.
