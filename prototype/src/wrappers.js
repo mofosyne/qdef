@@ -15,11 +15,19 @@ const FALLBACK_HINT_TYPE = 5;
 
 const SPLIT_KNOWN_KEYS = new Set([0, 2, 4, 6, 8, 9, 11]);
 const COMPRESS_KNOWN_KEYS = new Set([0, 2]);
-const ENCRYPT_KNOWN_KEYS = new Set([0, 2, 4]);
+const ENCRYPT_KNOWN_KEYS = new Set([0, 2, 4, 5, 7]);
 const FALLBACK_HINT_KNOWN_KEYS = new Set([0, 1, 2]);
 
 const PARITY_SCHEME_NONE = 0;
 const PARITY_SCHEME_XOR = 1; // prototype-only single-parity-fragment scheme
+
+// COSE Algorithm IDs (RFC 9053/9054, IANA "COSE Algorithms" registry) —
+// borrowed, not invented; see spec §4.1 and DESIGN.md's "Encrypt key
+// provisioning" entry for why keys 5/7 use this registry instead of a
+// QDEF-specific one.
+const COSE_ALG_A256GCM = 3;
+const COSE_ALG_ECDH_ES_HKDF_256 = -25;
+const COSE_ALG_DIRECT_HKDF_SHA_256 = -10;
 
 // ---- Compress (Type 3) -----------------------------------------------
 
@@ -42,7 +50,7 @@ function compressDecode(map) {
 // (see docs/FINDINGS.md) since "Encrypt" wrapper is meaningless without it.
 // The prototype takes a raw 32-byte key as given.
 
-function encryptEncode(innerBytes, key) {
+function encryptEncode(innerBytes, key, { algorithm, keyAlgorithm } = {}) {
   const nonce = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv('aes-256-gcm', key, nonce);
   const ciphertext = Buffer.concat([cipher.update(innerBytes), cipher.final()]);
@@ -51,6 +59,8 @@ function encryptEncode(innerBytes, key) {
     [0, ENCRYPT_TYPE],
     [2, nonce],
     [4, Buffer.concat([ciphertext, authTag])], // "ciphertext+tag" per spec
+    ...(algorithm !== undefined ? [[5, algorithm]] : []),
+    ...(keyAlgorithm !== undefined ? [[7, keyAlgorithm]] : []),
   ]);
 }
 
@@ -300,6 +310,9 @@ module.exports = {
   FALLBACK_HINT_KNOWN_KEYS,
   PARITY_SCHEME_NONE,
   PARITY_SCHEME_XOR,
+  COSE_ALG_A256GCM,
+  COSE_ALG_ECDH_ES_HKDF_256,
+  COSE_ALG_DIRECT_HKDF_SHA_256,
   compressEncode,
   compressDecode,
   encryptEncode,

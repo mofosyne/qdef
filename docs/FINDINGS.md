@@ -120,11 +120,15 @@ not just on AES-GCM but on how the key got there. The prototype sidesteps
 this entirely (tests pass a raw 32-byte key directly) — which is precisely
 how prose review missed that the spec never actually answers it.
 
-**Not fixed** — this is a real open question now added to DESIGN.md, not
-resolved by this prototype pass. Candidates: leave key provisioning explicitly
-out-of-scope of the wrapper (an application-layer concern, documented as
-such rather than silently assumed), or add an optional key-hint/KDF-params
-field to Type 4.
+**Update:** resolved — spec §4.1 adds an optional Algorithm field (key `5`)
+and Key Algorithm field (key `7`) to Type 4, both a COSE Algorithm ID
+(RFC 9053/9054) or a plain string. Borrows an existing, actively
+maintained IANA registry rather than inventing a QDEF-specific one — the
+same pattern §4.3's Media Type uses, and for the same reason: a cipher
+and a key-agreement scheme both already have a stable identity independent
+of QDEF. See DESIGN.md's "Encrypt key provisioning" entry for the full
+reasoning, including why this doesn't need Type Hint's decentralized-ID
+layer either.
 
 ### 7. Nesting order is *not* decoder-detectable — confirmed, not just assumed
 

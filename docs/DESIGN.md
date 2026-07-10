@@ -237,12 +237,43 @@ Wrapping literal NDEF bytes would add NDEF's tag-session-oriented framing
 atomically in a single scan) on top, without saving QDEF's actual
 contribution.
 
-## Encrypt key provisioning (new, from the prototype)
+## Encrypt key provisioning (resolved — Algorithm/Key Algorithm fields, borrowing COSE)
 
-Type 4 names a cipher (e.g. AES-GCM) but never specifies where the key
-comes from. Left out of scope of the wrapper record entirely (an
-application-layer concern), or given an optional key-hint/KDF-params
-field? Unresolved — see FINDINGS.md #6.
+Type 4 originally named a cipher only in a comment (`e.g. AES-GCM`), with
+no field for it, and never specified where the key comes from at all — see
+FINDINGS.md #6 for how the prototype surfaced this. Considered leaving it
+out of scope entirely (an application-layer concern) versus adding a
+field; resolved toward a field, but not a QDEF-specific one.
+
+The same asymmetry check that killed Media Type's decentralized-ID layer
+applies here identically: a cipher and a key-agreement scheme are both
+things with a stable identity independent of QDEF, so there's no opacity
+problem for a hint-plus-hash layer to solve — just borrow an existing
+numbering scheme, the same playbook as Media Type. The fit is even
+tighter than CoAP was for Media Type, because it's the same domain:
+IANA's COSE Algorithms registry (RFC 9053/9054) already covers both the
+content-encryption algorithm and the key-agreement/wrap/derivation
+algorithm, is CBOR-native (COSE structures are CBOR), and is actively
+governed with the same tiered structure QDEF's own Type ID space uses.
+
+Spec §4.1 adds two optional fields to Type 4 (key `5` Algorithm, key `7`
+Key Algorithm — a COSE Algorithm ID or a plain string, encoder's choice)
+and keeps both odd/optional rather than critical, deliberately matching
+`parity_scheme`'s precedent over nonce/ciphertext's: two apps that already
+agree out of band (§8's worked example) pay nothing, and a decoder that
+doesn't recognize either field just falls back to its own assumption,
+which fails safely regardless since AEAD's own auth tag catches a
+wrong-algorithm attempt. The fields exist specifically for the
+interoperable-key-transfer case an unrelated adopter would need — flagged
+during a discussion of what "QDEF spreading to more QR apps" would
+actually require in practice, not a hypothetical gap.
+
+Worth flagging as an implementation caution, not a wire-format concern:
+a decoder that *does* honor these fields must not let them broaden which
+algorithms it's willing to run — the same "alg" confusion vulnerability
+class JOSE/JWT is known for. Treat the value as something to check against
+an application-chosen allowlist, never as an instruction to trust
+outright.
 
 ## Split chunking vs. per-code capacity — costs nothing against at least one real adopter's design, general case still open
 

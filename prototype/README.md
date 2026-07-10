@@ -35,6 +35,10 @@ found.
   the core (a decoder that's never heard of Type Hint just skips it via
   the ordinary unrecognized-odd-key path), the old-reader/promoted-Type
   recognition scenario, and the hash-derivation verify/degrade behavior.
+- `test/encrypt-algorithm.test.js` — Encrypt's optional Algorithm/Key
+  Algorithm fields (keys 5/7, spec §4.1): both COSE-numeric and
+  plain-string forms round-trip, and a decoder built before these fields
+  existed ignores them via the ordinary odd-key path rather than aborting.
 
 ## Running
 
