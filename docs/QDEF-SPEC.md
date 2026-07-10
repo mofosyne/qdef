@@ -710,6 +710,31 @@ in `prototype/test/roundtrip.test.js`.
   [#16](https://github.com/mofosyne/tagdrop/issues/16) (2016) proposed an
   NDEF-like binary header for QR codes a decade before this draft existed;
   QDEF is the first attempt to actually build it out.
+- **Why not just carry a literal NDEF message as the QR byte-mode payload,
+  instead of a new format?** It's technically possible — nothing stops
+  encoding actual NDEF bytes into a QR code — but it wouldn't actually
+  avoid inventing anything, for three concrete reasons. First, byte
+  economics: NDEF's Type field is a URN, MIME string, or `domain:type`
+  string (TNF_WELL_KNOWN/MIME_MEDIA/EXTERNAL_TYPE), so every record pays
+  bytes proportional to a string's length for its type tag, where QDEF's
+  Type ID is a CBOR uint (often 1–3 bytes) — the same economics argument
+  as the magic-header-overhead entry above, one layer deeper. Second, a
+  structural mismatch: NDEF's chunk flag (CF) solves "this record's
+  payload is bigger than one read from a continuous tag session" — chunk
+  continuation requires TNF `0x06` and zero Type Length on every middle
+  chunk, a scheme that assumes one uninterrupted message stream. It does
+  not solve "this message is spread across several independently-scanned
+  physical codes, any one of which might fail to scan," which is what
+  §4.1's Split Wrapper (with XOR parity, fragment-loss recovery) actually
+  addresses — reusing NDEF's envelope wouldn't provide that mechanism at
+  all. Third, granularity: NDEF's TNF/Type gets you record-level dispatch
+  only — nothing inside an NDEF payload has any per-field optional/critical
+  signal, so an adopter would still need to invent their own internal
+  structure for "which fields are safe to ignore," which is exactly what
+  §3.2's even/odd rule already is. Wrapping literal NDEF bytes would add
+  NDEF's tag-session-oriented framing (MB/ME message-boundary flags,
+  meaningless for a payload delivered atomically in a single scan) on top,
+  without saving QDEF's actual contribution.
 - **Encrypt key provisioning (new, from the prototype).** Type 4 names a
   cipher (e.g. AES-GCM) but never specifies where the key comes from. Left
   out of scope of the wrapper record entirely (an application-layer
