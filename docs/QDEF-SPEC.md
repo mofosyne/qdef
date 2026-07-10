@@ -620,6 +620,12 @@ repo alongside their own code) — cheap insurance so the numbering can be
 forked and kept alive independently if that registry ever does go
 unmaintained, rather than leaving every uint in this field meaningless.
 
+Prototyped in `prototype/test/media-payload.test.js`: both the
+CoAP-numeric and plain-string forms round-trip, and an application with
+no interest in Media Payload skips the whole Record cleanly by Type ID
+alone — the same "unaware decoder pays nothing" guarantee every other
+stdlib Record Type gets, not just an aspiration.
+
 ## 5. Record Type Registry (informative examples)
 
 ### Type `100`: Wi-Fi Provisioning

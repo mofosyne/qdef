@@ -15,7 +15,10 @@ found.
   whatever the `cbor` package's default encoder happens to produce.
 - `src/wrappers.js` — the optional standard library's Wrapper Records:
   Split (with XOR single-fragment parity), Compress, Encrypt, plus a
-  generic recursive `resolveStack` resolver (spec §4.1).
+  generic recursive `resolveStack` resolver (spec §4.1). Also carries the
+  non-wrapper stdlib Record Types' constants: Fallback Hint (§4.2) and
+  Media Payload (§4.3), plus the COSE (RFC 9053/9054) and CoAP Content-
+  Format (RFC 7252/9876) IDs those two borrow rather than invent.
 - `src/recordTypes.js` — the small set of application Record Type schemas
   used by the tests (Wi-Fi §5, a generic third-party-payload registration
   §6, a secret-key backup §8).
@@ -46,6 +49,12 @@ found.
   byte-identical output, so a content hash like `group_id` means "same
   logical content" across independent encoders, not just "same encoder,
   same run."
+- `test/media-payload.test.js` — Media Payload's (Type 6, spec §4.3)
+  Media Type field in both forms (a CoAP Content-Format uint, and the
+  plain-MIME-string fallback using `text/vcard` — confirmed genuinely
+  absent from that registry, not a hypothetical fixture), and that an
+  application with no interest in it skips the whole Record by Type ID
+  alone, same as any other unrecognized Type.
 
 ## Running
 
