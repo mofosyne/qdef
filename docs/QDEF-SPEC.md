@@ -453,6 +453,24 @@ own byte-mode payload — see that repo for the worked details. It's one
 adopter among the format's intended audience, not the reason this format
 exists; §8 below is an unrelated adopter using the same mechanism.)
 
+**On signing and this registration pattern specifically:** an adopter whose
+own signature already covers the fully-reassembled plaintext (signed once,
+after all splitting/addressing is resolved, with nothing about the
+signature depending on how the content happened to be fragmented in
+transit) needs no QDEF-level Sign mechanism at all, wrapper or sibling
+(§9). §4.1's `group_id` is already a content hash a decoder MUST verify
+after Split reassembly — that alone guarantees "the bytes you got back are
+the bytes that went in," which is all a whole-payload signature needs from
+the container. The signature fields themselves are just ordinary payload
+bytes inside the registered blob, orthogonal to whichever Wrapper stack (if
+any) did the fragmenting. This is `mofosyne/tagdrop`'s own case: its
+signed message is defined over the fully reassembled stream, computed
+after splitting is resolved and never referencing per-sector addressing —
+so its Type-900 registration here needs nothing further from QDEF's side.
+An adopter whose signature is instead coupled to its own splitting/
+addressing scheme (covers per-sector metadata, not just reassembled bytes)
+would not get this for free — see §9's Sign entry.
+
 ## 7. Compression and splitting across multiple tags/codes
 
 **QDEF itself defines neither** — both stay entirely inside each Record
@@ -658,7 +676,10 @@ in `prototype/test/roundtrip.test.js`.
   answer; not yet written into the spec. Distinct from, and not solved by,
   the field-value-shape rule (§3.2), which constrains *what shape* a value
   may be, not which of several valid *encodings* of that shape an encoder
-  must pick.
+  must pick. Worth resolving on its own priority, separate from Sign below:
+  it's already a live correctness gap for `group_id` today, in anything
+  shipped now, not merely a prerequisite for a feature that doesn't exist
+  yet.
 - **Sign / detached-authenticity wrapper (new, requested).** There is no
   way today to prove a *plain, readable* Record is authentic without also
   hiding it: the Encrypt wrapper's AES-GCM tag provides integrity only as a
@@ -687,11 +708,46 @@ in `prototype/test/roundtrip.test.js`.
     divergence hazard this project's origin story (TagDrop's signing bug) is
     a caution about, so it must not be hand-waved.
 
+  **Coverage-identification scheme — direction decided, not yet built.**
+  Cover by content hash of each covered Record's own canonical bytes, never
+  by Sequence index: an index breaks the moment anything is reordered or an
+  unrelated Record is inserted, while a hash doesn't care where a Record
+  sits. This also reuses the canonical-encoding machinery `group_id` already
+  needs (above) rather than inventing a second addressing concept. Two
+  refinements this needs to get right, both surfaced by checking the
+  proposal against rules already settled elsewhere in this spec rather than
+  taking the shape on faith:
+  - **The hash list MUST be a packed, fixed-width byte string, not a bare
+    CBOR array.** §3.2's field-value-shape rule forbids a bare array as a
+    field value — `N` concatenated 32-byte SHA-256 hashes in one
+    definite-length byte string (skip-safe, decoded by whatever
+    Sign-Record-aware handler chooses to) is the compliant shape; a naive
+    CBOR array of hashes is not, and a conformant core parser would reject
+    it outright (§3.3).
+  - **A hash covers a Record's fully unwrapped, reassembled canonical
+    bytes — never a Wrapper's per-fragment or per-code bytes.** Hashing
+    Split-fragment bytes directly would make a signature depend on how many
+    physical codes the content happened to be fragmented into, an
+    implementation/transport detail with no business affecting whether a
+    signature verifies. Sign a Record after any Wrapper stack resolves, the
+    same layer `group_id`'s own hash already operates on.
+
+  Strippable-but-not-forgeable is an accepted property of this design, not
+  a gap to close: deleting a sibling Sign Record from the Sequence
+  downgrades signed to unsigned, trivially, the same way `mofosyne/tagdrop`
+  already documents "signature can be stripped but not forged or
+  retargeted" as an accepted limitation of its own scheme (§6) rather than
+  something it structurally prevents.
+
   Direction when taken up: specify the sibling form (it is the one worth
   having), but only *after* the canonical-encoding question is resolved —
   a detached signature is meaningless without it. The wrapper form can be
   dropped in at any time as a straight parallel to Encrypt if an
-  opaque-payload use case ever wants it.
+  opaque-payload use case ever wants it. Prototype it the same way
+  everything else here was: sign two sibling Records, reorder them, insert
+  an unrelated third Record, and confirm verification still finds exactly
+  the right two — the sort of end-to-end check that catches what design
+  review alone doesn't (see FINDINGS.md).
 - **Nesting order enforcement — now answered, not open.** A prototype
   confirmed a generically-written decoder cannot detect or reject a
   non-conformant Wrapper nesting order (FINDINGS.md §7); §4.1's text has
