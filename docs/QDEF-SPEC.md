@@ -473,6 +473,19 @@ algorithm than it intended). Treat the field as a hint to check against
 an application-chosen allowlist, never as an instruction to trust
 outright.
 
+**Encrypt cannot provide deniability, and that's a scope boundary, not a
+gap.** Being wrapped in a Type-`4` Record at all is itself a visible
+declaration — "this is encrypted content" — to any QDEF-aware parser
+walking the Sequence, whether or not it can decode the payload, because
+Type ID routing (§3.1) happens unconditionally before any per-Record-Type
+logic runs. An application whose threat model requires ciphertext
+indistinguishable from random has a requirement this wrapper structurally
+cannot satisfy no matter how its fields are shaped — self-describing
+dispatch is the format's entire reason for existing. Such an application
+should keep its own encryption entirely inside an opaque registered blob
+(§6) rather than use this wrapper, the same way any application with its
+own proven mechanism should (§7). See FINDINGS.md #13.
+
 **Fragment chunking (Type 2).** The spec must fix *how* the original bytes
 are sliced, not just what fields describe the result, or two independent
 encoders/decoders can't agree on wire bytes. Fixed rule:

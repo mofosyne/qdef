@@ -275,6 +275,36 @@ class JOSE/JWT is known for. Treat the value as something to check against
 an application-chosen allowlist, never as an instruction to trust
 outright.
 
+**Checked against a real adopter after the fact, surfacing a limitation
+worth keeping:** `mofosyne/tagdrop` uses AES-256-GCM (exact match for
+`A256GCM` = 3, confirming the cipher-ID choice) and PBKDF2 for
+passphrase-based key derivation — the latter has no COSE algorithm ID at
+all (COSE's key-derivation entries are all HKDF variants), so Key
+Algorithm's plain-string fallback covers this case, not the numeric one.
+More significantly, TagDrop's encryption is deliberately *undeclared* —
+"discovery, not declaration," confirmed via trial decryption rather than
+a stated algorithm, specifically so ciphertext stays indistinguishable
+from random. A Type-4 Wrapper can't preserve that regardless of field
+shape: being wrapped in Type `4` at all is itself a visible declaration to
+any QDEF-aware parser walking the Sequence. See FINDINGS.md #13 for the
+full reasoning — a genuine, principled scope boundary, not a gap to close,
+and confirmation that TagDrop's own §6 registration (encryption entirely
+inside the opaque blob, invisible to QDEF) was already the right call.
+
+## Media Payload: checked against a real adopter, confirmed compatible but never reached
+
+`mofosyne/tagdrop` does have typed content-tagging (`mime_type`, a
+free-form string, never a numeric ID) — confirming that if this were ever
+exposed at the QDEF layer, it would use Media Type's plain-string
+fallback, not CoAP's numeric registry. But it can't come up for TagDrop's
+actual §6 registration at all: that registration already carries TagDrop's
+entire existing CBOR sequence (`mime_type` included) as one opaque blob
+under a single key, deliberately invisible to QDEF by the same reasoning
+§7 settled for compression and splitting generally. Not a gap — Media
+Payload was never going to be reached by an adopter whose own format is
+already opaque to QDEF by design; it's aimed at an adopter with no
+existing format of its own to protect (§1's "when QDEF earns its place").
+
 ## Split chunking vs. per-code capacity — costs nothing against at least one real adopter's design, general case still open
 
 The uniform `chunkLen = ceil(total_bytes/count)` rule (spec §4.1) is what
