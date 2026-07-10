@@ -449,9 +449,41 @@ opt-in — nothing about the application's own format needs to route through
 QDEF for it to keep working exactly as it does today.
 
 (The `mofosyne/tagdrop` project uses exactly this pattern to register its
-own byte-mode payload — see that repo for the worked details. It's one
-adopter among the format's intended audience, not the reason this format
-exists; §8 below is an unrelated adopter using the same mechanism.)
+own byte-mode payload, illustrated here as Type `900` — see that repo for
+the worked details. It's one adopter among the format's intended audience,
+not the reason this format exists; §8 below is an unrelated adopter using
+the same mechanism.)
+
+**Registering a real Type ID before governance exists.** `900` here is an
+illustrative placeholder, not a protected allocation — §9's registry
+governance for the `100`–`999` "common vocabulary" tier has no authority
+yet, so nothing stops an unrelated adopter from also picking `900`. Any
+adopter wiring this pattern into real shipping code *before* that
+governance exists should use the `0x10000`+ private-use-random tier (§9)
+instead of a fixed low number: a few more bytes on the wire, but no
+allocation authority needed at all, and no shipping code that has to
+migrate its Type ID once a real registry does exist.
+
+**On signing and this registration pattern specifically:** an adopter whose
+own signature already covers the fully-reassembled plaintext (signed once,
+after all splitting/addressing is resolved, with nothing about the
+signature depending on how the content happened to be fragmented in
+transit) needs no QDEF-level Sign mechanism at all, wrapper or sibling
+(§9). §4.1's `group_id` is already a content hash a decoder MUST verify
+after Split reassembly — that alone guarantees "the bytes you got back are
+the bytes that went in," which is all a whole-payload signature needs from
+the container. The signature fields themselves are just ordinary payload
+bytes inside the registered blob, orthogonal to whichever Wrapper stack (if
+any) did the fragmenting. `mofosyne/tagdrop`'s own wire format anticipates
+exactly this: its signed message is specified over the fully reassembled
+stream, independent of per-sector addressing (SPEC.md §10) — so a
+Type-900-style registration needs nothing further from QDEF's side for
+that content, regardless of whether any given adopter's UI/tooling
+actually produces signed multi-sector content yet. An adopter whose
+signature is instead coupled to its own splitting/addressing scheme
+(covers per-sector metadata, not just reassembled bytes) would not get
+this for free — see §9's Sign entry. This reasoning generalizes beyond any
+one adopter — see §7's note on signing.
 
 ## 7. Compression and splitting across multiple tags/codes
 
@@ -476,6 +508,17 @@ second, competing one at the QDEF layer).
   problem than routing. An application that already has its own proven
   answer to that problem should keep using it rather than adopt a second,
   possibly-disagreeing addressing scheme at the QDEF layer.
+
+**The same reasoning applies to signing, not just compression and
+splitting.** An application with its own proven authentication mechanism
+— e.g. a single hash-then-sign step over the fully reassembled payload,
+computed independently of however the transport happened to fragment it —
+needs no QDEF Sign primitive for that content either, for the identical
+reason: it already solved this, adopting a second, QDEF-native mechanism
+would just be a second thing that could disagree with the first. §6's
+registration pattern already demonstrates this for an adopter whose
+signature covers reassembled bytes; §9's Sign entry is for the different
+case — a Record with no pre-existing answer of its own.
 
 **If an application wants splitting, compression, or encryption without
 writing any of it itself:** that's what §4.1's Wrapper Records are for — a
@@ -622,7 +665,18 @@ in `prototype/test/roundtrip.test.js`.
 - **Magic-header overhead for QR.** 5 bytes fixed cost matters for a
   single-record payload in a size-constrained QR version; is it worth
   gating on payload size (e.g. omit magic when embedded via a scheme that
-  already identifies the format, mirroring the NFC case in §2)?
+  already identifies the format, mirroring the NFC case in §2)? A real
+  data point from an adopter comparison (verified directly against
+  `mofosyne/tagdrop`'s SPEC.md): TagDrop's native envelope costs 2 bytes
+  total (`version`+`type`, both small CBOR uints, SPEC.md §2), against
+  roughly 10–15 bytes for QDEF's
+  magic+version+map-framing overhead (key `0` plus key `2`'s length
+  header) on the same small payload — a large proportional cost for
+  TagDrop's smallest codes (a short text snippet can be under 50 bytes
+  total). Doesn't change the conclusion elsewhere in this spec that QDEF
+  wrapping stays strictly opt-in, never the default framing (§6, §7) — but
+  it's a concrete number to weigh if the conditional-magic-header idea
+  above is ever worth building.
 - **Relationship to existing standards.** NDEF already solves "multiple
   typed records, one message" for NFC (§2's `application/vnd.qdef` MIME
   framing leans on this directly). This draft's actual net-new contribution
@@ -635,15 +689,26 @@ in `prototype/test/roundtrip.test.js`.
   out of scope of the wrapper record entirely (an application-layer
   concern), or given an optional key-hint/KDF-params field? Unresolved —
   see FINDINGS.md §6.
-- **Split chunking vs. per-code capacity (new, from the prototype).** The
-  uniform `chunkLen = ceil(total_bytes/count)` rule (§4.1) is what makes
+- **Split chunking vs. per-code capacity — costs nothing against at least
+  one real adopter's design, general case still open.** The uniform
+  `chunkLen = ceil(total_bytes/count)` rule (§4.1) is what makes
   single-fragment XOR parity well-defined, but it also prevents an encoder
   from sizing each fragment to match that specific code's actual capacity
   (different QR version/ECC level per code, or a QR code alongside a
-  smaller-capacity NFC tag in the same group). Resolving this needs either
-  accepting the uniform-chunking constraint as a real limitation, or
-  specifying a fragment-length manifest redundant enough to survive one
-  missing fragment. Unresolved — see FINDINGS.md §3.
+  smaller-capacity NFC tag in the same group). Checked against a real
+  adopter rather than left as a hypothetical concern: `mofosyne/tagdrop`'s
+  own sectorization already assumes uniform chunk length across a split
+  group (every sector but the last is the same length, per its own spec —
+  verified directly against `mofosyne/tagdrop`'s SPEC.md), so QDEF's
+  uniform-chunking rule matches what that adopter's format
+  already does rather than imposing a new constraint on it. That's
+  evidence for one real usage pattern, not a general resolution — an
+  adopter that genuinely needs heterogeneous per-code capacity within one
+  group (the QR-alongside-smaller-NFC-tag case) still hits this
+  constraint. Resolving that general case still needs either accepting
+  uniform-chunking as a real limitation, or specifying a fragment-length
+  manifest redundant enough to survive one missing fragment. See
+  FINDINGS.md §3.
 - **Canonical encoding (new, prompted by outside review).** §4.1's `group_id`
   is already a hash of encoded bytes, which silently assumes two conformant
   encoders given the same logical content produce identical CBOR — true
@@ -658,7 +723,10 @@ in `prototype/test/roundtrip.test.js`.
   answer; not yet written into the spec. Distinct from, and not solved by,
   the field-value-shape rule (§3.2), which constrains *what shape* a value
   may be, not which of several valid *encodings* of that shape an encoder
-  must pick.
+  must pick. Worth resolving on its own priority, separate from Sign below:
+  it's already a live correctness gap for `group_id` today, in anything
+  shipped now, not merely a prerequisite for a feature that doesn't exist
+  yet.
 - **Sign / detached-authenticity wrapper (new, requested).** There is no
   way today to prove a *plain, readable* Record is authentic without also
   hiding it: the Encrypt wrapper's AES-GCM tag provides integrity only as a
@@ -687,11 +755,46 @@ in `prototype/test/roundtrip.test.js`.
     divergence hazard this project's origin story (TagDrop's signing bug) is
     a caution about, so it must not be hand-waved.
 
+  **Coverage-identification scheme — direction decided, not yet built.**
+  Cover by content hash of each covered Record's own canonical bytes, never
+  by Sequence index: an index breaks the moment anything is reordered or an
+  unrelated Record is inserted, while a hash doesn't care where a Record
+  sits. This also reuses the canonical-encoding machinery `group_id` already
+  needs (above) rather than inventing a second addressing concept. Two
+  refinements this needs to get right, both surfaced by checking the
+  proposal against rules already settled elsewhere in this spec rather than
+  taking the shape on faith:
+  - **The hash list MUST be a packed, fixed-width byte string, not a bare
+    CBOR array.** §3.2's field-value-shape rule forbids a bare array as a
+    field value — `N` concatenated 32-byte SHA-256 hashes in one
+    definite-length byte string (skip-safe, decoded by whatever
+    Sign-Record-aware handler chooses to) is the compliant shape; a naive
+    CBOR array of hashes is not, and a conformant core parser would reject
+    it outright (§3.3).
+  - **A hash covers a Record's fully unwrapped, reassembled canonical
+    bytes — never a Wrapper's per-fragment or per-code bytes.** Hashing
+    Split-fragment bytes directly would make a signature depend on how many
+    physical codes the content happened to be fragmented into, an
+    implementation/transport detail with no business affecting whether a
+    signature verifies. Sign a Record after any Wrapper stack resolves, the
+    same layer `group_id`'s own hash already operates on.
+
+  Strippable-but-not-forgeable is an accepted property of this design, not
+  a gap to close: deleting a sibling Sign Record from the Sequence
+  downgrades signed to unsigned, trivially, the same way `mofosyne/tagdrop`
+  already documents "signature can be stripped but not forged or
+  retargeted" as an accepted limitation of its own scheme (§6) rather than
+  something it structurally prevents.
+
   Direction when taken up: specify the sibling form (it is the one worth
   having), but only *after* the canonical-encoding question is resolved —
   a detached signature is meaningless without it. The wrapper form can be
   dropped in at any time as a straight parallel to Encrypt if an
-  opaque-payload use case ever wants it.
+  opaque-payload use case ever wants it. Prototype it the same way
+  everything else here was: sign two sibling Records, reorder them, insert
+  an unrelated third Record, and confirm verification still finds exactly
+  the right two — the sort of end-to-end check that catches what design
+  review alone doesn't (see FINDINGS.md).
 - **Nesting order enforcement — now answered, not open.** A prototype
   confirmed a generically-written decoder cannot detect or reject a
   non-conformant Wrapper nesting order (FINDINGS.md §7); §4.1's text has

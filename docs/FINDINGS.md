@@ -69,6 +69,14 @@ chunking and per-code-flexible sizing are in tension, and the spec needs to
 pick one (or specify a length manifest that survives a missing fragment) —
 it currently does neither.
 
+**Update:** checked against a real adopter rather than left purely
+hypothetical — `mofosyne/tagdrop`'s own sectorization already assumes
+uniform chunk length within a split group (verified directly against
+`mofosyne/tagdrop`'s SPEC.md), so this tension doesn't cost that
+adopter anything; QDEF's rule matches what its format already does. That's
+evidence for one usage pattern, not a general resolution — see
+QDEF-SPEC.md §9's updated entry.
+
 ### 4. `total_bytes` (key 9) is documented OPTIONAL but isn't, once `parity_scheme` is set
 
 §4.1 frames `total_bytes` as a nice-to-have (progress bars, buffer
