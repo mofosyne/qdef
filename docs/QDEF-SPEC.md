@@ -282,6 +282,33 @@ re-parsed only by something that opts in" pattern §4.1's Wrapper Records
 already use, just applied at the field level instead of only at the
 whole-Record level.
 
+For example, a field carrying a list of supported Wi-Fi channel numbers
+(`[1, 6, 11]`) MUST NOT appear as a bare array:
+
+```
+9: [1, 6, 11]                     // INVALID — bare array (major type 4)
+```
+
+It MUST instead be pre-encoded as CBOR and carried as an opaque byte
+string — the outer decoder skips it as 4 bytes at a known length, never
+looking inside:
+
+```
+9: h'8301060b'                    // VALID — pre-encoded [1, 6, 11],
+                                   //   opaque to the outer decoder
+```
+
+Or, marked with tag `24` so generic CBOR tooling can also tell it's
+re-parseable, not just an application that already knows this key's
+schema (both encode the identical 4 payload bytes; the tag only adds a
+2-byte marker in front):
+
+```
+9: 24(h'8301060b')                // VALID and self-describing — tag 24
+                                   //   (0xd818) + a 4-byte string
+                                   //   (0x8301060b), 7 bytes total
+```
+
 This isn't a style preference: determining a field's length ordinarily
 requires walking into its structure (an array's or map's true byte length
 isn't known until every element inside it has been walked, recursively for

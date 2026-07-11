@@ -88,6 +88,10 @@ MIME type already routing it.
   found and changed in the spec.
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — what's done, what's deliberately
   deferred, and where the project is headed.
+- [`docs/IMPLEMENTATION-NOTES.md`](docs/IMPLEMENTATION-NOTES.md) — worked
+  examples for data shapes beyond the spec's simple, flat, single-Record
+  cases (a calendar with multiple events, and the options for representing
+  it). Non-normative.
 - [`prototype/`](prototype) — a throwaway Node.js implementation used to
   validate the design by actually encoding and decoding QDEF bytes. Not a
   reference library; see its own README for scope and how to run it.
