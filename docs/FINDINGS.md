@@ -494,6 +494,46 @@ fixtures prove all three cases: the allowed shape round-trips, tag-in-tag
 nesting is rejected, and a non-`24` tag is rejected. `clippy`, `fmt`, and
 the `thumbv6m-none-eabi` embedded build all still pass.
 
+**Update:** the "only tag `24`, no other tag" restriction described above
+was itself narrower than it needed to be — widened in finding #16 below
+after actually surveying what the rest of the tag registry looks like,
+rather than assuming a wider rule was automatically unsafe.
+
+### 16. The "only tag 24" restriction was itself overly cautious — surveyed the registry instead of assuming
+
+Asked directly, rather than left as an assumption: does the rest of the
+IANA CBOR tag registry (tags under ~1000) actually need excluding, or was
+restricting finding #15's fix to tag `24` alone stricter than the real
+safety property required? Checked the registry directly, not from memory.
+It splits cleanly by each tag's own RFC 8949 definition — genuinely
+scalar/string-shaped (dates, URIs, UUIDs, regex, bignums, base64/base16
+conversion hints, typed numeric arrays wire-encoded as byte strings)
+versus genuinely array/map-shaped by definition (decimal fractions and
+bigfloats — a 2-element array; rational numbers; language-tagged strings,
+`[language, text]`, easy to mistake for a bare string; COSE structures;
+the "expected conversion" hints `21`–`23`, confirmed directly against RFC
+8949 §3.4.5.2 to apply recursively over arbitrary structure, not just a
+byte string, on request rather than assumed).
+
+The content-shape check already built for tag `24` — content must be a
+definite-length string *directly*, never another tag — turns out to be
+exactly the right and sufficient bound regardless of *which* tag number is
+on the wire, so restricting to a single number was doing no additional
+safety work, just narrower than necessary. Verified this holds correctly
+in both directions with new fixtures: `OTHER_TAG_WRAPPED_VALUE_CONTAINER`
+(tag `0`, a real IANA tag, wrapping a definite-length text string) is now
+correctly accepted; `STRUCTURED_TAG_WRAPPED_VALUE_CONTAINER` (tag `4`,
+"decimal fraction," wrapping a real, plausible `[-2, 27315]` — meaning
+273.15, not a contrived value) is still correctly rejected, proving the
+bound tracks content shape, not tag number.
+
+**Fix:** `skip_value`'s tag branch widened from `6 if head.arg == 24` to
+plain `6` (any tag major type), with the same inline, non-recursive
+content check as before. Spec §3.2 and DESIGN.md's rationale both
+rewritten to describe the general rule rather than the tag-`24`-specific
+case. `clippy`, `fmt`, and the `thumbv6m-none-eabi` embedded build all
+still pass; 15 Rust tests (2 new) and 35 Node tests all green.
+
 ## Confirmed working as designed (no fix needed)
 
 - **Magic + version + CBOR-Sequence-of-Records** round-trips exactly as

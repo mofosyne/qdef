@@ -268,18 +268,19 @@ number the current Record Type doesn't yet define.
 
 **Field values MUST be skip-safe.** A Record field's value — for *any* key,
 recognized or not — MUST be one of: an unsigned or negative integer, a
-simple value or float, a definite-length byte or text string, or CBOR tag
-`24` ("encoded CBOR data item," RFC 8949 §3.4.5.1) wrapping exactly one
-definite-length byte or text string directly. A value MUST NOT be a bare
-array, a nested map, any tag other than `24`, or tag `24` wrapping
-anything other than a definite-length string directly (nesting it —
-tag `24` wrapping tag `24` — is exactly as disallowed as a bare array).
-Structured content (a list, a sub-record, anything shaped like an array or
-map) MUST instead be CBOR-encoded separately and carried as the payload of
-a definite-length byte string, optionally marked with tag `24` — the same
-"opaque bytes, re-parsed only by something that opts in" pattern §4.1's
-Wrapper Records already use, just applied at the field level instead of
-only at the whole-Record level.
+simple value or float, a definite-length byte or text string, or a CBOR
+tag (any tag number) wrapping exactly one definite-length byte or text
+string directly. A value MUST NOT be a bare array, a nested map, or a tag
+wrapping anything other than a definite-length string directly — nesting
+a tag inside a tag is exactly as disallowed as a bare array, regardless of
+which specific tag numbers are involved (tag `24` wrapping tag `0`, or
+tag `24` wrapping itself, are equally out of bounds). Structured content
+(a list, a sub-record, anything shaped like an array or map) MUST instead
+be CBOR-encoded separately and carried as the payload of a definite-length
+byte string, optionally marked with a tag — the same "opaque bytes,
+re-parsed only by something that opts in" pattern §4.1's Wrapper Records
+already use, just applied at the field level instead of only at the
+whole-Record level.
 
 This isn't a style preference: determining a field's length ordinarily
 requires walking into its structure (an array's or map's true byte length
@@ -290,22 +291,38 @@ always stated directly in its own head — skipping one is pure cursor
 arithmetic, never a walk. Restricting every field value to that shape means
 a conformant core parser never needs to recurse *at all* to skip a field it
 doesn't recognize — not "recursion bounded by a depth guard," but no
-recursion, structurally. Tag `24` doesn't cost that guarantee: its content
-is fixed by rule to be a definite-length string directly, so skipping one
-is exactly two fixed header reads in sequence — never a third, since
-nesting is rejected outright rather than walked — not a call back into
-whatever skipped the tag in the first place. Tag `24` specifically, and no
-other tag, is allowed for a reason beyond skip-safety: any tag number
-would technically be just as skip-safe if similarly constrained, but
-opening the door to arbitrary tag numbers here would reopen the exact
-"private, per-application enumeration" hazard the old CBOR-tag routing
-mechanism was removed for (§9's "CBOR tag-number collision," now
-DESIGN.md) — tag `24` is the one case with a real, IANA-standardized,
-non-QDEF-specific meaning ("this byte string is itself CBOR"), which is
-also genuinely useful here: it lets generic CBOR tooling discover a
-field's bytes are re-parseable without needing QDEF-specific schema
-knowledge, something a bare, unmarked byte string can never signal.
-(Validated in [`rust/qdef-core`](../rust/qdef-core); see FINDINGS.md.)
+recursion, structurally. A tag doesn't cost that guarantee, *provided* its
+content is checked to be a definite-length string directly rather than
+assumed: skipping one is exactly two fixed header reads in sequence —
+never a third, since nesting is rejected outright rather than walked — not
+a call back into whatever skipped the tag in the first place.
+
+**Any tag number is allowed here, not just one** — a deliberate widening
+from an earlier draft that permitted only tag `24` (see FINDINGS.md #15
+for that history). The content-shape check (definite-length string,
+directly, no nesting) is what makes a tag skip-safe; that property holds
+regardless of *which* tag number is on the wire, so restricting to a
+single number never bought any additional safety. It does, usefully,
+still exclude most of the IANA CBOR tag registry on its own: tags whose
+own standardized meaning requires array or map content — decimal
+fractions and bigfloats (tag `4`/`5`, a 2-element array), rational
+numbers (`30`), language-tagged strings (`38`, `[language, text]`, easy
+to assume is a bare string and isn't), COSE structures (`96`–`98`, `61`)
+— stay excluded not by an arbitrary QDEF restriction but because their
+own RFC 8949 definition genuinely requires structure no amount of "it's
+a real tag" changes. Tags that are already scalar- or string-shaped by
+their own definition (dates, URIs, UUIDs, regex, bignums, base64/base16
+conversion hints, typed numeric arrays wire-encoded as byte strings) are
+usable directly. This also means QDEF isn't repurposing tag numbers as a
+private enumeration space the way the old CBOR-tag routing mechanism did
+(§9's "CBOR tag-number collision," now DESIGN.md) — it's letting Record
+authors use real, IANA-standardized tags for their intended purpose
+(annotating a field's actual semantic meaning), not inventing a QDEF-
+specific interpretation of any number. It's also genuinely useful beyond
+skip-safety: it lets generic CBOR tooling discover a field's bytes carry
+a specific, recognized meaning without needing QDEF-specific schema
+knowledge, something a bare, unmarked value can never signal. (Validated
+in [`rust/qdef-core`](../rust/qdef-core); see FINDINGS.md.)
 
 **Precondition on "the whole stream is unaffected":** this isolation
 guarantee assumes the Record is at least well-formed CBOR *and* obeys the

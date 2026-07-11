@@ -225,15 +225,36 @@ fn tag_24_directly_wrapping_another_tag_is_rejected_not_silently_walked() {
 }
 
 #[test]
-fn only_tag_24_specifically_is_allowed_not_tags_generally() {
-    // Tag 0 ("standard date/time string") wrapping a byte string is a
-    // real, IANA-registered tag — still MUST be rejected, since it isn't
-    // 24. Allowing any tag number to wrap a field value would reopen the
-    // "private, per-application enumeration" hazard the old Smart-Route
-    // tag mechanism was removed for (FINDINGS.md #11-#12); this keeps the
-    // exception exactly as narrow as the one case that's actually
-    // skip-safe *and* has a standardized, non-QDEF-specific meaning.
+fn any_tag_number_is_allowed_when_its_content_is_a_definite_length_string() {
+    // FINDINGS.md #16: widened from "only tag 24" to any tag number — it's
+    // the content shape that makes a tag skip-safe, not which specific
+    // number is on the wire. Tag 0 ("standard date/time string") wrapping
+    // a definite-length text string directly is a real, IANA-registered
+    // tag, genuinely scalar-shaped by its own RFC 8949 definition, so it's
+    // accepted the same way tag 24 is.
     let container = Container::parse(OTHER_TAG_WRAPPED_VALUE_CONTAINER).unwrap();
+    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
+    let rec = &records[0];
+    assert!(!rec.aborted);
+
+    let outcome = check_criticality(rec.map_bytes, WIFI_KNOWN_KEYS, |k| assert_eq!(k, 11)).unwrap();
+    assert_eq!(outcome, CriticalityOutcome::Ok);
+
+    let raw = find_value(rec.map_bytes, 11).unwrap().unwrap();
+    assert_eq!(raw[0], 0xc0); // tag 0, one-byte head (info 0, tag number 0..23)
+    let date_string = read_definite_string(&raw[1..]).unwrap();
+    assert_eq!(date_string, b"2026-07-10T12:00:00Z");
+}
+
+#[test]
+fn a_real_tag_whose_own_definition_requires_array_content_is_still_rejected() {
+    // The other half of the bound: it's the *content shape* that's
+    // checked, never the tag number alone. Tag 4 ("decimal fraction")
+    // wraps a 2-element array [exponent, mantissa] by its own RFC 8949
+    // definition — a real, plausible value (-2, 27315 => 273.15), not a
+    // contrived one — and MUST still be rejected, since array content
+    // isn't skip-safe regardless of which tag says so.
+    let container = Container::parse(STRUCTURED_TAG_WRAPPED_VALUE_CONTAINER).unwrap();
     let result: Result<Vec<_>, _> = container.records().collect();
     assert_eq!(
         result.err(),

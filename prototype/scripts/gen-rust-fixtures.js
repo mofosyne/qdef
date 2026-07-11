@@ -142,23 +142,44 @@ const nestedTag24Container = Buffer.concat([
   cbor.encode(nestedTag24Map),
 ]);
 
-// Only tag 24 specifically is allowed, not tags generally — allowing any
-// tag number to wrap a field value would reopen exactly the "private,
-// per-application enumeration" hazard that got the old Smart-Route tag
-// mechanism removed in the first place (FINDINGS.md #11-#12). Tag 0
-// ("standard date/time string") wrapping a byte string is a real,
-// registered IANA tag — still MUST be rejected, since it isn't 24.
+// Widened per FINDINGS.md #16: any tag number is allowed, not just 24 —
+// the content-shape check (definite-length string, directly) is what
+// makes a tag skip-safe, and that holds regardless of which tag number is
+// on the wire. Tag 0 ("standard date/time string") wrapping a definite-
+// length text string is a real, IANA-registered tag, genuinely
+// scalar-shaped by its own RFC 8949 definition — now accepted, same as
+// tag 24 was.
 const otherTagWrappedValueMap = new Map([
   [0, 100],
   [2, 'SSID'],
   [4, 'pass'],
   [6, 2],
-  [11, new cbor.Tagged(0, nestedAuthMethods)],
+  [11, new cbor.Tagged(0, '2026-07-10T12:00:00Z')],
 ]);
 const otherTagWrappedValueContainer = Buffer.concat([
   core.MAGIC,
   Buffer.from([core.VERSION]),
   cbor.encode(otherTagWrappedValueMap),
+]);
+
+// The other half of the bound: it's the *content shape*, not the tag
+// number, that's checked — a real, IANA-registered tag whose own RFC 8949
+// definition genuinely requires array content stays rejected regardless.
+// Tag 4 ("decimal fraction") wraps a 2-element array [exponent, mantissa]
+// by definition; here [-2, 27315] means 273.15 — a real, plausible value,
+// not a contrived one, still MUST be rejected, since its content isn't a
+// string at all.
+const structuredTagWrappedValueMap = new Map([
+  [0, 100],
+  [2, 'SSID'],
+  [4, 'pass'],
+  [6, 2],
+  [11, new cbor.Tagged(4, [-2, 27315])],
+]);
+const structuredTagWrappedValueContainer = Buffer.concat([
+  core.MAGIC,
+  Buffer.from([core.VERSION]),
+  cbor.encode(structuredTagWrappedValueMap),
 ]);
 
 // A 64-bit-class private-use Type ID (§3.1, §9's `0x10000`+ tier) — needs
@@ -206,6 +227,8 @@ console.log();
 console.log(rustBytes('NESTED_TAG24_CONTAINER', nestedTag24Container));
 console.log();
 console.log(rustBytes('OTHER_TAG_WRAPPED_VALUE_CONTAINER', otherTagWrappedValueContainer));
+console.log();
+console.log(rustBytes('STRUCTURED_TAG_WRAPPED_VALUE_CONTAINER', structuredTagWrappedValueContainer));
 console.log();
 console.log(rustBytes('NESTED_AUTH_METHODS_CBOR', nestedAuthMethods));
 console.log();
