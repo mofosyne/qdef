@@ -96,6 +96,92 @@ const byteStringWrappedValueContainer = Buffer.concat([
   cbor.encode(byteStringWrappedValueMap),
 ]);
 
+// §3.2's field-value-shape rule, revised per GitHub issue #8: a field
+// value MAY be CBOR tag 24 ("encoded CBOR data item", RFC 8949 §3.4.5.1)
+// wrapping a definite-length byte string directly — skip-safe in exactly
+// two fixed header reads, no recursion — rather than requiring the extra
+// indirection of a bare byte string with no outer marker that it happens
+// to contain further CBOR. This is the more standard, more discoverable
+// form: generic CBOR tooling (not just QDEF-aware decoders) can tell from
+// the tag alone that this field's bytes are re-parseable, without needing
+// out-of-band schema knowledge.
+const tag24WrappedValueMap = new Map([
+  [0, 100],
+  [2, 'SSID'],
+  [4, 'pass'],
+  [6, 2],
+  [11, new cbor.Tagged(24, nestedAuthMethods)], // odd/optional key
+]);
+const tag24WrappedValueContainer = Buffer.concat([
+  core.MAGIC,
+  Buffer.from([core.VERSION]),
+  cbor.encode(tag24WrappedValueMap),
+]);
+
+// The bound that keeps the tag-24 case from reopening unbounded recursion:
+// tag 24 MUST wrap a definite-length string *directly*, never another tag.
+// Nesting it — tag 24 wrapping tag 24 wrapping the real bytes — is exactly
+// as disallowed as a bare array; the decoder checks the inner shape once,
+// inline, rather than calling back into itself, so this MUST be rejected
+// outright rather than silently accepted at unbounded depth.
+const nestedTag24Map = new Map([
+  [0, 100],
+  [2, 'SSID'],
+  [4, 'pass'],
+  [6, 2],
+  // Genuine tag-directly-wraps-tag nesting (tag 24's immediately-following
+  // item is itself a tag, not a byte string) — not to be confused with a
+  // byte string whose own re-decoded *contents* happen to be tag-24'd,
+  // which is a different, still-allowed shape (opaque bytes, contents
+  // never inspected by the outer skip).
+  [11, new cbor.Tagged(24, new cbor.Tagged(24, nestedAuthMethods))],
+]);
+const nestedTag24Container = Buffer.concat([
+  core.MAGIC,
+  Buffer.from([core.VERSION]),
+  cbor.encode(nestedTag24Map),
+]);
+
+// Widened per FINDINGS.md #16: any tag number is allowed, not just 24 —
+// the content-shape check (definite-length string, directly) is what
+// makes a tag skip-safe, and that holds regardless of which tag number is
+// on the wire. Tag 0 ("standard date/time string") wrapping a definite-
+// length text string is a real, IANA-registered tag, genuinely
+// scalar-shaped by its own RFC 8949 definition — now accepted, same as
+// tag 24 was.
+const otherTagWrappedValueMap = new Map([
+  [0, 100],
+  [2, 'SSID'],
+  [4, 'pass'],
+  [6, 2],
+  [11, new cbor.Tagged(0, '2026-07-10T12:00:00Z')],
+]);
+const otherTagWrappedValueContainer = Buffer.concat([
+  core.MAGIC,
+  Buffer.from([core.VERSION]),
+  cbor.encode(otherTagWrappedValueMap),
+]);
+
+// The other half of the bound: it's the *content shape*, not the tag
+// number, that's checked — a real, IANA-registered tag whose own RFC 8949
+// definition genuinely requires array content stays rejected regardless.
+// Tag 4 ("decimal fraction") wraps a 2-element array [exponent, mantissa]
+// by definition; here [-2, 27315] means 273.15 — a real, plausible value,
+// not a contrived one, still MUST be rejected, since its content isn't a
+// string at all.
+const structuredTagWrappedValueMap = new Map([
+  [0, 100],
+  [2, 'SSID'],
+  [4, 'pass'],
+  [6, 2],
+  [11, new cbor.Tagged(4, [-2, 27315])],
+]);
+const structuredTagWrappedValueContainer = Buffer.concat([
+  core.MAGIC,
+  Buffer.from([core.VERSION]),
+  cbor.encode(structuredTagWrappedValueMap),
+]);
+
 // A 64-bit-class private-use Type ID (§3.1, §9's `0x10000`+ tier) — needs
 // BigInt in JS, since it exceeds Number.MAX_SAFE_INTEGER. Found checking
 // against a real adopter (TagDrop, using the tier exactly as recommended):
@@ -135,6 +221,14 @@ console.log();
 console.log(rustBytes('DISALLOWED_ARRAY_VALUE_CONTAINER', disallowedArrayValueContainer));
 console.log();
 console.log(rustBytes('BYTE_STRING_WRAPPED_VALUE_CONTAINER', byteStringWrappedValueContainer));
+console.log();
+console.log(rustBytes('TAG24_WRAPPED_VALUE_CONTAINER', tag24WrappedValueContainer));
+console.log();
+console.log(rustBytes('NESTED_TAG24_CONTAINER', nestedTag24Container));
+console.log();
+console.log(rustBytes('OTHER_TAG_WRAPPED_VALUE_CONTAINER', otherTagWrappedValueContainer));
+console.log();
+console.log(rustBytes('STRUCTURED_TAG_WRAPPED_VALUE_CONTAINER', structuredTagWrappedValueContainer));
 console.log();
 console.log(rustBytes('NESTED_AUTH_METHODS_CBOR', nestedAuthMethods));
 console.log();

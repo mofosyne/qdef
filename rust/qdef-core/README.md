@@ -52,6 +52,19 @@ answered.
   `Iterator` over the Sequence by hand is what surfaced this; it's not
   visible when a library's "decode everything or throw" call hides the
   per-item boundary.
+- The field-value-shape rule's original ban on *every* CBOR tag was more
+  restrictive than the recursion-free guarantee it exists to protect
+  actually required (GitHub issue #8): a tag wrapping a definite-length
+  string directly is exactly as skip-safe as a bare string, checked with
+  one extra fixed header read rather than a walk. Adding it required one
+  careful bound, not a blanket relaxation — a tag nesting inside another
+  tag has to stay rejected, or the exception reopens the same unbounded-
+  recursion hazard the rule was built to close. Landed in two passes: tag
+  24 specifically first (FINDINGS.md #15), then widened to any tag number
+  after actually surveying the rest of the IANA registry rather than
+  assuming a narrower rule was automatically safer (FINDINGS.md #16) —
+  the content-shape check, not the specific tag number, is what does the
+  safety work.
 
 ## Layout
 

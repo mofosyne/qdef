@@ -446,6 +446,94 @@ gap for its entire history until now, never caught by any of its own
 worked examples, only surfaced by a real adopter following the spec's own
 advice literally.
 
+### 15. §3.2's field-value-shape rule was more restrictive than it needed to be — tag 24 is skip-safe too, if bounded correctly
+
+Filed as [GitHub issue #8](https://github.com/mofosyne/qdef/issues/8): the
+original rule banned *every* CBOR tag as a field value, including tag `24`
+("encoded CBOR data item," RFC 8949 §3.4.5.1), even though a tag wrapping
+a definite-length string directly is exactly as skip-safe as a bare
+string — its length is still just "read the string's own head," one fixed
+step later than usual, never a walk. The existing "opaque byte string,
+optionally tag-24'd *inside* its own re-decoded contents" pattern already
+let an author signal "this is re-parseable CBOR" to something that opts
+in, but never to a generic CBOR tool walking the container from the
+outside — from there, a QDEF field's byte string looked identical whether
+it held raw opaque bytes or further CBOR, unless that tool already had
+out-of-band schema knowledge of the specific Record Type.
+
+**The rule change needed one careful bound, not just a blanket
+relaxation.** "Allow tags that are skip-safe" is true but dangerous if
+stated loosely: if "skip-safe" is defined recursively (a tag wrapping
+anything itself skip-safe, including another tag), adversarial input can
+nest tag `24` inside tag `24` inside tag `24` arbitrarily deep — reopening
+exactly the unbounded-recursion hazard the field-value-shape rule exists
+to close (finding #9). The correct, narrower rule: tag `24` may wrap a
+definite-length string *directly*, checked by one extra fixed header read
+inline, never by calling the skip function back into itself. Verified this
+distinction is real, not theoretical, with a dedicated fixture
+(`NESTED_TAG24_CONTAINER`) constructed so the outer tag's immediately-
+following item is itself a tag — genuinely different from (and still
+allowed) a byte string whose own *contents*, once independently decoded,
+happen to be tag-24'd, since that's invisible to the outer skip either way.
+
+**Also narrower than "any skip-safe tag" for a second, independent
+reason:** allowing arbitrary tag numbers here — not just `24` — would
+reopen the "private, per-application enumeration" hazard the old
+CBOR-tag routing mechanism was removed for (findings #11-#12), just at
+the field level instead of the whole-Record level. Tag `24` specifically
+is the one exception with a real, IANA-standardized, non-QDEF-specific
+meaning; a fixture using tag `0` ("standard date/time string," also a
+real registered tag) wrapping a byte string confirms it's still rejected.
+
+**Fix:** `rust/qdef-core/src/cbor.rs`'s `skip_value` gained one new match
+arm — tag `24` wrapping a definite-length string, verified inline rather
+than recursively — keeping the "conformant core parser never needs to
+recurse at all" property intact rather than merely bounding recursion
+depth. Spec §3.2 rewritten accordingly. Three new cross-implementation
+fixtures prove all three cases: the allowed shape round-trips, tag-in-tag
+nesting is rejected, and a non-`24` tag is rejected. `clippy`, `fmt`, and
+the `thumbv6m-none-eabi` embedded build all still pass.
+
+**Update:** the "only tag `24`, no other tag" restriction described above
+was itself narrower than it needed to be — widened in finding #16 below
+after actually surveying what the rest of the tag registry looks like,
+rather than assuming a wider rule was automatically unsafe.
+
+### 16. The "only tag 24" restriction was itself overly cautious — surveyed the registry instead of assuming
+
+Asked directly, rather than left as an assumption: does the rest of the
+IANA CBOR tag registry (tags under ~1000) actually need excluding, or was
+restricting finding #15's fix to tag `24` alone stricter than the real
+safety property required? Checked the registry directly, not from memory.
+It splits cleanly by each tag's own RFC 8949 definition — genuinely
+scalar/string-shaped (dates, URIs, UUIDs, regex, bignums, base64/base16
+conversion hints, typed numeric arrays wire-encoded as byte strings)
+versus genuinely array/map-shaped by definition (decimal fractions and
+bigfloats — a 2-element array; rational numbers; language-tagged strings,
+`[language, text]`, easy to mistake for a bare string; COSE structures;
+the "expected conversion" hints `21`–`23`, confirmed directly against RFC
+8949 §3.4.5.2 to apply recursively over arbitrary structure, not just a
+byte string, on request rather than assumed).
+
+The content-shape check already built for tag `24` — content must be a
+definite-length string *directly*, never another tag — turns out to be
+exactly the right and sufficient bound regardless of *which* tag number is
+on the wire, so restricting to a single number was doing no additional
+safety work, just narrower than necessary. Verified this holds correctly
+in both directions with new fixtures: `OTHER_TAG_WRAPPED_VALUE_CONTAINER`
+(tag `0`, a real IANA tag, wrapping a definite-length text string) is now
+correctly accepted; `STRUCTURED_TAG_WRAPPED_VALUE_CONTAINER` (tag `4`,
+"decimal fraction," wrapping a real, plausible `[-2, 27315]` — meaning
+273.15, not a contrived value) is still correctly rejected, proving the
+bound tracks content shape, not tag number.
+
+**Fix:** `skip_value`'s tag branch widened from `6 if head.arg == 24` to
+plain `6` (any tag major type), with the same inline, non-recursive
+content check as before. Spec §3.2 and DESIGN.md's rationale both
+rewritten to describe the general rule rather than the tag-`24`-specific
+case. `clippy`, `fmt`, and the `thumbv6m-none-eabi` embedded build all
+still pass; 15 Rust tests (2 new) and 35 Node tests all green.
+
 ## Confirmed working as designed (no fix needed)
 
 - **Magic + version + CBOR-Sequence-of-Records** round-trips exactly as

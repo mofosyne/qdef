@@ -91,15 +91,62 @@ layer for a generic decoder to misinterpret — verified directly
 untagged, and decodes to `Invalid Date` only when wrapped in a tag.
 **Decision: the tag route is removed. Key `0` is the sole routing
 mechanism** (spec §3.1) — simpler, and every prototype test already routed
-through it alone, tag or no tag. The one place a CBOR tag still
-legitimately appears in QDEF is unrelated to routing: spec §3.2's optional
-tag-24 hint on a field's own byte-string *value*, a Record-Type author's
-own opt-in choice about one field's content, which is exactly the
-"predefined, universal meaning" use tags are for — not a mechanism QDEF's
-core depends on. A single shared "this map is a QDEF Record" tag (the way
+through it alone, tag or no tag. The place a CBOR tag still legitimately
+appears in QDEF is unrelated to routing: spec §3.2 allows any tag number
+to wrap a field's own definite-length string value directly, a
+Record-Type author's own opt-in choice about one field's content, which
+is exactly the "predefined, universal meaning" use tags are for — not a
+mechanism QDEF's core depends on. See "Field values may carry any CBOR
+tag" below for why this widened from an initial tag-`24`-only rule. A
+single shared
+"this map is a QDEF Record" tag (the way
 tag `55799` means "self-describe CBOR") was considered as a middle ground
 and set aside for the same reason: one more optional mechanism to document
 and implement, for a benefit key `0` already provides unconditionally.
+
+## Field values may carry any CBOR tag, not just tag 24 — widened per FINDINGS.md #15/#16
+
+Issue #8's original fix (FINDINGS.md #15) restricted the field-value-
+shape rule's tag exception to tag `24` specifically, out of caution: it
+was the one case already known to be both skip-safe and to have a real,
+non-QDEF-specific meaning. Revisited once actually asked directly: what
+does the rest of the IANA CBOR tag registry (tags under ~1000) actually
+look like, content-shape-wise — is "only 24" doing real work, or just
+being narrower than it needs to be?
+
+Checked directly against the registry, not from memory: tags split
+cleanly into two groups by their own RFC 8949 definitions. Genuinely
+scalar- or string-shaped (dates, URIs, UUIDs, regex, bignums, base64/
+base16 conversion hints, typed numeric arrays wire-encoded as byte
+strings) versus genuinely array- or map-shaped by definition (decimal
+fractions and bigfloats — a 2-element array; rational numbers; language-
+tagged strings — `[language, text]`, easy to mistake for a bare string;
+COSE structures; the "expected conversion" hints `21`–`23`, confirmed
+directly against RFC 8949 to apply recursively over arbitrary structure,
+not just a byte string). The *content-shape check* (definite-length
+string, directly, never another tag) is what makes a tag skip-safe — that
+holds regardless of which tag number is on the wire, so restricting to
+`24` alone was stricter than the actual safety property required, and the
+registry itself already sorts into the right buckets without QDEF needing
+to maintain an allowlist of "safe" tag numbers.
+
+Two things confirmed this wasn't accidentally reopening either hazard the
+narrower rule was guarding against:
+
+- **Not the recursion hazard.** The bound that matters is "tag content is
+  checked to be a definite-length string directly, never another tag" —
+  unrelated to which specific tag number is involved. Tag `24` wrapping
+  tag `0`, or tag `0` wrapping tag `24`, are equally out of bounds; a real
+  fixture (`STRUCTURED_TAG_WRAPPED_VALUE_CONTAINER`, tag `4` wrapping a
+  genuine `[-2, 27315]` decimal-fraction array) proves a real, plausible,
+  correctly-formed tagged value still gets rejected when its content
+  isn't a string, same as any bare array would.
+- **Not the private-enumeration hazard.** This isn't QDEF choosing or
+  interpreting tag numbers for its own routing purposes the way the old
+  Smart Route did (findings #11–#12) — it's letting Record authors use
+  *real* IANA registrations for their own intended, standardized meaning.
+  That's the correct use of CBOR tags per RFC 8949's own design
+  philosophy, not a reopening of the mechanism that was removed.
 
 ## Type Hint (Key 1): folding into key 0 instead — considered, rejected
 

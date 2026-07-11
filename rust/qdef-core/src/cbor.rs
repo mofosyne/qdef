@@ -8,8 +8,10 @@
 //!
 //! Scope is deliberately narrow: read a head byte + argument, read a small
 //! uint or a definite-length string, and skip one *field value* — which,
-//! per docs/QDEF-SPEC.md §3.2's field-value-shape rule, is never an array,
-//! map, or tag. That rule is what keeps this module free of recursion
+//! per docs/QDEF-SPEC.md §3.2's field-value-shape rule, is never a bare
+//! array or map, and never a tag wrapping anything other than a
+//! definite-length string directly (any tag number is allowed, but not
+//! nested). That rule is what keeps this module free of recursion
 //! entirely, not just bounded — see `skip_value` below and ../FINDINGS.md.
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -20,10 +22,12 @@ pub enum Error {
     NotAUint,
     NotAMap,
     NotAString,
-    /// §3.2: a Record field's value was a bare array, map, or tag (major
-    /// type 4, 5, or 6), or an indefinite-length string — none of which are
-    /// legal QDEF field values. Structured content must be pre-encoded as
-    /// CBOR and carried inside a definite-length byte string instead.
+    /// §3.2: a Record field's value was a bare array or map (major type 4
+    /// or 5), an indefinite-length string, or a tag (major type 6) wrapping
+    /// anything other than a definite-length string directly (including
+    /// another tag) — none of which are legal QDEF field values. Structured
+    /// content must be pre-encoded as CBOR and carried inside a
+    /// definite-length byte string instead.
     DisallowedFieldValueShape,
 }
 
@@ -106,12 +110,20 @@ pub(crate) fn read_head(buf: &[u8]) -> Result<Head, Error> {
 }
 
 /// Skip one CBOR item that is a legal QDEF Record field value: a scalar
-/// (uint, negint, simple, or float) or a definite-length byte/text string.
-/// Anything that would require walking into nested structure to find its
-/// length — a bare array, a nested map, a tag, or an indefinite-length
-/// string — is refused immediately rather than walked, so this function
-/// can never recurse and never loops. That's the point: it's what makes
-/// skipping an unrecognized field O(1) instead of a stack-depth risk.
+/// (uint, negint, simple, or float), a definite-length byte/text string, or
+/// any CBOR tag wrapping exactly one definite-length byte/text string
+/// directly. Anything else that would require walking into nested
+/// structure to find its length — a bare array, a nested map, an
+/// indefinite-length string, or a tag wrapping anything other than a
+/// string directly (including another tag) — is refused immediately
+/// rather than walked, so this function still never recurses and never
+/// loops: the tag branch is two fixed header reads in sequence, not a call
+/// back into this function, so nesting a tag inside a tag is rejected
+/// rather than silently accepted at unbounded depth, regardless of which
+/// tag numbers are involved. That's the point: skipping an unrecognized
+/// field stays O(1) instead of a stack-depth risk, tag included — the
+/// *content* shape is what's checked, not the tag number, so this doesn't
+/// need a tag allowlist to stay safe (spec §3.2, FINDINGS.md #15/#16).
 pub(crate) fn skip_value(buf: &[u8]) -> Result<usize, Error> {
     let head = read_head(buf)?;
     match head.major {
@@ -122,6 +134,23 @@ pub(crate) fn skip_value(buf: &[u8]) -> Result<usize, Error> {
             let total = head
                 .head_len
                 .checked_add(len)
+                .ok_or(Error::LengthOverflow)?;
+            if buf.len() < total {
+                return Err(Error::UnexpectedEof);
+            }
+            Ok(total)
+        }
+        6 => {
+            let rest = buf.get(head.head_len..).ok_or(Error::UnexpectedEof)?;
+            let inner = read_head(rest)?;
+            if (inner.major != 2 && inner.major != 3) || inner.is_indefinite() {
+                return Err(Error::DisallowedFieldValueShape);
+            }
+            let inner_len = inner.arg as usize;
+            let total = head
+                .head_len
+                .checked_add(inner.head_len)
+                .and_then(|n| n.checked_add(inner_len))
                 .ok_or(Error::LengthOverflow)?;
             if buf.len() < total {
                 return Err(Error::UnexpectedEof);

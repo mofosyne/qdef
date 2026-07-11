@@ -182,3 +182,82 @@ fn structured_content_is_carried_as_an_opaque_byte_string_and_skips_at_zero_cost
     let nested_cbor = read_definite_string(raw).unwrap();
     assert_eq!(nested_cbor, NESTED_AUTH_METHODS_CBOR);
 }
+
+#[test]
+fn tag_24_wrapping_a_definite_length_string_directly_is_a_legal_field_value() {
+    // GitHub issue #8: tag 24 ("encoded CBOR data item") wrapping a
+    // definite-length string directly is exactly as skip-safe as a bare
+    // byte string — two fixed header reads instead of one, never a walk —
+    // and gives generic CBOR tooling a marker that this field's bytes are
+    // re-parseable, which a bare, unmarked byte string never can.
+    let container = Container::parse(TAG24_WRAPPED_VALUE_CONTAINER).unwrap();
+    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
+    let rec = &records[0];
+    assert!(!rec.aborted);
+
+    let outcome = check_criticality(rec.map_bytes, WIFI_KNOWN_KEYS, |k| assert_eq!(k, 11)).unwrap();
+    assert_eq!(outcome, CriticalityOutcome::Ok);
+
+    let raw = find_value(rec.map_bytes, 11).unwrap().unwrap();
+    // find_value returns the *whole* value including the tag header — the
+    // caller unwraps it, the same way it would unwrap any tag it chooses
+    // to interpret. Tag 24 is always a 2-byte head (0xd8 0x18).
+    assert_eq!(&raw[..2], &[0xd8, 0x18]);
+    let nested_cbor = read_definite_string(&raw[2..]).unwrap();
+    assert_eq!(nested_cbor, NESTED_AUTH_METHODS_CBOR);
+}
+
+#[test]
+fn tag_24_directly_wrapping_another_tag_is_rejected_not_silently_walked() {
+    // The bound that keeps this from reopening unbounded recursion: tag 24
+    // MUST wrap a definite-length string *directly*. Here the outer tag
+    // 24's immediately-following item is itself a tag (24 again), not a
+    // string — genuinely different from a byte string whose own contents
+    // happen to be tag-24'd (still allowed, since that's opaque to the
+    // outer skip). This MUST fail the same way a bare array does, not be
+    // silently accepted at whatever depth an adversarial encoder chooses.
+    let container = Container::parse(NESTED_TAG24_CONTAINER).unwrap();
+    let result: Result<Vec<_>, _> = container.records().collect();
+    assert_eq!(
+        result.err(),
+        Some(Error::Cbor(cbor::Error::DisallowedFieldValueShape))
+    );
+}
+
+#[test]
+fn any_tag_number_is_allowed_when_its_content_is_a_definite_length_string() {
+    // FINDINGS.md #16: widened from "only tag 24" to any tag number — it's
+    // the content shape that makes a tag skip-safe, not which specific
+    // number is on the wire. Tag 0 ("standard date/time string") wrapping
+    // a definite-length text string directly is a real, IANA-registered
+    // tag, genuinely scalar-shaped by its own RFC 8949 definition, so it's
+    // accepted the same way tag 24 is.
+    let container = Container::parse(OTHER_TAG_WRAPPED_VALUE_CONTAINER).unwrap();
+    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
+    let rec = &records[0];
+    assert!(!rec.aborted);
+
+    let outcome = check_criticality(rec.map_bytes, WIFI_KNOWN_KEYS, |k| assert_eq!(k, 11)).unwrap();
+    assert_eq!(outcome, CriticalityOutcome::Ok);
+
+    let raw = find_value(rec.map_bytes, 11).unwrap().unwrap();
+    assert_eq!(raw[0], 0xc0); // tag 0, one-byte head (info 0, tag number 0..23)
+    let date_string = read_definite_string(&raw[1..]).unwrap();
+    assert_eq!(date_string, b"2026-07-10T12:00:00Z");
+}
+
+#[test]
+fn a_real_tag_whose_own_definition_requires_array_content_is_still_rejected() {
+    // The other half of the bound: it's the *content shape* that's
+    // checked, never the tag number alone. Tag 4 ("decimal fraction")
+    // wraps a 2-element array [exponent, mantissa] by its own RFC 8949
+    // definition — a real, plausible value (-2, 27315 => 273.15), not a
+    // contrived one — and MUST still be rejected, since array content
+    // isn't skip-safe regardless of which tag says so.
+    let container = Container::parse(STRUCTURED_TAG_WRAPPED_VALUE_CONTAINER).unwrap();
+    let result: Result<Vec<_>, _> = container.records().collect();
+    assert_eq!(
+        result.err(),
+        Some(Error::Cbor(cbor::Error::DisallowedFieldValueShape))
+    );
+}
