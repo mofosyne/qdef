@@ -538,12 +538,51 @@ pre-allocated in advance.
 mechanism Type IDs (`1`–`99`, §4) always stay globally, absolutely
 interpreted regardless of any declared namespace — a generic tool must
 still be able to unwrap Split/Compress/Encrypt and recognize App Route
-inside a namespaced file. Whether and how *other* Record Type IDs
-(`100`+) become namespace-local once a namespace is declared — the
-truncation idea that motivated this mechanism in the first place — is
-deliberately left open here rather than pinned down: `1`–`99` staying
-global is settled; the exact scoping rule for everything else is a
-follow-on decision, not yet made.
+inside a namespaced file, whether or not it understands the namespace
+itself.
+
+**Every other Record Type ID (`100`+) becomes namespace-scoped once a
+namespace is declared, reusing the existing flat numbering space rather
+than carving out a new range for it.** When Type `0` declares namespace
+`N`, a subsequent Record's Type ID `T` (`T ≥ 100`) is no longer looked up
+as the bare global identity `T` — its real identity is the *compound*
+key `(N, T)`, exactly the way a Bluetooth short UUID only means anything
+paired with the Base UUID it's declared against. This is why no new
+numeric range is needed: nothing is reinterpreting what `T` means in
+isolation, because `T` in isolation is no longer the lookup key at all
+once a namespace is present. An app with its own declared namespace can
+freely use small, sequential Type IDs (`100`, `101`, `102`...) for as
+many Record Types as it needs — cheap on the wire (2–3 bytes instead of
+a 9-byte private-use-random draw) and collision-free by construction,
+since collision safety now comes from the namespace, not from the ID's
+own width.
+
+**This is Record-Type-interpretation-specific handling (§3.3's optional
+tier), not a mandatory-core requirement — the same category Type Hint's
+own dual-mode key `1` already sits in.** The mandatory core is
+unaffected: it still just reads `map[0]` to route or skip, with zero
+knowledge of namespaces, exactly as validated today (`rust/qdef-core`
+needs no Type-`0`-specific code at all). The correctness obligation
+falls on any decoder that implements specific semantics for *any*
+`100`+ Type ID: such a decoder MUST check for a declared namespace
+before applying its interpretation, and MUST NOT fall back to a global
+reading merely because it doesn't recognize the specific `(namespace,
+TypeID)` pair — that pair is simply unrecognized, skipped the same way
+any other unrecognized Type ID is, never silently reinterpreted as the
+global meaning of the same number. Getting this wrong is a real, worse-
+than-usual failure mode (a *wrong* match, not a clean miss) — it is the
+one sharp edge this mechanism has, and it exists precisely because
+`100`+ is being asked to serve two different lookup schemes (global,
+namespace-scoped) depending on context a decoder must actually check,
+not assume.
+
+**Fully additive, no migration forced.** An app with existing global
+private-use-random Type IDs keeps them working forever, namespaced
+container or not — nothing about this mechanism invalidates a
+`0x10000`+ ID that predates it. Adopting namespace-scoped small IDs for
+*new* content is an independent, opt-in choice; an old ID and a new
+small one for "the same" logical Record Type never collide, because a
+namespace-unaware old ID was never namespace-scoped to begin with.
 
 Prototyped in `prototype/src/header.js` and `prototype/test/header.test.js`:
 namespace/hint round-trip, both fields independently optional, the

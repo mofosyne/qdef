@@ -747,6 +747,62 @@ domain form's key `3` is a label again, not unified with the
 decentralized form's Hint-name role — that unification's only real
 justification (letting Companion ID be hash-checked) is gone with it.
 
+## Namespace-scoped Type IDs (100+) — resolved, not left open, once a real adopter had a concrete want
+
+§3.5's namespace mechanism launched with one deliberate gap: whether and
+how Type IDs `100`+ become namespace-local once a namespace is declared
+— the original truncation idea that motivated building a namespace
+mechanism at all — was left unresolved, on the theory that landing
+identification cleanly mattered more than guessing at a scoping rule
+nobody had asked for yet. TagDrop asking directly, with a concrete want
+(shrinking four existing 64-bit Type IDs) rather than a hypothetical
+one, was exactly the signal this project has waited for before building
+speculative things — the same pattern that produced App Route and,
+later, its own removal.
+
+**The resolution reuses the existing flat numbering space; it doesn't
+carve out a new one.** Once Type `0` declares namespace `N`, a
+subsequent Record's Type ID `T` (`T ≥ 100`) is looked up as the compound
+key `(N, T)`, not `T` alone — the same relationship a Bluetooth short
+UUID has to whichever Base UUID it's declared against. This was the
+crux design question, and the reason it took real thought rather than a
+quick answer: the obvious alternative (reserve a new numeric sub-range
+exclusively for namespace-local IDs) risks collision with whatever's
+already been allocated in the existing tiers, and doesn't actually need
+solving once you notice that a *compound* key removes the ambiguity
+structurally — `T` in isolation was never the real lookup key once a
+namespace is present, so there's nothing for a reserved range to
+protect against colliding with.
+
+**The one sharp edge, named explicitly rather than glossed over:** a
+decoder that implements specific semantics for any `100`+ Type ID and
+does *not* check for a declared namespace first can misapply its global
+interpretation to a namespace-scoped Record that merely shares the same
+number — a wrong match, not a clean miss, which is a worse failure mode
+than anything else in this spec produces. Nothing forces this check
+today (nothing has shipped), so it's being written into the correct
+definition of `100`+ routing from the start rather than patched in
+later. Framed the same way Type Hint's dual-mode key `1` already is:
+Record-Type-interpretation-specific handling (spec §3.3's optional
+tier), never a mandatory-core concern — the mandatory core still just
+reads `map[0]`, unchanged, with zero namespace awareness.
+
+**Fully additive.** An app's existing global private-use-random Type
+IDs keep working forever; adopting namespace-scoped small IDs for new
+content is an independent, opt-in choice that never invalidates or
+collides with the old ones, since an unnamespaced old ID was never
+namespace-scoped to begin with.
+
+Prototyped in `prototype/src/header.js`'s `resolveLookupKey` and
+`prototype/test/header.test.js`: the same Type ID resolving to different
+compound keys under different namespaces, `1`–`99` staying global
+regardless, a namespace-aware dispatcher correctly *not* falling back to
+a recognized global meaning for an unrecognized namespace-scoped Record
+(the sharp edge, demonstrated rather than just described), and
+TagDrop's actual migration case end to end — verified real byte
+counts, not claimed ones: an existing 64-bit global Type ID costs 11
+bytes as a bare Record; a namespace-scoped small ID costs 4.
+
 ## A confession (Parkinson's Law of Triviality, self-reported)
 
 C. Northcote Parkinson's original example: a committee approves a

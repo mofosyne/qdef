@@ -131,3 +131,101 @@ test('the container is exactly magic + CBOR Sequence, no version byte', () => {
   // 5), not a version integer -- there is nothing in between.
   assert.equal(container[4] >> 5, 5);
 });
+
+// ---------------------------------------------------------------------
+// Namespace-scoped Type IDs (100+): resolveLookupKey is what a decoder
+// that interprets specific Type IDs must use instead of looking typeId
+// up directly, so a namespace-scoped Record never gets silently
+// misread as the *global* meaning of the same number -- a wrong match,
+// not a clean miss, which is the one sharp edge this mechanism has.
+// ---------------------------------------------------------------------
+
+test('the same Type ID resolves to a different compound key under different namespaces', () => {
+  const keyA = header.resolveLookupKey({ namespace: 111n }, 100);
+  const keyB = header.resolveLookupKey({ namespace: 222n }, 100);
+
+  assert.notDeepEqual(keyA, keyB);
+  assert.deepEqual(keyA, { scope: 'namespace', namespace: 111n, typeId: 100 });
+  assert.deepEqual(keyB, { scope: 'namespace', namespace: 222n, typeId: 100 });
+});
+
+test('Type IDs 1-99 always resolve globally, regardless of any declared namespace', () => {
+  const withNamespace = header.resolveLookupKey({ namespace: 111n }, 7); // App Route
+  const withoutNamespace = header.resolveLookupKey(undefined, 7);
+
+  assert.deepEqual(withNamespace, { scope: 'global', typeId: 7 });
+  assert.deepEqual(withoutNamespace, { scope: 'global', typeId: 7 });
+});
+
+test('Type IDs 100+ resolve globally when no namespace is declared', () => {
+  assert.deepEqual(header.resolveLookupKey(undefined, 100), { scope: 'global', typeId: 100 });
+  assert.deepEqual(
+    header.resolveLookupKey({ namespace: undefined }, 100),
+    { scope: 'global', typeId: 100 },
+  );
+});
+
+test('a namespace-aware dispatcher never misapplies a recognized global Type ID to an unrecognized namespace-scoped one', () => {
+  // Simulates two independent decoders: one that only knows the GLOBAL
+  // registry (Type 100 = Wi-Fi), one that's namespace-aware but has
+  // never heard of this particular namespace. Both must skip cleanly,
+  // never fall back to the global interpretation for a namespaced
+  // Record that merely shares the same number.
+  const GLOBAL_KNOWN_TYPES = new Map([[100, 'Wi-Fi Provisioning']]);
+  const NAMESPACE_KNOWN_TYPES = new Map(); // empty: this namespace is unrecognized
+
+  function dispatch(header_, typeId) {
+    const key = header.resolveLookupKey(header_, typeId);
+    if (key.scope === 'global') return GLOBAL_KNOWN_TYPES.get(key.typeId);
+    const nsTable = NAMESPACE_KNOWN_TYPES.get(key.namespace);
+    return nsTable ? nsTable.get(key.typeId) : undefined;
+  }
+
+  // Unnamespaced Type 100 resolves to the real global meaning.
+  assert.equal(dispatch(undefined, 100), 'Wi-Fi Provisioning');
+
+  // The SAME Type 100, inside a declared-but-unrecognized namespace,
+  // must NOT resolve to "Wi-Fi Provisioning" -- that would be a wrong
+  // match (a namespace-scoped Record misread as something it isn't),
+  // not a clean skip.
+  assert.equal(dispatch({ namespace: 999999n }, 100), undefined);
+});
+
+test("TagDrop's migration case: an existing global 64-bit Type ID keeps working, a new small namespace-scoped one for \"the same\" logical type never collides with it", () => {
+  const TAGDROP_NAMESPACE = 12271745624591856273n;
+  const OLD_GLOBAL_TYPE_ID = 18446744073709551615n; // pre-existing, unnamespaced
+  const NEW_NAMESPACE_LOCAL_ID = 100; // small, cheap, chosen after adopting Type 0
+
+  const oldStyleContainer = core.encodeContainer([
+    { typeId: OLD_GLOBAL_TYPE_ID, fields: new Map([[2, 'legacy payload']]) },
+  ]);
+  const newStyleContainer = core.encodeContainer([
+    { typeId: header.HEADER_TYPE, fields: new Map([[3, TAGDROP_NAMESPACE]]) },
+    { typeId: NEW_NAMESPACE_LOCAL_ID, fields: new Map([[2, 'new payload']]) },
+  ]);
+
+  const oldRecords = core.decodeContainer(oldStyleContainer).records;
+  assert.equal(
+    header.resolveLookupKey(header.extractHeader(oldRecords), oldRecords[0].typeId).scope,
+    'global',
+  );
+
+  const newRecords = core.decodeContainer(newStyleContainer).records;
+  const newHeader = header.extractHeader(newRecords);
+  const newKey = header.resolveLookupKey(newHeader, newRecords[1].typeId);
+  assert.deepEqual(newKey, {
+    scope: 'namespace',
+    namespace: TAGDROP_NAMESPACE,
+    typeId: NEW_NAMESPACE_LOCAL_ID,
+  });
+
+  // The old ID and the new one are simply different keys in different
+  // scopes -- nothing forces a choice between them, and nothing about
+  // adopting one invalidates the other.
+  assert.notEqual(oldRecords[0].typeId, newKey.typeId);
+
+  // The real wire-cost win: verify it, don't just claim it.
+  const oldTypeIdBytes = core.encodeRecordBytes({ typeId: OLD_GLOBAL_TYPE_ID, fields: new Map() });
+  const newTypeIdBytes = core.encodeRecordBytes({ typeId: NEW_NAMESPACE_LOCAL_ID, fields: new Map() });
+  assert.ok(newTypeIdBytes.length < oldTypeIdBytes.length);
+});

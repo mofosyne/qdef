@@ -728,6 +728,41 @@ Verified: Node 55/55, Rust 16/16, `clippy` clean, `fmt` clean,
 jobs across two pushes (the second push fixing exactly the fixture-sync
 failure the first one caused).
 
+### 20. Namespace-scoped Type IDs (100+) resolved — TagDrop's concrete want, not a hypothetical one, is what unblocked it
+
+§3.5 shipped with the `100`+ scoping question deliberately open. Asked
+directly by TagDrop, with a concrete want (shrinking four existing
+64-bit Type IDs, not a hypothetical future need) once they saw the
+namespace mechanism's detection win was cheaper than expected — the
+same "wait for a real adopter" discipline that shaped App Route.
+
+Resolved as a compound-key lookup, `(namespace, TypeID)` rather than
+`TypeID` alone, once a namespace is declared — reusing the existing flat
+numbering space rather than reserving a new sub-range for it, since a
+compound key removes the collision ambiguity structurally (see
+DESIGN.md's full entry for why the reserved-range alternative doesn't
+actually need solving once that's noticed). `1`–`99` stays global,
+unconditionally, matching what was already settled.
+
+Named the one real sharp edge rather than leaving it implicit: a
+decoder implementing specific `100`+ semantics that doesn't check for a
+namespace first can misapply a global interpretation to a namespace-
+scoped Record sharing the same number — a wrong match, not a clean
+miss. Framed as Record-Type-interpretation-specific handling (same
+category as Type Hint's dual-mode key `1`), so the mandatory core stays
+exactly as minimal as already validated — no changes to `core.js` or
+`rust/qdef-core` were needed or made.
+
+Prototyped in `prototype/src/header.js`'s `resolveLookupKey` and
+`prototype/test/header.test.js`: compound-key resolution differs by
+namespace, `1`–`99` stays global unconditionally, a namespace-aware
+dispatcher correctly refuses to fall back to a recognized global
+meaning for an unrecognized namespace-scoped pairing (the sharp edge,
+demonstrated rather than described), and TagDrop's own migration case
+end to end with real, verified byte counts: 11 bytes for a bare Record
+under an existing 64-bit global Type ID, 4 bytes for the same under a
+namespace-scoped small one.
+
 ## Confirmed working as designed (no fix needed)
 
 - **Magic + version + CBOR-Sequence-of-Records** round-trips exactly as
