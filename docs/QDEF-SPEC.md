@@ -238,21 +238,74 @@ for why.
 
 **Optional, self-certifying strengthening (not required):** a private-use-
 random Type ID MAY be derived as a truncated hash of its own `key 1` name
-string (`TypeID = truncate(hash(name), N)`) rather than pure randomness.
-This upgrades the name from an unverifiable claim into something anyone
-can independently check — recompute the hash, compare to `key 0` — without
-trusting a registry or a possibly-unreachable original author, the same
-"hash as proof" instinct already behind `group_id` (§4.1) and the Sign
-coverage scheme (§9). No version marker is needed to record whether a
-given ID used this convention: verification is opportunistic — if the hash
-matches, the binding is confirmed; if it doesn't, `key 1` simply degrades
-to a plain, unverified label, exactly as if this convention weren't in use
-at all. Prototyped in `prototype/src/typeHint.js` (round-trip, opportunistic
+string rather than pure randomness. This upgrades the name from an
+unverifiable claim into something anyone can independently check —
+recompute the hash, compare to `key 0` — without trusting a registry or a
+possibly-unreachable original author, the same "hash as proof" instinct
+already behind `group_id` (§4.1) and the Sign coverage scheme (§9).
+
+**The derivation algorithm is pinned, not left as "hash(name)" with
+implementation-defined details** — "anyone can independently check" is
+only true if independent implementations actually agree on what they're
+computing:
+
+```
+digest = SHA-256(UTF-8(name))
+N      = 4 if TypeID fits in 32 bits, else 8
+TypeID = big-endian uint from digest[0..N]
+```
+
+`N` is not a separately-negotiated constant — it's the byte-width the
+candidate `TypeID` already needs to represent itself (4 bytes for a
+32-bit-class value, 8 for 64-bit-class), so a verifier derives it from
+the ID being checked rather than requiring out-of-band agreement on a
+width. SHA-256 over the name's raw UTF-8 bytes (not any CBOR encoding of
+the string) was chosen for the same reason `group_id` and CoAP/COSE
+registry reuse elsewhere in this spec favor already-ubiquitous,
+already-implemented primitives over inventing new ones.
+
+**Pinning the algorithm only solves half the problem — the input `name`
+still has to be collision-resistant itself, or the derived ID inherits
+whatever collision risk the name has.** SHA-256 is a good hash, but a
+good hash of a bad input is still a bad input: two unrelated
+implementers who each pick a short, generic word for a similar concept
+("config", "settings") derive the *exact same* ID — a certain collision,
+not a probabilistic one, since the derivation is deterministic. This is
+worse than skipping hash-derivation and drawing a Type ID purely at
+random, which at least gets real collision-safety from the size of the
+draw space.
+
+**A name feeding hash-derivation SHOULD be qualified by something the
+namer actually, verifiably controls** — a reverse-domain string
+(`"com.example.tagdrop"`) is the recommended convention, the same one
+Java packages, XML namespaces, and MIME subtypes already use for
+exactly this reason. It's not a style preference: a domain two
+unrelated parties could plausibly both register is already vanishingly
+unlikely by construction (DNS is itself a collision-free allocation
+system), which is what actually restores the "behaves like a random
+draw" property the whole mechanism depends on — an unqualified word
+does not have that property no matter how good the hash function is.
+
+This matters most exactly where nothing else already protects the
+value: a *namespace's* own Hint name (§3.5's key `5`) and a *standalone*
+private-use-random Type ID's Hint name (no namespace declared at all).
+A Record-Type-local Hint name used *within* an already-declared
+namespace doesn't need this — collision-safety there already comes from
+the namespace itself (§3.5), so a bare, unqualified local name is fine.
+
+No version marker is needed to record whether a given ID used this
+convention: verification is opportunistic — if the hash matches, the
+binding is confirmed; if it doesn't, `key 1` simply degrades to a plain,
+unverified label, exactly as if this convention weren't in use at all.
+
+Prototyped in `prototype/src/typeHint.js` (round-trip, opportunistic
 verify, and graceful degradation on both a non-hash-derived ID and a
-non-string hint all pass — see `prototype/test/type-hint.test.js`) using a
-4-byte truncation as an illustrative width, not a spec decision — the hash
-width needed to keep collision probability negligible at whatever scale
-this tier actually sees remains an open parameter.
+non-string hint all pass — see `prototype/test/type-hint.test.js`). That
+same test file locks in a real bug this exact underspecification caused:
+an earlier version of this prototype always truncated to 4 bytes
+regardless of the candidate ID's actual width, silently unable to verify
+any 64-bit-class ID — exactly the width §9 itself recommends and a real
+adopter, TagDrop, actually uses. See FINDINGS.md #21.
 
 **Encoder etiquette (SHOULD, not required):** many optical codes are
 quantized into fixed-capacity classes (a QR Version's byte budget at a
@@ -511,13 +564,25 @@ Record's "unaware party pays nothing" property (§4).
 
 **Format namespace values follow the same tiering convention as Record
 Type IDs (§9's Registry governance): a small span for reviewed/common
-formats, a first-come span, and an open private-use-random span with no
-allocation authority needed at all.** This is a deliberate reuse, not a
+formats, and an open private-use-random span with no allocation
+authority needed at all.** This is a deliberate reuse, not a
 parallel scheme — the same reasoning that makes a large random Type ID
 collision-safe without a registry applies identically to a namespace
 value. Key `5`'s Hint name plays Type Hint's exact role (§3.1),
 including the same optional, opportunistic self-certifying strengthening
-(`namespace = truncate(hash(name), N)`).
+and the same pinned algorithm (§3.1's SHA-256/UTF-8/magnitude-derived-
+width definition — reused exactly, not a second hash convention that
+happens to look similar). Prototyped in `prototype/src/header.js`'s
+`verifyNamespaceHint`, which calls the same `typeHint.js` derivation
+rather than reimplementing it.
+
+**The namespace's Hint name is exactly the case §3.1's naming guidance
+calls out as needing qualification, not the case that's exempt from
+it.** Nothing outside the namespace itself protects a hash-derived
+namespace value from collision — unlike a Record-Type-local Hint name
+used *inside* an already-declared namespace, which doesn't need
+qualifying. A reverse-domain string (`"com.example.tagdrop"`, not bare
+`"tagdrop"`) is the recommended form here specifically.
 
 **No dedicated "version" field, and Type `0` does not get "versioned" by
 minting new Type IDs for future header revisions.** Both were considered
@@ -534,16 +599,98 @@ An old decoder that doesn't recognize it aborts only this one Record
 proven degrade every other stdlib Record already has, with nothing
 pre-allocated in advance.
 
-**What a declared namespace changes, and what it doesn't.** Stdlib
-mechanism Type IDs (`1`–`99`, §4) always stay globally, absolutely
-interpreted regardless of any declared namespace — a generic tool must
-still be able to unwrap Split/Compress/Encrypt and recognize App Route
-inside a namespaced file. Whether and how *other* Record Type IDs
-(`100`+) become namespace-local once a namespace is declared — the
-truncation idea that motivated this mechanism in the first place — is
-deliberately left open here rather than pinned down: `1`–`99` staying
-global is settled; the exact scoping rule for everything else is a
-follow-on decision, not yet made.
+**What a declared namespace changes, and what it doesn't.** Type IDs
+`1`–`32767` always stay globally, absolutely interpreted regardless of
+any declared namespace — `1`–`99` (stdlib mechanisms, §4: a generic
+tool must still be able to unwrap Split/Compress/Encrypt and recognize
+App Route inside a namespaced file) *and* `100`–`32767` (the reviewed
+common-vocabulary tier, §9's Registry governance, whose ceiling is
+deliberately aligned with IANA's own CBOR tag registry boundary for its
+"Specification Required" span — see §9). Extending the always-global
+floor to cover common-vocabulary too, not just stdlib, is deliberate:
+that tier is exactly the range a decoder is most likely to hardcode
+against without ever reading this section at all — an implementer who
+only cares about, say, Wi-Fi provisioning (Type `100`, §5) has no
+reason to learn about namespaces, and their assumption that `100`
+always means what §5 says it means must keep holding regardless of
+what any container's Type `0` declares.
+
+**Every other Type ID (`32768`+) becomes namespace-scoped once a
+namespace is declared, reusing the existing flat numbering space rather
+than carving out a new range for it.** When Type `0` declares namespace
+`N`, a subsequent Record's Type ID `T` (`T ≥ 32768`) is no longer
+looked up as the bare global identity `T` — its real identity is the
+*compound* key `(N, T)`, exactly the way a Bluetooth short UUID only
+means anything paired with the Base UUID it's declared against. This is
+why no new numeric range is needed for the scoped tier itself: nothing
+is reinterpreting what `T` means in isolation, because `T` in isolation
+is no longer the lookup key at all once a namespace is present. An app
+with its own declared namespace can freely use small, sequential Type
+IDs (`32768`, `32769`, `32770`...) for as many Record Types as it needs
+— cheap on the wire (5 bytes instead of an 11-byte 64-bit private-use-
+random draw) and collision-free by construction, since collision safety
+now comes from the namespace, not from the ID's own width.
+
+**A namespace-local Type ID MUST be freshly chosen at or above the
+ceiling (`32768`), never derived by truncating a wider ID (e.g. an
+existing `0x10000`+ private-use-random one) down to a small value.**
+`resolveLookupKey` only checks magnitude — it has no way to know whether
+a given number was freshly picked or produced by truncation. A
+truncated value's low bits are effectively random with respect to the
+ceiling, so truncating a wide ID risks landing *below* `32768` purely by
+chance — and a Type ID below the ceiling is **always** interpreted
+globally, namespace or not (see above), silently discarding the
+namespace scoping entirely rather than failing loudly. An implementer
+migrating existing wide, private-use-random Type IDs to namespace-scoped
+ones (TagDrop's original motivating case) mints a new small ID for each
+old one and records that mapping themselves; the format never computes
+one from the other.
+
+**QDEF does not define a separate, ungoverned "first-come-first-served"
+tier of small numbers below `32768` for unnamespaced use — that idea
+was considered and dropped (see DESIGN.md's Registry governance
+section).** Collision-avoidance for a Type ID only ever comes from one
+of three sources: registry curation (`100`–`32767`), the ID's own
+numeric width (`0x10000`+, §3.1's private-use-random tier), or a
+declared namespace (`32768`+, this section). A small, unreviewed,
+un-namespaced number in `32768`–`0xFFFF` has none of the three and is
+not a supported allocation strategy — the range exists so namespace
+scoping has somewhere cheap to put Type IDs, not as a fourth,
+uncoordinated way to claim a global one.
+
+**This is Record-Type-interpretation-specific handling (§3.3's optional
+tier), not a mandatory-core requirement — the same category Type Hint's
+own dual-mode key `1` already sits in.** The mandatory core is
+unaffected: it still just reads `map[0]` to route or skip, with zero
+knowledge of namespaces, exactly as validated today (`rust/qdef-core`
+needs no Type-`0`-specific code at all). The correctness obligation
+falls on any decoder that implements specific semantics for *any*
+`32768`+ Type ID: such a decoder MUST check for a declared namespace
+before applying its interpretation, and MUST NOT fall back to a global
+reading merely because it doesn't recognize the specific `(namespace,
+TypeID)` pair — that pair is simply unrecognized, skipped the same way
+any other unrecognized Type ID is, never silently reinterpreted as the
+global meaning of the same number. Getting this wrong is a real, worse-
+than-usual failure mode (a *wrong* match, not a clean miss) — it is the
+one sharp edge this mechanism has, and it exists precisely because
+`32768`+ is being asked to serve two different lookup schemes (global,
+namespace-scoped) depending on context a decoder must actually check,
+not assume. Deliberately traded one extra wire byte (`32768`'s minimum
+cost is 5 bytes, `100`'s is 4) to keep this edge confined to numbers
+above the reviewed tier — where a decoder hardcoding against one
+specific uncoordinated, unnamespaced number is a real but meaningfully
+rarer case than hardcoding against the reviewed common-vocabulary tier
+— rather than accepting the cheapest possible design at the cost of
+exposing the tier most likely to actually be hardcoded against in
+practice.
+
+**Fully additive, no migration forced.** An app with existing global
+private-use-random Type IDs keeps them working forever, namespaced
+container or not — nothing about this mechanism invalidates a
+`0x10000`+ ID that predates it. Adopting namespace-scoped small IDs for
+*new* content is an independent, opt-in choice; an old ID and a new
+small one for "the same" logical Record Type never collide, because a
+namespace-unaware old ID was never namespace-scoped to begin with.
 
 Prototyped in `prototype/src/header.js` and `prototype/test/header.test.js`:
 namespace/hint round-trip, both fields independently optional, the
@@ -1026,7 +1173,7 @@ the same mechanism.)
 
 **Registering a real Type ID before governance exists.** `900` here is an
 illustrative placeholder, not a protected allocation — §9's registry
-governance for the `100`–`999` "common vocabulary" tier has no authority
+governance for the `100`–`32767` "common vocabulary" tier has no authority
 yet, so nothing stops an unrelated adopter from also picking `900`. Any
 adopter wiring this pattern into real shipping code *before* that
 governance exists should use the `0x10000`+ private-use-random tier (§9)

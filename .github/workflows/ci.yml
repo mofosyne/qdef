@@ -20,6 +20,42 @@ jobs:
           cache-dependency-path: prototype/package-lock.json
       - run: npm ci
       - run: npm test
+      - name: smoke-test gen-type-id and validate-type-id scripts
+        run: |
+          # gen-type-id: known test vector (4-byte derivation)
+          output=$(node scripts/gen-type-id.js com.example.tagdrop/route)
+          echo "$output"
+          echo "$output" | grep -q '0x34E1E4AF' || { echo "::error::gen-type-id 4-byte output mismatch"; exit 1; }
+
+          # gen-type-id: known test vector (8-byte derivation)
+          output=$(node scripts/gen-type-id.js --width 8 com.example.tagdrop/route)
+          echo "$output"
+          echo "$output" | grep -q '0x34E1E4AF986C74E2' || { echo "::error::gen-type-id 8-byte output mismatch"; exit 1; }
+
+          # gen-type-id: namespace mode
+          output=$(node scripts/gen-type-id.js --namespace com.example/tagdrop-paper)
+          echo "$output"
+          echo "$output" | grep -q '0x21BB10277228CFE2' || { echo "::error::gen-type-id namespace output mismatch"; exit 1; }
+
+          # validate-type-id: correct ID passes
+          node scripts/validate-type-id.js com.example.tagdrop/route 3810578202559804642
+
+          # validate-type-id: wrong ID fails
+          if node scripts/validate-type-id.js com.example.tagdrop/route 12345; then
+            echo "::error::validate-type-id should have failed for wrong ID"
+            exit 1
+          fi
+
+          # validate-type-id: namespace mode
+          node scripts/validate-type-id.js --namespace com.example/tagdrop-paper 2430554185501560802
+
+          # validate-type-id: --reverse mode
+          node scripts/validate-type-id.js --reverse 3810578202559804642 com.example.tagdrop/route
+
+          # validate-type-id: collision-prone name warning (still passes derivation, but warns)
+          node scripts/validate-type-id.js com.example.myapp/config 2294980651
+
+          echo "All gen-type-id / validate-type-id checks passed."
 
   rust-core:
     name: Rust core (tests, clippy, fmt, no_std embedded build)

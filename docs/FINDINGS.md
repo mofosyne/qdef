@@ -728,6 +728,190 @@ Verified: Node 55/55, Rust 16/16, `clippy` clean, `fmt` clean,
 jobs across two pushes (the second push fixing exactly the fixture-sync
 failure the first one caused).
 
+### 20. Namespace-scoped Type IDs resolved — TagDrop's concrete want, not a hypothetical one, is what unblocked it
+
+§3.5 shipped with the `100`+ scoping question deliberately open. Asked
+directly by TagDrop, with a concrete want (shrinking four existing
+64-bit Type IDs, not a hypothetical future need) once they saw the
+namespace mechanism's detection win was cheaper than expected — the
+same "wait for a real adopter" discipline that shaped App Route.
+
+Resolved as a compound-key lookup, `(namespace, TypeID)` rather than
+`TypeID` alone, once a namespace is declared — reusing the existing flat
+numbering space rather than reserving a new sub-range for it, since a
+compound key removes the collision ambiguity structurally (see
+DESIGN.md's full entry for why the reserved-range alternative doesn't
+actually need solving once that's noticed).
+
+Named the one real sharp edge rather than leaving it implicit: a
+decoder implementing specific namespace-scopable Type ID semantics that
+doesn't check for a namespace first can misapply a global interpretation
+to a namespace-scoped Record sharing the same number — a wrong match,
+not a clean miss. Framed as Record-Type-interpretation-specific handling
+(same category as Type Hint's dual-mode key `1`), so the mandatory core
+stays exactly as minimal as already validated — no changes to `core.js`
+or `rust/qdef-core` were needed or made.
+
+**Follow-up, same day:** asked directly whether the always-global floor
+(originally `100`) actually protected the right range. It didn't fully
+— a decoder hardcoding against the *reviewed, well-known*
+common-vocabulary tier (`100`–`999`) has no reason to ever read §3.5,
+meaning it wasn't accepting the sharp edge, it just never knew the edge
+existed. Extended the floor to `1000`: `1`–`999` (stdlib *and*
+common-vocabulary) now stays unconditionally global; only the
+less-curated first-come tier (`1000`+) is actually namespace-scopable.
+Cost verified, not assumed: cheapest namespace-scoped Type ID moved from
+4 bytes to 5. A stricter 32-bit-class floor (`≥0x10000`, closing the
+first-come tier's edge too) was considered and set aside at 7 bytes
+minimum — real, but paying for safety margin against a risk already
+judged lower-stakes than the one actually being closed.
+
+**Second follow-up, same day: is `1000` a principled number, or just a
+round one?** The latter — corrected once pointed at IANA's own CBOR tag
+registry, which draws the identical three-way split verbatim: `0`–`23`
+Standards Action, `24`–`32767` Specification Required, `32768`+ First
+Come First Served (checked directly against
+[iana.org/assignments/cbor-tags](https://www.iana.org/assignments/cbor-tags/cbor-tags.xhtml),
+not from memory). Checked the real cost before moving, the same
+discipline as every other boundary decision here: `1000` and `32768`
+both fall inside CBOR's `256`–`65535` uint class, so both cost 5 bytes
+minimum — moving the floor to `32768` was a free upgrade (more
+common-vocabulary headroom, an externally-citable boundary), not a
+tradeoff. `1`–`99` (stdlib) was deliberately left un-aligned with
+IANA's `0`–`23` — that tier answers a different question (what a
+generic tool must unwrap regardless of namespace) than IANA's Standards
+Action band (who can change the CBOR spec itself), and renumbering
+seven already-shipped mechanism IDs would have bought nothing.
+
+**Third follow-up, same day: does the first-come tier still earn its
+place, now that namespace-scoping exists?** Asked directly, once it was
+noticed that first-come is exactly the range namespace-scoping applies
+to, and is a no-op the moment no namespace is declared. No — dropped
+it. Collision-avoidance for a Type ID only ever comes from one of
+three sources: registry curation, the ID's own numeric width, or a
+declared namespace. First-come tried to be cheap *and* uncoordinated
+without picking any of the three, which is exactly why it never had a
+real governance model (this project's own earlier "no registry
+authority exists yet" admission, and its own §6 worked example already
+steered real adopters toward private-use-random instead, in practice).
+Declaring a namespace and using small sequential IDs inside it already
+covers the first-come tier's entire use case, with a mechanism that has
+a real governance story. Needed no code change: `resolveLookupKey`'s
+floor check never implemented "first-come" as a distinct mechanism, so
+this was purely a governance/vocabulary simplification, not a wire
+change.
+
+**Fourth follow-up, same day: is a namespace-local Type ID a truncated
+wide ID, or a freshly chosen one?** Asked directly because "shrinking
+four existing 64-bit Type IDs" reads ambiguously either way. It's the
+latter, and it matters which: `resolveLookupKey` only checks magnitude
+against the ceiling, so it can't tell a freshly-picked small number
+from the low bits of a truncated wide one — and a truncated value's
+magnitude is effectively random with respect to the ceiling, meaning it
+can land below it purely by chance. A Type ID below the ceiling is
+*always* global regardless of any declared namespace, so a truncation-
+derived ID would silently lose its own namespace scoping some fraction
+of the time — the same wrong-match failure mode named earlier, this
+time triggered at ID-selection time rather than decode time. Made
+explicit in §3.5 rather than left inferrable from the "shrinking"
+phrasing, and demonstrated, not just asserted: a new test constructs a
+real 64-bit private-use-random ID truncated to its low 15 bits and
+confirms it resolves globally, not namespace-scoped, despite a
+namespace being declared.
+
+Prototyped in `prototype/src/header.js`'s `resolveLookupKey` and
+`prototype/test/header.test.js`: compound-key resolution differs by
+namespace, `1`–`32767` stays global unconditionally (both stdlib and
+the full IANA-aligned common-vocabulary range, tested explicitly), a
+namespace-aware dispatcher correctly refuses to fall back to a
+recognized global meaning for an unrecognized namespace-scoped pairing
+above the ceiling (the sharp edge, demonstrated rather than described),
+a naive decoder with zero namespace awareness still correctly resolves
+a common-vocabulary Type ID (the specific failure mode the floor
+extension exists to close), a truncated-ID pick landing below the
+ceiling silently loses its namespace scoping (the ID-selection-time
+version of the same sharp edge), and TagDrop's own migration case end
+to end with real, verified byte counts: 11 bytes for a bare Record
+under an existing 64-bit global Type ID, 5 bytes for the same under a
+namespace-scoped small one at the current `32768` floor — unchanged
+from the old `1000` floor, confirming the free-upgrade cost claim
+against the actual encoder rather than just the size-class table.
+
+### 21. The hash-derivation algorithm was never pinned — and the prototype had a live bug matching the gap exactly
+
+Asked directly whether §3.1's `ID = truncate(hash(name), N)` had ever
+actually been specified precisely enough for independent implementations
+to agree. It hadn't: no hash function was named, no string encoding, no
+truncation/byte-order rule, and `N` was explicitly called "an open
+parameter." Checking the real prototype rather than trusting the prose
+surfaced a live bug matching the gap: `verifyTypeHint` called
+`deriveHashId` with no width argument, silently defaulting to a 4-byte
+truncation regardless of the candidate ID's actual magnitude — meaning a
+genuinely 64-bit-class ID (exactly what §9 recommends and what TagDrop's
+own existing Type IDs actually are) could never verify, no matter how it
+was derived. The "anyone can independently check" claim this whole
+mechanism exists to deliver was false in practice for the one adopter
+actually positioned to use it.
+
+Fixed by making `N` derived from the candidate ID's own byte-width (4 if
+it fits in 32 bits, 8 otherwise) instead of a free parameter, and pinning
+the rest: SHA-256 over the name's raw UTF-8 bytes, first `N` digest bytes
+as a big-endian uint. A second bug caught in the same pass: comparing a
+narrow (Number) and wide (BigInt) derivation with `===` is unsafe --
+`5 === 5n` is `false` in JS -- fixed by normalizing both sides through
+`BigInt(...)` before comparing. Also implemented `header.js`'s
+`verifyNamespaceHint` for the first time: §3.5 described the namespace
+mechanism's own hash-check in prose since it landed, with nothing in the
+prototype actually backing it. It calls `typeHint.js`'s derivation
+directly rather than reimplementing the algorithm, so namespace values
+and Type IDs are checked identically by construction.
+
+Prototyped in `prototype/test/type-hint.test.js` (a regression test
+proving a 64-bit-class ID now verifies where it silently couldn't
+before, and a narrow-vs-wide cross-verification test) and
+`prototype/test/header.test.js` (the namespace hash-check exercised for
+the first time, mirroring Type Hint's own three-way verify/degrade/
+not-applicable split). See DESIGN.md's matching entry for the full
+reasoning behind each fix.
+
+### 22. Pinning the hash algorithm didn't fix the naming problem — the input needs its own collision-resistance guidance
+
+Asked directly, right after #21 landed: does the spec tell anyone how
+to *choose* the name fed into hash-derivation, so two unrelated
+implementations don't collide by accident? It didn't, anywhere — only
+"e.g. a reverse-domain string" appeared once, as an illustrative
+example, never as guidance.
+
+This is a real gap, not a nice-to-have: `ID = truncate(SHA-256(name),
+N)` is only as collision-resistant as `name` is diverse. Two unrelated
+projects independently naming their config record `"config"` derive the
+*identical* ID — a certain collision, not a probabilistic one, since
+the function is deterministic and short, sensible English words for a
+common concept are a small space heavily shared across unrelated
+authors. Demonstrated directly with real hash output rather than argued
+abstractly: `deriveHashId('config', 8)` computed twice, simulating two
+independent projects, produces the same value both times.
+
+Fixed by recommending the same convention every other namespaced-
+identifier system already uses — reverse-domain qualification
+(`"com.example.tagdrop"`, not bare `"tagdrop"`) — with the reasoning
+spelled out for why it actually works (a domain two unrelated parties
+could both plausibly register is already vanishingly unlikely by DNS's
+own allocation guarantees, which is what restores the "behaves like a
+random draw" property hash-derivation depends on) rather than presented
+as unmotivated style guidance.
+
+Scoped precisely, not applied blanket: only a namespace's own Hint name
+(§3.5) and a standalone (non-namespaced) private-use-random Type ID's
+Hint name actually need this — a Record-Type-local Hint name used
+*inside* an already-declared namespace is already protected by the
+namespace itself and doesn't need qualifying.
+
+Prototyped in `prototype/test/type-hint.test.js`: two unrelated
+"projects" naming the same concept `"config"` derive an identical ID
+(the hazard, demonstrated), and the same two projects qualifying by a
+domain they each control do not collide.
+
 ## Confirmed working as designed (no fix needed)
 
 - **Magic + version + CBOR-Sequence-of-Records** round-trips exactly as
