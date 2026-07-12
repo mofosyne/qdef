@@ -452,6 +452,30 @@ even/odd criticality (§3.2), same canonical encoding (§3.4). No new
 parsing concept exists for it, and the mandatory core (§3.3) needs zero
 special-cased knowledge of Type `0` to route or skip it correctly.
 
+Visually, when present, it's easiest to think of as occupying a fixed
+metadata slot right after the magic — §2's diagram redrawn with that
+slot broken out:
+
+```
++------------+-----------------------------+-----------------------------+
+|   Magic    |   Record Type 0 (OPTIONAL)   |   Record, Record, ...      |
+|  (4 bytes) |   container-level metadata,  |   ordinary content,        |
+|            |   MUST be first if present   |   exactly as before        |
++------------+-----------------------------+-----------------------------+
+|   "QDEF"   |  { 0:0, 3:<namespace>,       |                             |
+|            |    5:<Hint name> }           |                             |
++------------+-----------------------------+-----------------------------+
+             \_____________________________________________________/
+                    still one CBOR Sequence — Type `0` is an
+                 ordinary Record in it, not a second wire structure
+```
+
+That's the useful mental model, not the literal wire shape: nothing
+marks this slot as special at the byte level, and a decoder finds it the
+same way it finds any Record — by decoding the first Sequence item and
+checking its `map[0]`. The "slot" is a consequence of the MUST-be-first
+rule below, not a distinct structure the format defines.
+
 ```
 Type 0: {                            // Container Header (stdlib)
   0: 0,                              // CRITICAL: fixed, this is what
