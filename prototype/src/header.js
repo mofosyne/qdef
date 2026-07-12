@@ -33,11 +33,23 @@ const HEADER_NAMESPACE_KEY = 3; // odd/optional: format namespace uint
 const HEADER_NAMESPACE_HINT_KEY = 5; // odd/optional: recoverable name for it
 const HEADER_KNOWN_KEYS = new Set([0, HEADER_NAMESPACE_KEY, HEADER_NAMESPACE_HINT_KEY]);
 
-// Type IDs 1-99 (stdlib mechanisms, §4) always stay global regardless of
-// any declared namespace -- a generic tool must still be able to unwrap
-// Split/Compress/Encrypt/App Route inside a namespaced file. 100+ is
-// where namespace-scoping applies.
-const STDLIB_MECHANISM_CEILING = 100;
+// Type IDs 1-999 always stay global regardless of any declared
+// namespace: 1-99 is stdlib mechanisms (§4) -- a generic tool must
+// still be able to unwrap Split/Compress/Encrypt/App Route inside a
+// namespaced file -- and 100-999 is the reviewed common-vocabulary
+// tier (§9's Registry governance), extended into this same
+// always-global floor deliberately. That tier is exactly the one a
+// decoder is most likely to hardcode against without ever reading this
+// section (someone implementing "the well-known Type IDs" has no
+// reason to learn about namespaces at all), so it gets the same
+// unconditional protection as the stdlib range rather than being left
+// exposed to the general sharp edge below. The less-curated first-come
+// tier (1000-0xFFFF) does not get this protection -- it's where
+// namespace-scoping actually applies, trading 1 extra wire byte
+// (5 bytes minimum vs. 4) for closing off the collision risk that
+// actually matters in practice, not the cheapest theoretically
+// possible design.
+const GLOBAL_TIER_CEILING = 1000;
 
 /**
  * Peek at a decoded record list for a valid Type 0 header. Returns
@@ -62,23 +74,24 @@ function extractHeader(records) {
  * Resolves the correct lookup key for a Record's Type ID, given the
  * container's header (as returned by extractHeader, or undefined).
  *
- * Type IDs below STDLIB_MECHANISM_CEILING always resolve globally. Every
- * other Type ID becomes namespace-scoped once a namespace is declared:
- * the real identity is the *compound* (namespace, typeId) pair, not
- * typeId alone -- the same way a Bluetooth short UUID only means
- * anything paired with the Base UUID it's declared against.
+ * Type IDs below GLOBAL_TIER_CEILING (stdlib + common-vocabulary, 1-999)
+ * always resolve globally. Every other Type ID (the first-come tier,
+ * 1000+) becomes namespace-scoped once a namespace is declared: the
+ * real identity is the *compound* (namespace, typeId) pair, not typeId
+ * alone -- the same way a Bluetooth short UUID only means anything
+ * paired with the Base UUID it's declared against.
  *
  * This is Record-Type-interpretation-specific handling (spec §3.3's
  * optional tier), not a mandatory-core concern -- the mandatory core
  * (core.js) never calls this and needs no namespace knowledge at all.
- * Callers that DO interpret specific 100+ Type IDs must use this (or
+ * Callers that DO interpret specific 1000+ Type IDs must use this (or
  * equivalent logic) rather than looking typeId up directly, or they
  * risk the sharp edge this mechanism has: misapplying a *global*
  * interpretation to a namespace-scoped Record that merely shares the
  * same number -- a wrong match, not a clean miss.
  */
 function resolveLookupKey(header, typeId) {
-  if (typeId < STDLIB_MECHANISM_CEILING) {
+  if (typeId < GLOBAL_TIER_CEILING) {
     return { scope: 'global', typeId };
   }
   if (header && header.namespace !== undefined) {
@@ -107,7 +120,7 @@ module.exports = {
   HEADER_KNOWN_KEYS,
   HEADER_NAMESPACE_KEY,
   HEADER_NAMESPACE_HINT_KEY,
-  STDLIB_MECHANISM_CEILING,
+  GLOBAL_TIER_CEILING,
   extractHeader,
   resolveLookupKey,
   verifyNamespaceHint,

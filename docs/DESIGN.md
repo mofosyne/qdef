@@ -747,7 +747,7 @@ domain form's key `3` is a label again, not unified with the
 decentralized form's Hint-name role — that unification's only real
 justification (letting Companion ID be hash-checked) is gone with it.
 
-## Namespace-scoped Type IDs (100+) — resolved, not left open, once a real adopter had a concrete want
+## Namespace-scoped Type IDs (1000+) — resolved, not left open, once a real adopter had a concrete want
 
 §3.5's namespace mechanism launched with one deliberate gap: whether and
 how Type IDs `100`+ become namespace-local once a namespace is declared
@@ -762,30 +762,65 @@ later, its own removal.
 
 **The resolution reuses the existing flat numbering space; it doesn't
 carve out a new one.** Once Type `0` declares namespace `N`, a
-subsequent Record's Type ID `T` (`T ≥ 100`) is looked up as the compound
-key `(N, T)`, not `T` alone — the same relationship a Bluetooth short
-UUID has to whichever Base UUID it's declared against. This was the
-crux design question, and the reason it took real thought rather than a
-quick answer: the obvious alternative (reserve a new numeric sub-range
-exclusively for namespace-local IDs) risks collision with whatever's
-already been allocated in the existing tiers, and doesn't actually need
-solving once you notice that a *compound* key removes the ambiguity
-structurally — `T` in isolation was never the real lookup key once a
-namespace is present, so there's nothing for a reserved range to
-protect against colliding with.
+subsequent Record's Type ID `T` above the always-global floor is looked
+up as the compound key `(N, T)`, not `T` alone — the same relationship a
+Bluetooth short UUID has to whichever Base UUID it's declared against.
+This was the crux design question, and the reason it took real thought
+rather than a quick answer: the obvious alternative (reserve a new
+numeric sub-range exclusively for namespace-local IDs) risks collision
+with whatever's already been allocated in the existing tiers, and
+doesn't actually need solving once you notice that a *compound* key
+removes the ambiguity structurally — `T` in isolation was never the
+real lookup key once a namespace is present, so there's nothing for a
+reserved range to protect against colliding with.
 
 **The one sharp edge, named explicitly rather than glossed over:** a
-decoder that implements specific semantics for any `100`+ Type ID and
-does *not* check for a declared namespace first can misapply its global
-interpretation to a namespace-scoped Record that merely shares the same
-number — a wrong match, not a clean miss, which is a worse failure mode
-than anything else in this spec produces. Nothing forces this check
-today (nothing has shipped), so it's being written into the correct
-definition of `100`+ routing from the start rather than patched in
-later. Framed the same way Type Hint's dual-mode key `1` already is:
-Record-Type-interpretation-specific handling (spec §3.3's optional
-tier), never a mandatory-core concern — the mandatory core still just
-reads `map[0]`, unchanged, with zero namespace awareness.
+decoder that implements specific semantics for any namespace-scopable
+Type ID and does *not* check for a declared namespace first can
+misapply its global interpretation to a namespace-scoped Record that
+merely shares the same number — a wrong match, not a clean miss, which
+is a worse failure mode than anything else in this spec produces.
+Nothing forces this check today (nothing has shipped), so it's being
+written into the correct definition of that tier's routing from the
+start rather than patched in later. Framed the same way Type Hint's
+dual-mode key `1` already is: Record-Type-interpretation-specific
+handling (spec §3.3's optional tier), never a mandatory-core concern —
+the mandatory core still just reads `map[0]`, unchanged, with zero
+namespace awareness.
+
+**Follow-on, asked directly right after the first resolution landed:
+should the always-global floor really stop at `99`, or does that leave
+the sharp edge exposed exactly where it's most likely to actually bite
+someone?** The original design let namespace-scoping apply to anything
+`100`+, reusing the *entire* common-vocabulary and first-come space.
+Reconsidered once the actual risk profile was thought through properly:
+the sharp edge isn't equally dangerous everywhere in that range. A
+decoder implementer who only cares about the reviewed, well-known
+common-vocabulary tier (`100`–`999`) has no reason to ever read §3.5 at
+all — they're not choosing to accept the sharp edge, they may never
+even learn it exists, which is a meaningfully worse failure mode than
+"an implementer who read the spec and got the check wrong." The
+first-come tier (`1000`–`0xFFFF`) is different in kind, not just degree:
+it's explicitly uncurated ("registered, but no review gate beyond not-
+already-taken"), so a decoder hardcoding against one specific
+registration there is both a rarer thing to do and a lower-stakes thing
+to get wrong.
+
+Resolved by extending the always-global floor from `100` to `1000` —
+`1`–`999` (stdlib mechanisms *and* common-vocabulary) stays
+unconditionally global; only the first-come tier is actually
+namespace-scopable. Verified the real cost of this choice rather than
+asserting it was cheap: the cheapest possible namespace-scoped Type ID
+moved from 4 bytes (`100`) to 5 bytes (`1000`) — one extra byte, traded
+for closing off the specific failure mode most likely to occur in
+practice rather than the theoretically cheapest design. A third,
+stricter option (require namespace-scoped IDs to be 32-bit-class,
+`≥ 0x10000`, matching the private-use-random floor exactly) was
+considered and set aside: it closes the first-come tier's sharp edge
+too, at 7 bytes minimum — a real, defensible choice, but one paying for
+safety margin against a risk already judged low-stakes, for a
+proportionally much larger wire-cost regression against what motivated
+building this mechanism in the first place.
 
 **Fully additive.** An app's existing global private-use-random Type
 IDs keep working forever; adopting namespace-scoped small IDs for new
@@ -795,13 +830,17 @@ namespace-scoped to begin with.
 
 Prototyped in `prototype/src/header.js`'s `resolveLookupKey` and
 `prototype/test/header.test.js`: the same Type ID resolving to different
-compound keys under different namespaces, `1`–`99` staying global
-regardless, a namespace-aware dispatcher correctly *not* falling back to
-a recognized global meaning for an unrecognized namespace-scoped Record
-(the sharp edge, demonstrated rather than just described), and
-TagDrop's actual migration case end to end — verified real byte
-counts, not claimed ones: an existing 64-bit global Type ID costs 11
-bytes as a bare Record; a namespace-scoped small ID costs 4.
+compound keys under different namespaces, `1`–`999` staying global
+regardless (both the stdlib range and, deliberately, the
+common-vocabulary range), a namespace-aware dispatcher correctly *not*
+falling back to a recognized global meaning for an unrecognized
+namespace-scoped first-come Record (the sharp edge, demonstrated rather
+than just described), a naive decoder that never checks for a namespace
+at all still correctly resolving a common-vocabulary Type ID (the
+specific failure mode the floor extension exists to close off), and
+TagDrop's actual migration case end to end — verified real byte counts,
+not claimed ones: an existing 64-bit global Type ID costs 11 bytes as a
+bare Record; a namespace-scoped small ID costs 5.
 
 ## The hash-derivation algorithm was never actually pinned — a real bug, not just a documentation gap
 

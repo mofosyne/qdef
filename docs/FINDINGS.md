@@ -728,7 +728,7 @@ Verified: Node 55/55, Rust 16/16, `clippy` clean, `fmt` clean,
 jobs across two pushes (the second push fixing exactly the fixture-sync
 failure the first one caused).
 
-### 20. Namespace-scoped Type IDs (100+) resolved — TagDrop's concrete want, not a hypothetical one, is what unblocked it
+### 20. Namespace-scoped Type IDs resolved — TagDrop's concrete want, not a hypothetical one, is what unblocked it
 
 §3.5 shipped with the `100`+ scoping question deliberately open. Asked
 directly by TagDrop, with a concrete want (shrinking four existing
@@ -741,27 +741,43 @@ Resolved as a compound-key lookup, `(namespace, TypeID)` rather than
 numbering space rather than reserving a new sub-range for it, since a
 compound key removes the collision ambiguity structurally (see
 DESIGN.md's full entry for why the reserved-range alternative doesn't
-actually need solving once that's noticed). `1`–`99` stays global,
-unconditionally, matching what was already settled.
+actually need solving once that's noticed).
 
 Named the one real sharp edge rather than leaving it implicit: a
-decoder implementing specific `100`+ semantics that doesn't check for a
-namespace first can misapply a global interpretation to a namespace-
-scoped Record sharing the same number — a wrong match, not a clean
-miss. Framed as Record-Type-interpretation-specific handling (same
-category as Type Hint's dual-mode key `1`), so the mandatory core stays
-exactly as minimal as already validated — no changes to `core.js` or
-`rust/qdef-core` were needed or made.
+decoder implementing specific namespace-scopable Type ID semantics that
+doesn't check for a namespace first can misapply a global interpretation
+to a namespace-scoped Record sharing the same number — a wrong match,
+not a clean miss. Framed as Record-Type-interpretation-specific handling
+(same category as Type Hint's dual-mode key `1`), so the mandatory core
+stays exactly as minimal as already validated — no changes to `core.js`
+or `rust/qdef-core` were needed or made.
+
+**Follow-up, same day:** asked directly whether the always-global floor
+(originally `100`) actually protected the right range. It didn't fully
+— a decoder hardcoding against the *reviewed, well-known*
+common-vocabulary tier (`100`–`999`) has no reason to ever read §3.5,
+meaning it wasn't accepting the sharp edge, it just never knew the edge
+existed. Extended the floor to `1000`: `1`–`999` (stdlib *and*
+common-vocabulary) now stays unconditionally global; only the
+less-curated first-come tier (`1000`+) is actually namespace-scopable.
+Cost verified, not assumed: cheapest namespace-scoped Type ID moved from
+4 bytes to 5. A stricter 32-bit-class floor (`≥0x10000`, closing the
+first-come tier's edge too) was considered and set aside at 7 bytes
+minimum — real, but paying for safety margin against a risk already
+judged lower-stakes than the one actually being closed.
 
 Prototyped in `prototype/src/header.js`'s `resolveLookupKey` and
 `prototype/test/header.test.js`: compound-key resolution differs by
-namespace, `1`–`99` stays global unconditionally, a namespace-aware
-dispatcher correctly refuses to fall back to a recognized global
-meaning for an unrecognized namespace-scoped pairing (the sharp edge,
-demonstrated rather than described), and TagDrop's own migration case
-end to end with real, verified byte counts: 11 bytes for a bare Record
-under an existing 64-bit global Type ID, 4 bytes for the same under a
-namespace-scoped small one.
+namespace, `1`–`999` stays global unconditionally (both stdlib and
+common-vocabulary, tested explicitly), a namespace-aware dispatcher
+correctly refuses to fall back to a recognized global meaning for an
+unrecognized namespace-scoped first-come pairing (the sharp edge,
+demonstrated rather than described), a naive decoder with zero namespace
+awareness still correctly resolves a common-vocabulary Type ID (the
+specific failure mode the floor extension exists to close), and
+TagDrop's own migration case end to end with real, verified byte
+counts: 11 bytes for a bare Record under an existing 64-bit global Type
+ID, 5 bytes for the same under a namespace-scoped small one.
 
 ### 21. The hash-derivation algorithm was never pinned — and the prototype had a live bug matching the gap exactly
 
