@@ -631,6 +631,21 @@ IDs (`32768`, `32769`, `32770`...) for as many Record Types as it needs
 random draw) and collision-free by construction, since collision safety
 now comes from the namespace, not from the ID's own width.
 
+**A namespace-local Type ID MUST be freshly chosen at or above the
+ceiling (`32768`), never derived by truncating a wider ID (e.g. an
+existing `0x10000`+ private-use-random one) down to a small value.**
+`resolveLookupKey` only checks magnitude — it has no way to know whether
+a given number was freshly picked or produced by truncation. A
+truncated value's low bits are effectively random with respect to the
+ceiling, so truncating a wide ID risks landing *below* `32768` purely by
+chance — and a Type ID below the ceiling is **always** interpreted
+globally, namespace or not (see above), silently discarding the
+namespace scoping entirely rather than failing loudly. An implementer
+migrating existing wide, private-use-random Type IDs to namespace-scoped
+ones (TagDrop's original motivating case) mints a new small ID for each
+old one and records that mapping themselves; the format never computes
+one from the other.
+
 **QDEF does not define a separate, ungoverned "first-come-first-served"
 tier of small numbers below `32768` for unnamespaced use — that idea
 was considered and dropped (see DESIGN.md's Registry governance

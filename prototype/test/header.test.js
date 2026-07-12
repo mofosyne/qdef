@@ -188,6 +188,25 @@ test('Type IDs 32768+ resolve globally when no namespace is declared', () => {
   );
 });
 
+test('a namespace-local ID accidentally chosen below the ceiling -- e.g. by truncating a wide ID instead of freshly picking one -- silently falls back to global, not namespace-scoped', () => {
+  // The hazard: resolveLookupKey only checks magnitude, it cannot tell
+  // a freshly-chosen small ID from the low bits of a truncated wide
+  // one. A truncated value's magnitude is effectively random with
+  // respect to the ceiling, so it can easily land below it by chance --
+  // demonstrated here with a value that would result from truncating a
+  // wide ID to its low 15 bits.
+  const TAGDROP_NAMESPACE = 12271745624591856273n;
+  const ACCIDENTALLY_TRUNCATED_ID = 12271745624591856273n & 0x7fffn; // < 32768
+
+  const key = header.resolveLookupKey({ namespace: TAGDROP_NAMESPACE }, ACCIDENTALLY_TRUNCATED_ID);
+
+  // Not namespace-scoped, despite a namespace being declared -- the
+  // declared namespace is silently ignored for this Record, which is
+  // never what an implementer reaching for namespace-scoping wants.
+  assert.deepEqual(key, { scope: 'global', typeId: ACCIDENTALLY_TRUNCATED_ID });
+  assert.notEqual(key.scope, 'namespace');
+});
+
 test('a namespace-aware dispatcher never misapplies a recognized global Type ID to an unrecognized namespace-scoped one', () => {
   // Simulates two independent decoders: one that only knows some
   // adopter's own unnamespaced Type ID (an ungoverned flat number --

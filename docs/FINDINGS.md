@@ -801,6 +801,24 @@ floor check never implemented "first-come" as a distinct mechanism, so
 this was purely a governance/vocabulary simplification, not a wire
 change.
 
+**Fourth follow-up, same day: is a namespace-local Type ID a truncated
+wide ID, or a freshly chosen one?** Asked directly because "shrinking
+four existing 64-bit Type IDs" reads ambiguously either way. It's the
+latter, and it matters which: `resolveLookupKey` only checks magnitude
+against the ceiling, so it can't tell a freshly-picked small number
+from the low bits of a truncated wide one — and a truncated value's
+magnitude is effectively random with respect to the ceiling, meaning it
+can land below it purely by chance. A Type ID below the ceiling is
+*always* global regardless of any declared namespace, so a truncation-
+derived ID would silently lose its own namespace scoping some fraction
+of the time — the same wrong-match failure mode named earlier, this
+time triggered at ID-selection time rather than decode time. Made
+explicit in §3.5 rather than left inferrable from the "shrinking"
+phrasing, and demonstrated, not just asserted: a new test constructs a
+real 64-bit private-use-random ID truncated to its low 15 bits and
+confirms it resolves globally, not namespace-scoped, despite a
+namespace being declared.
+
 Prototyped in `prototype/src/header.js`'s `resolveLookupKey` and
 `prototype/test/header.test.js`: compound-key resolution differs by
 namespace, `1`–`32767` stays global unconditionally (both stdlib and
@@ -810,9 +828,11 @@ recognized global meaning for an unrecognized namespace-scoped pairing
 above the ceiling (the sharp edge, demonstrated rather than described),
 a naive decoder with zero namespace awareness still correctly resolves
 a common-vocabulary Type ID (the specific failure mode the floor
-extension exists to close), and TagDrop's own migration case end to end
-with real, verified byte counts: 11 bytes for a bare Record under an
-existing 64-bit global Type ID, 5 bytes for the same under a
+extension exists to close), a truncated-ID pick landing below the
+ceiling silently loses its namespace scoping (the ID-selection-time
+version of the same sharp edge), and TagDrop's own migration case end
+to end with real, verified byte counts: 11 bytes for a bare Record
+under an existing 64-bit global Type ID, 5 bytes for the same under a
 namespace-scoped small one at the current `32768` floor — unchanged
 from the old `1000` floor, confirming the free-upgrade cost claim
 against the actual encoder rather than just the size-class table.

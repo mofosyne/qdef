@@ -893,6 +893,30 @@ the result (everything at or above the ceiling is either namespace-
 scoped or expected to be private-use-random, never an ungoverned flat
 number) without needing a separate tier concept to explain it.
 
+**Fourth follow-on, same day: is a namespace-local Type ID actually a
+truncated version of a wider ID?** Asked directly, worth answering
+precisely because "shrinking four existing 64-bit Type IDs" (TagDrop's
+original want, above) reads ambiguously — it could mean "derive the
+small ID mathematically from the wide one" as much as "replace the wide
+one with an unrelated small one." It's the latter, deliberately: a
+namespace-local ID is freshly chosen, with no formula connecting it to
+any wider ID. This isn't a style preference — literal truncation would
+actively break the mechanism. `resolveLookupKey` only checks magnitude
+against the ceiling; it cannot distinguish a freshly-picked small number
+from the low bits of a truncated wide one. A truncated value's
+magnitude is effectively random with respect to the ceiling, so it can
+land below `32768` by chance — and a Type ID below the ceiling is
+*always* interpreted globally regardless of any declared namespace, so
+a truncation-derived ID would silently discard its own namespace
+scoping some fraction of the time, exactly the "wrong match, not a
+clean miss" failure mode named above, just triggered at ID-selection
+time instead of decode time. Made explicit in spec prose (§3.5) rather
+than left to be inferred from the "shrinking" framing, and demonstrated
+rather than just asserted: `prototype/test/header.test.js` constructs
+exactly this case (a value equal to a real 64-bit private-use-random ID
+truncated to its low 15 bits) and confirms it resolves globally, not
+namespace-scoped, despite a namespace being declared.
+
 **Fully additive.** An app's existing global private-use-random Type
 IDs keep working forever; adopting namespace-scoped small IDs for new
 content is an independent, opt-in choice that never invalidates or
