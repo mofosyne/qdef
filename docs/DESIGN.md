@@ -608,6 +608,44 @@ repetition case, not a general wire-bloat fix — worth a concrete same-
 code case actually hitting this before adding the complexity, same
 discipline as everything else deferred in this document.
 
+## App Route's decentralized form — a second use case surfaced late, not a second mechanism
+
+The domain-verified form of App Route (§4.4, FINDINGS.md #17) was built
+to answer one question: which installed application should this scanned
+code auto-launch. Working through GitHub issue #10 with TagDrop surfaced
+a second, genuinely different question that key `2` also turns out to
+answer well: *before* attempting reassembly at all, is this scanned code
+even plausibly part of the group the scanner thinks it's building —
+cheap, per-code triage against a misread or an unrelated nearby code,
+layered ahead of §4.1's `group_id` integrity check rather than
+duplicating it.
+
+These two questions have different stakes, and conflating them would
+have been the actual design error. Auto-launch dispatch is a
+security-relevant decision — get it wrong and the wrong application
+opens, so it needs the domain form's real, platform-verified ownership
+proof (Android App Links / iOS Universal Links). The pre-filter is not
+security-relevant — get it wrong and a decoder wastes a little effort
+before `group_id` catches the mismatch anyway, exactly the same outcome
+as not pre-filtering at all. That gap in stakes is *why* the
+decentralized form is allowed to reuse Type Hint's cheaper,
+unauthenticated pattern (a private-use-random uint at key `2`, an
+optional recoverable name at key `3`) instead of requiring domain
+verification for both — it would be a mistake to make the pre-filter pay
+the domain form's registration cost for a property it doesn't need, and
+an even bigger mistake to let the pre-filter's weaker guarantee quietly
+become load-bearing for dispatch.
+
+Concretely this is the same "magic byte" idea raised earlier in this
+project's history (see the ref-pointer/wire-bloat discussion above) in a
+narrower, already-motivated form: a real adopter (TagDrop) confirmed the
+actual plan is App Route on a first/metadata code only, plus exactly
+this kind of ID for fast misread rejection on the rest — not a
+hypothetical. Landed as one Record Type with two forms rather than a new
+Record Type, since the wire shape, skip behavior, and Type Hint's
+name-binding pattern are all identical; only the trust model and the
+etiquette guidance around repetition differ (§4.4).
+
 ## A confession (Parkinson's Law of Triviality, self-reported)
 
 C. Northcote Parkinson's original example: a committee approves a

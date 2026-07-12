@@ -82,6 +82,55 @@ test('an application with no interest in App Route skips the whole Record cleanl
   assert.equal(handled[0].typeId, 100);
 });
 
+// ---------------------------------------------------------------------
+// The decentralized form (spec update, GitHub issue #10 follow-up): key
+// 2 as a private-use-random uint instead of a domain string, with key 3
+// playing Type Hint's "Hint" role rather than a human-readable label.
+// Same Record Type, same known-keys set — the shape rule (§3.2) already
+// allows a uint at key 2, so this is a usage pattern, not a format
+// change. Unlike the domain form, this carries no anti-spoofing property
+// and exists only as a fast, per-code misread pre-filter ahead of
+// §4.1's group_id check — never a substitute for the domain form's real
+// auto-launch dispatch.
+// ---------------------------------------------------------------------
+
+test('App Route decentralized form (private-use uint + Hint name) round-trips', () => {
+  const container = core.encodeContainer([
+    {
+      typeId: wrappers.APP_ROUTE_TYPE,
+      fields: new Map([
+        [2, 12271745624591856273n],
+        [3, 'com.example/tagdrop-paper'],
+      ]),
+    },
+  ]);
+
+  const { records } = core.decodeContainer(container);
+  const rec = core.applyCriticality(records[0], wrappers.APP_ROUTE_KNOWN_KEYS);
+
+  assert.equal(rec.aborted, false);
+  assert.equal(rec.map.get(2), 12271745624591856273n);
+  assert.equal(rec.map.get(3), 'com.example/tagdrop-paper');
+});
+
+test('a scanner that only understands the domain form still skips a decentralized-form Record cleanly by Type ID alone (no crash on a uint where it might expect a string)', () => {
+  const container = core.encodeContainer([
+    {
+      typeId: wrappers.APP_ROUTE_TYPE,
+      fields: new Map([[2, 12271745624591856273n], [3, 'com.example/tagdrop-paper']]),
+    },
+  ]);
+
+  const { records } = core.decodeContainer(container);
+  const rec = core.applyCriticality(records[0], wrappers.APP_ROUTE_KNOWN_KEYS);
+
+  // Nothing in §4.4 requires key 2 to be a particular CBOR type at the
+  // routing layer — a decoder that only cares about Type ID 7 existing
+  // (e.g. "is *any* App Route present") never needs to inspect key 2's
+  // shape at all to skip cleanly.
+  assert.equal(rec.aborted, false);
+});
+
 test('encoding the same App Route fields twice (simulating repetition across a multi-code group) produces identical bytes', () => {
   // §4.4's etiquette: repeat verbatim on every code in a multi-code group,
   // so a scanner can decide from any single scanned code. That guarantee

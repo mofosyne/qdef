@@ -595,6 +595,25 @@ available. End-user outcome is the same either way; the mechanism a
 scanner implementation needs is not. Spec §4.4 corrected to describe both
 paths explicitly rather than implying one uniform cross-platform API.
 
+**Second update:** TagDrop's actual deployment plan surfaced a use for
+key `2` the domain form can't serve well — a fast, per-code check that a
+scanned code plausibly belongs to the group being reassembled, run
+*before* attempting reassembly, on codes that aren't the designated
+App-Route-carrying one. Chasing whether CBOR reference tags could cut
+cross-code repetition (see DESIGN.md's reference-tags entry) confirmed
+those can't reach across physically separate codes at all — no shared
+decode state exists between them — which ruled that out as a fix for
+this but clarified the actual shape of what would work: something
+cheap, present on every code, checkable with no shared state. §4.4 now
+documents App Route's key `2` as two forms: the domain string (auto-
+launch dispatch, real authorization) and a private-use-random uint
+reusing Type Hint's exact name-binding pattern (§3.1) for this pre-
+filter role — no anti-spoofing property, explicitly not a substitute for
+`group_id` (§4.1), which remains the actual integrity check. Prototyped
+in `prototype/test/app-route.test.js`: the uint form round-trips, and a
+decoder that only checks Type ID `7` presence skips it cleanly without
+needing to know key `2`'s shape in advance.
+
 ## Confirmed working as designed (no fix needed)
 
 - **Magic + version + CBOR-Sequence-of-Records** round-trips exactly as

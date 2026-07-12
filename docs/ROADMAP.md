@@ -33,7 +33,8 @@ output), 31 Node tests and 10 Rust tests passing.
 - **App Route** (letting a generic scanner offer to launch a specific
   handling application, comparable to NFC's Android Application Record,
   using a domain-verified identifier rather than an unverifiable string
-  claim)
+  claim — plus a second, decentralized form for scanners that just need
+  a fast, no-authority misread pre-filter ahead of reassembly)
 
 Every one of these round-trips in the Node prototype; none is spec-text
 only.
