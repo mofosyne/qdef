@@ -819,12 +819,17 @@ repetition across a multi-code group:
   treat that as accepting no pre-filtering on the rest of the group, not
   as an oversight-free equivalent to repeating it.
 
-**Scope note.** Using App Route this way is a genuine widening of what
-counts as appropriate use of a QDEF stdlib mechanism for cross-
-implementer coordination — it doesn't touch the private-use Type ID
-tier's own "closed/internal" scoping (§9), since App Route decouples
-routing from payload Type IDs entirely, but it's still new coordination
-surface worth naming as deliberate rather than assumed.
+**Scope note.** App Route is QDEF's dedicated mechanism for
+cross-implementer routing — not a special case carved out of some
+narrower private-use tier scope. The private-use Type ID tier (§9) was
+never restricted to closed/internal use in the first place (DESIGN.md's
+"Registry governance" corrects an earlier note that implied otherwise);
+self-allocation means no registry gatekeeps *minting* an ID, not that
+the ID stays unpublished or unrecognized. What App Route adds on top is
+a *trust model* for routing specifically — domain verification for the
+form that drives auto-launch, Type Hint's existing name-binding pattern
+for the form that doesn't — decoupled entirely from payload Type IDs so
+routing identity and payload shape can evolve independently.
 
 ## 5. Record Type Registry (informative examples)
 

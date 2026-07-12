@@ -36,16 +36,26 @@ policy on:
     the spec's §5 examples (`100`, `105`) already sit here informally.
   - `1000`–`0xFFFF`: first-come-first-served — registered, but no review
     gate beyond "not already taken."
-  - `0x10000`+: **private-use, via a large random value, not a
-    registry.** This tier needs no allocation authority at all: because
-    Type IDs are CBOR uints with no fixed width, an implementer who picks
-    a sufficiently large (e.g. 32- or 64-bit) *random* number gets
-    collision avoidance from the sheer size of the number space, the same
-    way a UUID does — not from anyone checking a list. This is the
-    correct answer for closed/internal Record Types that will never be
-    published or need to interoperate with an unrelated implementer, and
-    it's only viable because the wire format never fixed Type IDs to a
-    small byte-width field.
+  - `0x10000`+: **decentralized — self-allocated via a large random
+    value, not a registry.** This tier needs no allocation authority at
+    all: because Type IDs are CBOR uints with no fixed width, an
+    implementer who picks a sufficiently large (e.g. 32- or 64-bit)
+    *random* number gets collision avoidance from the sheer size of the
+    number space, the same way a UUID does — not from anyone checking a
+    list. Call it "private-use" if the CBOR/IANA-registry parallel this
+    name draws on is useful (RFC 8949 §9.2's own private-use ranges), but
+    don't read "private" as "closed." Self-allocation is about who has to
+    grant permission to mint an ID — nobody — not about whether the ID
+    stays undisclosed or single-party: Unicode's Private Use Areas and
+    Bluetooth's private/random device addresses are both self-assigned
+    the same way, and neither implies the result is never published or
+    never recognized by an unrelated party. What actually distinguishes
+    this tier from `100`–`999` isn't visibility, it's *authority*: no
+    registry vouches for what a self-allocated ID means, so any
+    cross-implementer recognition has to come from somewhere else — Type
+    Hint's hash-derivation (§3.1) or App Route (§4.4), not a lookup
+    table. It's only viable at all because the wire format never fixed
+    Type IDs to a small byte-width field.
   Exact boundaries remain a policy decision for whoever ends up running
   the registry, not a wire-format one.
 - **Even/odd for governance tier (considered, rejected):** reuse the
@@ -90,17 +100,23 @@ Two things worth stating plainly if this gets used, not left implied:
   collision at 32 bits — 32-bit alone is not safe at any serious
   ecosystem scale.
 
-**Scope note.** Using this convention (or any private-use Type ID) to
-support cross-implementer coordination, not just one implementer's own
-internal organization, is a genuine widening beyond the tier's current
-scoping ("closed/internal Record Types that will never be published or
-need to interoperate with an unrelated implementer," above) — spec §4.4's
-App Route Record is the recommended way to get cross-implementer routing
-without that widening at all, since it decouples routing identity from
-payload Type IDs entirely. If a structured private-use ID's prefix is
-ever used as an implicit cross-implementer signal anyway, redundant with
-App Route, that widening should be a deliberate, explicit choice, not a
-quiet stretch of language written for a narrower case.
+**Scope note, corrected.** An earlier version of this note warned that
+using a private-use Type ID for cross-implementer coordination was a
+"widening" beyond the tier's scope, on the premise that the tier meant
+closed/internal-only use. That premise was wrong (corrected above) —
+self-allocation was never a promise to stay undiscovered, and Type
+Hint's whole reason to exist (§3.1) is letting an unrelated implementer
+recognize a self-allocated ID. So there's no widening to guard against
+there.
+
+The caution actually worth keeping is narrower and still real: if a
+structured private-use ID's prefix starts getting treated as an
+*implicit* cross-implementer routing signal — "anything sharing my
+prefix is safe to auto-launch for" — that's quietly reinventing App
+Route (§4.4) without App Route's domain-verified trust model behind it.
+Use App Route explicitly when routing is the actual goal; don't let a
+Type-ID-prefix convention become an accidental second routing channel
+nobody decided to build.
 
 ## CBOR tag-number collision (resolved — the tag route was removed)
 

@@ -614,6 +614,42 @@ in `prototype/test/app-route.test.js`: the uint form round-trips, and a
 decoder that only checks Type ID `7` presence skips it cleanly without
 needing to know key `2`'s shape in advance.
 
+### 18. "Private-use" was being misread as "closed/internal" — the tier description was wrong, not just imprecise
+
+While drafting a reply to TagDrop about App Route's decentralized form,
+the spec text (DESIGN.md's "Registry governance" and both Scope notes
+this fed) described the `0x10000`+ private-use-random Type ID tier as
+"the correct answer for closed/internal Record Types that will never be
+published or need to interoperate with an unrelated implementer."
+Challenged directly: that's not what "decentralized" means. Distributing
+who's allowed to *mint* an ID (no registry gatekeeping) is a different
+axis from restricting who's allowed to *see or use* it — and the spec's
+own mechanisms already contradicted the description. Type Hint's whole
+purpose (§3.1) is letting an unrelated implementer recognize a
+self-allocated ID; App Route's decentralized form (finding #17's
+"Second update," above) is a second, freshly-built mechanism doing
+exactly that. The tier's own description was the outlier, not those
+mechanisms.
+
+The parallel offered — Bluetooth's private/random device addresses,
+self-assigned without any central authority but never meant to imply
+"nobody else will ever see or connect to this device" — is the same
+distinction Unicode's Private Use Areas already demonstrate (self-
+allocated codepoints that shipped in real, shared icon fonts and
+pre-standardization emoji long before any registry blessed them). Same
+shape of correction as findings #15/#16: the restriction was written for
+a narrower case than the one actually being served, caught by an outside
+challenge to specific wording rather than an accident of implementation.
+
+Corrected in DESIGN.md's "Registry governance" tier description and both
+Scope notes (DESIGN.md's private-use-tier one and spec §4.4's App Route
+one) — the tier is now described as decentralized-by-authority, not
+scoped-by-visibility, and the "genuine widening" framing both Scope notes
+built on top of the wrong premise is removed rather than patched, since
+there was no widening to warn about once the premise is fixed. Nothing
+about the wire format, the Node prototype, or any Rust code needed to
+change — this was a documentation-only error, never a shipped behavior.
+
 ## Confirmed working as designed (no fix needed)
 
 - **Magic + version + CBOR-Sequence-of-Records** round-trips exactly as
