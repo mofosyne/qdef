@@ -861,6 +861,53 @@ hash-check exercised for the first time, mirroring Type Hint's own
 verify/degrade/not-applicable three-way split exactly). See
 FINDINGS.md #21.
 
+## Pinning the algorithm only solved half the naming problem — the input still has to be collision-resistant
+
+Fixing the hash-derivation algorithm (above) answered "how do two
+implementations compute the same thing." It didn't answer a different,
+equally real question, asked directly right after: does the spec tell
+anyone how to *choose the name* so two unrelated implementations don't
+land on the same thing by accident? It didn't, anywhere.
+
+This isn't a minor omission — it's the difference between hash-
+derivation actually delivering the collision-safety it claims and
+merely looking like it does. `ID = truncate(SHA-256(name), N)` is only
+as collision-resistant as `name` is diverse. Two unrelated projects
+independently naming their config record `"config"` derive the *exact
+same* ID — not a low-probability birthday-bound collision, a
+certain one, because the function is deterministic and "short sensible
+English words for a common concept" is a small, heavily-overlapping
+space across unrelated authors. A pure random draw doesn't have this
+failure mode at all; a bad hash *input* reintroduces it through the
+back door of a mechanism that was supposed to remove exactly this kind
+of ambiguity.
+
+**The fix is the same one every other namespaced-identifier system
+already uses, not a new invention:** qualify the name by something the
+namer actually, verifiably controls — reverse-domain notation, the
+Java-package/XML-namespace/MIME-subtype convention — rather than a bare
+word. This isn't stylistic. A domain two unrelated parties could both
+plausibly register is already vanishingly unlikely by DNS's own
+allocation guarantees, which is precisely what makes the hash output
+behave like an actual random draw again, restoring the birthday-bound
+math this project already leans on elsewhere for private-use tiers.
+
+**Scoped correctly, not applied everywhere uniformly:** this only
+matters where nothing else already protects the value — a namespace's
+own Hint name (§3.5), and a standalone (non-namespaced) private-use-
+random Type ID's Hint name. A Record-Type-local Hint name used *inside*
+an already-declared namespace doesn't need qualifying at all, since
+collision-safety there already comes from the namespace itself, not
+from the local name — piling a second layer of protection where one
+already exists would just be needless verbosity, not correctness.
+
+Illustrated with real hash output, not just argued in prose:
+`prototype/test/type-hint.test.js` proves two unrelated "projects"
+naming the same concept `"config"` derive an *identical* ID (the
+certain-collision hazard, demonstrated), and that qualifying each by a
+domain they actually control resolves it (`"com.example-a/config"` vs
+`"com.example-b/config"` — different IDs).
+
 ## A confession (Parkinson's Law of Triviality, self-reported)
 
 C. Northcote Parkinson's original example: a committee approves a

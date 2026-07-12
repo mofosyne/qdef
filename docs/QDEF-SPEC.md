@@ -264,6 +264,35 @@ the string) was chosen for the same reason `group_id` and CoAP/COSE
 registry reuse elsewhere in this spec favor already-ubiquitous,
 already-implemented primitives over inventing new ones.
 
+**Pinning the algorithm only solves half the problem — the input `name`
+still has to be collision-resistant itself, or the derived ID inherits
+whatever collision risk the name has.** SHA-256 is a good hash, but a
+good hash of a bad input is still a bad input: two unrelated
+implementers who each pick a short, generic word for a similar concept
+("config", "settings") derive the *exact same* ID — a certain collision,
+not a probabilistic one, since the derivation is deterministic. This is
+worse than skipping hash-derivation and drawing a Type ID purely at
+random, which at least gets real collision-safety from the size of the
+draw space.
+
+**A name feeding hash-derivation SHOULD be qualified by something the
+namer actually, verifiably controls** — a reverse-domain string
+(`"com.example.tagdrop"`) is the recommended convention, the same one
+Java packages, XML namespaces, and MIME subtypes already use for
+exactly this reason. It's not a style preference: a domain two
+unrelated parties could plausibly both register is already vanishingly
+unlikely by construction (DNS is itself a collision-free allocation
+system), which is what actually restores the "behaves like a random
+draw" property the whole mechanism depends on — an unqualified word
+does not have that property no matter how good the hash function is.
+
+This matters most exactly where nothing else already protects the
+value: a *namespace's* own Hint name (§3.5's key `5`) and a *standalone*
+private-use-random Type ID's Hint name (no namespace declared at all).
+A Record-Type-local Hint name used *within* an already-declared
+namespace doesn't need this — collision-safety there already comes from
+the namespace itself (§3.5), so a bare, unqualified local name is fine.
+
 No version marker is needed to record whether a given ID used this
 convention: verification is opportunistic — if the hash matches, the
 binding is confirmed; if it doesn't, `key 1` simply degrades to a plain,
@@ -546,6 +575,14 @@ width definition — reused exactly, not a second hash convention that
 happens to look similar). Prototyped in `prototype/src/header.js`'s
 `verifyNamespaceHint`, which calls the same `typeHint.js` derivation
 rather than reimplementing it.
+
+**The namespace's Hint name is exactly the case §3.1's naming guidance
+calls out as needing qualification, not the case that's exempt from
+it.** Nothing outside the namespace itself protects a hash-derived
+namespace value from collision — unlike a Record-Type-local Hint name
+used *inside* an already-declared namespace, which doesn't need
+qualifying. A reverse-domain string (`"com.example.tagdrop"`, not bare
+`"tagdrop"`) is the recommended form here specifically.
 
 **No dedicated "version" field, and Type `0` does not get "versioned" by
 minting new Type IDs for future header revisions.** Both were considered

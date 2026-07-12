@@ -800,6 +800,44 @@ the first time, mirroring Type Hint's own three-way verify/degrade/
 not-applicable split). See DESIGN.md's matching entry for the full
 reasoning behind each fix.
 
+### 22. Pinning the hash algorithm didn't fix the naming problem — the input needs its own collision-resistance guidance
+
+Asked directly, right after #21 landed: does the spec tell anyone how
+to *choose* the name fed into hash-derivation, so two unrelated
+implementations don't collide by accident? It didn't, anywhere — only
+"e.g. a reverse-domain string" appeared once, as an illustrative
+example, never as guidance.
+
+This is a real gap, not a nice-to-have: `ID = truncate(SHA-256(name),
+N)` is only as collision-resistant as `name` is diverse. Two unrelated
+projects independently naming their config record `"config"` derive the
+*identical* ID — a certain collision, not a probabilistic one, since
+the function is deterministic and short, sensible English words for a
+common concept are a small space heavily shared across unrelated
+authors. Demonstrated directly with real hash output rather than argued
+abstractly: `deriveHashId('config', 8)` computed twice, simulating two
+independent projects, produces the same value both times.
+
+Fixed by recommending the same convention every other namespaced-
+identifier system already uses — reverse-domain qualification
+(`"com.example.tagdrop"`, not bare `"tagdrop"`) — with the reasoning
+spelled out for why it actually works (a domain two unrelated parties
+could both plausibly register is already vanishingly unlikely by DNS's
+own allocation guarantees, which is what restores the "behaves like a
+random draw" property hash-derivation depends on) rather than presented
+as unmotivated style guidance.
+
+Scoped precisely, not applied blanket: only a namespace's own Hint name
+(§3.5) and a standalone (non-namespaced) private-use-random Type ID's
+Hint name actually need this — a Record-Type-local Hint name used
+*inside* an already-declared namespace is already protected by the
+namespace itself and doesn't need qualifying.
+
+Prototyped in `prototype/test/type-hint.test.js`: two unrelated
+"projects" naming the same concept `"config"` derive an identical ID
+(the hazard, demonstrated), and the same two projects qualifying by a
+domain they each control do not collide.
+
 ## Confirmed working as designed (no fix needed)
 
 - **Magic + version + CBOR-Sequence-of-Records** round-trips exactly as

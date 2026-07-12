@@ -135,3 +135,30 @@ test('a narrow (4-byte) hash-derived ID is not wrongly verified against the wide
   assert.equal(verifyTypeHint(narrowId, name), 'verified');
   assert.equal(verifyTypeHint(wideId, name), 'verified');
 });
+
+// ---------------------------------------------------------------------
+// §3.1's naming guidance illustrated, not just asserted: pinning the
+// hash algorithm only solves half the problem. A hash of a generic,
+// unqualified name has no more collision-safety than the name itself --
+// two unrelated parties picking the same short word derive the exact
+// same ID, guaranteed, not probabilistically. Qualifying by something
+// verifiably unique (a domain) restores the "behaves like a random
+// draw" property the mechanism actually depends on.
+// ---------------------------------------------------------------------
+
+test('two unrelated projects choosing the same bare, unqualified name derive an identical (colliding) ID -- the exact hazard the naming guidance exists to prevent', () => {
+  // Two totally unrelated hypothetical projects, both picking "config"
+  // as a sensible short name for their own config record, with no
+  // coordination between them.
+  const projectAId = deriveHashId('config', 8);
+  const projectBId = deriveHashId('config', 8);
+
+  assert.equal(projectAId, projectBId); // a certain collision, not a probabilistic one
+});
+
+test('the same two projects, qualifying by a domain they each actually control, do not collide', () => {
+  const projectAId = deriveHashId('com.example-a/config', 8);
+  const projectBId = deriveHashId('com.example-b/config', 8);
+
+  assert.notEqual(projectAId, projectBId);
+});
