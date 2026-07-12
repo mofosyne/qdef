@@ -581,6 +581,20 @@ two independent encodes of the same fields produce byte-identical
 output, exercising §3.4's canonical-encoding guarantee rather than
 assuming it holds for a new Record Type too.
 
+**Update:** the original spec text described OS-level dispatch as
+working "the same way Android already resolves AAR/Intent-filter
+matches" — asked directly whether that actually holds for iOS too, not
+just Android, and it doesn't uniformly. Checked directly against Apple's
+own Universal Links documentation: iOS has the same domain-verification
+*trust model* (`apple-app-site-association`, functionally equivalent to
+Android's `assetlinks.json`), but no equivalent *query* API — Android
+exposes an explicit "which installed app claims this" lookup, while iOS
+dispatch happens as a side effect of a scanner constructing and opening
+an actual `https://` URL from the domain, with no separate lookup step
+available. End-user outcome is the same either way; the mechanism a
+scanner implementation needs is not. Spec §4.4 corrected to describe both
+paths explicitly rather than implying one uniform cross-platform API.
+
 ## Confirmed working as designed (no fix needed)
 
 - **Magic + version + CBOR-Sequence-of-Records** round-trips exactly as

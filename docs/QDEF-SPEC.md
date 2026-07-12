@@ -720,13 +720,39 @@ string** — deliberately narrower than it could be. A plain string claim
 (`"com.example.official"`) has no protection against spoofing: anything
 can claim to be any string. A domain is verifiable using the mechanism
 Android App Links and iOS Universal Links already deploy (a
-`.well-known` file hosted on the domain the claimant controls) — QDEF
-inherits that existing, proven trust machinery instead of inventing a
-new one. Resolving a domain to an actual launch target is intentionally
-left to local, OS-level dispatch (the same way Android already resolves
-AAR/Intent-filter matches against what's actually installed) — this
-needs no centralized QDEF-level registry or governance body to function
-at all.
+`.well-known` file — `assetlinks.json` on Android, `apple-app-site-
+association` on iOS — hosted on the domain the claimant controls) — QDEF
+inherits that existing, proven trust machinery on both platforms instead
+of inventing a new one.
+
+Resolving a domain to an actual launch target is intentionally left to
+local, OS-level dispatch — no centralized QDEF-level registry or
+governance body is needed for it to function at all — but *how* that
+resolution is triggered is platform-specific, not a single uniform
+mechanism, and a scanner implementer needs to know which path they're
+using:
+
+- **Android** exposes an explicit query (`PackageManager` Intent-filter
+  resolution) a scanner can call to ask "which installed app claims
+  this domain" before deciding what to do — closer to how AAR dispatch
+  already works.
+- **iOS** exposes no equivalent query. A scanner instead constructs an
+  actual `https://` URL from the domain (e.g. `https://example.com/`)
+  and opens it (`openURL:`); iOS itself checks the domain's `apple-app-
+  site-association` registration as a side effect of opening that URL,
+  handing it to the registered app or falling through to Safari. The
+  dispatch decision happens *inside* opening the URL, not as a separate
+  lookup step.
+
+Both still satisfy "matched only against what's actually installed
+on-device, no QDEF-level registry" — the end-user outcome is the same on
+either platform — but a scanner implementation needs the platform-
+specific mechanism, not a shared cross-platform API, since none exists.
+
+Key `2` carries the bare domain, not a full URL — the iOS path above
+constructs `https://<domain>/` (root) from it when actually opening a
+URL; an App Route Record isn't the place for path-level routing, which
+belongs to the payload the application itself defines once launched.
 
 **Deliberately decoupled from payload-shape Type IDs, not folded into
 them.** An open, shared payload shape should be able to stay
