@@ -697,6 +697,65 @@ no interest in Media Payload skips the whole Record cleanly by Type ID
 alone — the same "unaware decoder pays nothing" guarantee every other
 stdlib Record Type gets, not just an aspiration.
 
+### 4.4 App Route (optional)
+
+A plain stdlib Record Type — not a wrapper — for letting a generic
+QDEF-aware scanner offer to launch a specific handling application,
+comparable to NFC's Android Application Record (AAR) or platform
+Intent-filter dispatch, without the scanner needing any
+implementer-specific knowledge baked in ([GitHub issue
+#10](https://github.com/mofosyne/qdef/issues/10)):
+
+```
+Type 7: {                          // App Route (stdlib)
+  0: 7,
+  2: "example.com",                // CRITICAL: a domain the routing
+                                    //   target has verified control over
+  3: "Open in Example App"         // OPTIONAL: human-readable label
+}
+```
+
+**Key `2` is a domain, not a package name or bare reverse-domain
+string** — deliberately narrower than it could be. A plain string claim
+(`"com.example.official"`) has no protection against spoofing: anything
+can claim to be any string. A domain is verifiable using the mechanism
+Android App Links and iOS Universal Links already deploy (a
+`.well-known` file hosted on the domain the claimant controls) — QDEF
+inherits that existing, proven trust machinery instead of inventing a
+new one. Resolving a domain to an actual launch target is intentionally
+left to local, OS-level dispatch (the same way Android already resolves
+AAR/Intent-filter matches against what's actually installed) — this
+needs no centralized QDEF-level registry or governance body to function
+at all.
+
+**Deliberately decoupled from payload-shape Type IDs, not folded into
+them.** An open, shared payload shape should be able to stay
+interoperable across multiple independent handling applications;
+routing identity is a separate concern layered alongside the payload
+via a sibling Record, not encoded into the payload's own Type ID. This
+also means adopting App Route never requires restructuring an
+application's existing Type IDs.
+
+**Not positionally special.** QDEF's dispatch already routes by Type ID
+at key `0` regardless of position (§3.1), so this Record doesn't need a
+fixed position in the Sequence — a decoder finds it the same way it
+finds any recognized Record Type.
+
+**Encoder etiquette (SHOULD, not required):** keep this Record small and
+always plain — never Compress- or Split-wrapped — and, in a multi-code
+group, repeat it verbatim on every code. The same reasoning as Type
+Hint's own etiquette guidance (§3.1) applies here for a different
+purpose: a scanner should be able to make a routing decision from any
+single scanned code, without needing to reassemble the full payload
+first.
+
+**Scope note.** Using App Route this way is a genuine widening of what
+counts as appropriate use of a QDEF stdlib mechanism for cross-
+implementer coordination — it doesn't touch the private-use Type ID
+tier's own "closed/internal" scoping (§9), since App Route decouples
+routing from payload Type IDs entirely, but it's still new coordination
+surface worth naming as deliberate rather than assumed.
+
 ## 5. Record Type Registry (informative examples)
 
 ### Type `100`: Wi-Fi Provisioning

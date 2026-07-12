@@ -58,6 +58,50 @@ policy on:
   at a key or a Type ID — and it halves the usable ID space for no
   benefit a tiered range doesn't already provide more cheaply.
 
+**Guidance, not a requirement: structured composition within the
+private-use tier.** [GitHub issue #10](https://github.com/mofosyne/qdef/issues/10)
+raised this after building against the tier as recommended: an
+implementer defining several related Record Types MAY compose a
+private-use Type ID as a random prefix plus a locally self-assigned
+suffix (`TypeID = (prefix << suffix_bits) | suffix`), rather than
+drawing an independent CSPRNG value for each one. Costs zero additional
+wire bytes either way — the field is the same width regardless of how
+its bits were chosen — and reduces the number of independent random
+draws a single implementer needs to make from one per Record Type to
+one per implementer.
+
+Two things worth stating plainly if this gets used, not left implied:
+
+- **Skew the split toward the prefix, not evenly.** Suffix demand for a
+  single implementer is typically small (single digits to low tens of
+  distinct Record Types), so the suffix should get the minimum obviously
+  sufficient width, not a 50/50 split — every bit shifted to the prefix
+  meaningfully improves the number that actually matters.
+- **Effective collision safety is governed by the prefix width alone,
+  not the full field width.** Suffix values will cluster around small
+  sequential integers (`0`, `1`, `2`...) in practice, since that's what
+  any implementer will naturally reach for. Conditional on two
+  implementers' prefixes colliding, a full-value collision on a low
+  suffix value becomes near-certain rather than merely possible — so a
+  56-bit prefix gives *56-bit-class* safety, not 64-bit-class, and
+  narrower prefixes should be sized off real numbers, not intuition: at
+  10 million independent draws, birthday-bound collision probability is
+  ~2.7×10⁻⁶ at 64 bits, ~6.9×10⁻⁴ at 56 bits, and already past 1 expected
+  collision at 32 bits — 32-bit alone is not safe at any serious
+  ecosystem scale.
+
+**Scope note.** Using this convention (or any private-use Type ID) to
+support cross-implementer coordination, not just one implementer's own
+internal organization, is a genuine widening beyond the tier's current
+scoping ("closed/internal Record Types that will never be published or
+need to interoperate with an unrelated implementer," above) — spec §4.4's
+App Route Record is the recommended way to get cross-implementer routing
+without that widening at all, since it decouples routing identity from
+payload Type IDs entirely. If a structured private-use ID's prefix is
+ever used as an implicit cross-implementer signal anyway, redundant with
+App Route, that widening should be a deliberate, explicit choice, not a
+quiet stretch of language written for a narrower case.
+
 ## CBOR tag-number collision (resolved — the tag route was removed)
 
 An earlier draft wrapped every Record Map in a CBOR semantic tag equal to
@@ -487,6 +531,40 @@ reject a non-conformant Wrapper nesting order (FINDINGS.md #7); spec
 §4.1's text has been corrected accordingly. This entry is resolved and
 kept here only as a record of the change from the prior draft's "leaning
 toward" language.
+
+## Type ID inheritance within a Sequence — backlog, needs a version bump
+
+Raised alongside [GitHub issue #10](https://github.com/mofosyne/qdef/issues/10):
+allow a Record's Type ID (key `0`) to be omitted, meaning "same Type ID
+as the immediately preceding Record in this CBOR Sequence" — a wire-
+efficiency optimization for adjacent same-type Records with a wide
+private-use Type ID (the repeated calendar-event case in
+`IMPLEMENTATION-NOTES.md` is exactly this shape).
+
+Not something this draft can add as a plain additive extension the way
+everything else in this document was. Spec §3.1 already defines a
+missing key `0` as a MUST-abort condition — redefining that meaning is a
+behavior change to already-shipped semantics, not an addition, so two
+decoder versions would interpret identical bytes differently depending
+on which one they implement. That's exactly the class of change spec §2
+reserves the Version byte for ("a future version is free to change...
+the routing rules... themselves"), not something to introduce via the
+odd-key extensibility path the way Type Hint, Media Payload, and the
+tag-24 generalization all were.
+
+Scope, resolved as a side effect of a separate discussion (checking
+issue #10's cross-code repeated-Type-ID cost against this idea): "the
+immediately preceding Record" can only ever mean within one Sequence —
+there's no cross-code Record continuity in the format at all, since each
+physical code is parsed as its own independent container from a blank
+slate. This means the mechanism would help intra-Sequence repetition
+(the calendar-events case) but not cross-code repetition (issue #10's
+motivating Preview cost) — worth being clear these are two different
+problems with two different possible fixes, not one problem with two
+names.
+
+Backlog, not urgent: tracked for whenever a version bump happens for
+some other reason, not a reason to force one on its own.
 
 ## A confession (Parkinson's Law of Triviality, self-reported)
 

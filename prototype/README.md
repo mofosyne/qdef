@@ -16,9 +16,10 @@ found.
 - `src/wrappers.js` — the optional standard library's Wrapper Records:
   Split (with XOR single-fragment parity), Compress, Encrypt, plus a
   generic recursive `resolveStack` resolver (spec §4.1). Also carries the
-  non-wrapper stdlib Record Types' constants: Fallback Hint (§4.2) and
-  Media Payload (§4.3), plus the COSE (RFC 9053/9054) and CoAP Content-
-  Format (RFC 7252/9876) IDs those two borrow rather than invent.
+  non-wrapper stdlib Record Types' constants: Fallback Hint (§4.2), Media
+  Payload (§4.3), and App Route (§4.4), plus the COSE (RFC 9053/9054) and
+  CoAP Content-Format (RFC 7252/9876) IDs the latter two borrow rather
+  than invent.
 - `src/recordTypes.js` — the small set of application Record Type schemas
   used by the tests (Wi-Fi §5, a generic third-party-payload registration
   §6, a secret-key backup §8).
@@ -60,6 +61,13 @@ found.
   bignum tag, locking in a real bug found checking against a real adopter
   (`cbor.encode()`'s BigInt handling — see FINDINGS.md #14) rather than
   leaving it as an unverified side effect of an unrelated change.
+- `test/app-route.test.js` — App Route (Type 7, spec §4.4): round-trips
+  with and without the optional label, isn't positionally special, skips
+  cleanly for an application with no interest in it, and — since it's
+  meant to repeat verbatim across every code in a multi-code group —
+  proves two independent encodes of the same fields produce byte-
+  identical output (relying on §3.4's canonical encoding, not assuming
+  it holds).
 
 ## Running
 

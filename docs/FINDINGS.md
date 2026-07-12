@@ -534,6 +534,53 @@ rewritten to describe the general rule rather than the tag-`24`-specific
 case. `clippy`, `fmt`, and the `thumbv6m-none-eabi` embedded build all
 still pass; 15 Rust tests (2 new) and 35 Node tests all green.
 
+### 17. App Route (Type 7) — the AAR-equivalent deferred earlier in this project, built once a real adopter actually needed it
+
+Building TagDrop's Paper port on QDEF surfaced three related questions
+about the private-use Type ID tier, filed as [GitHub issue
+#10](https://github.com/mofosyne/qdef/issues/10). One of them — should a
+generic scanner be able to route a scanned code to a specific handling
+application, the way NFC's Android Application Record does — had already
+come up once earlier in this project's history and was deliberately left
+unbuilt: "figure out later... as long as our QDEF system is flexible to
+assign a Type ID to it later." This is that later.
+
+Landed as spec §4.4, a plain stdlib Record (Type `7`, not a wrapper):
+
+- **Domain-verified, not a bare string claim.** A package name or
+  reverse-domain string can't prove anything — any app can claim to be
+  `com.example.official`. A domain, verified the way Android App Links
+  and iOS Universal Links already require (a `.well-known` file on a
+  domain the claimant controls), inherits proven, already-deployed
+  platform trust machinery instead of QDEF inventing a new one — the
+  same "borrow, don't invent" instinct behind the COSE and CoAP registry
+  choices elsewhere in this document.
+- **Decoupled from payload-shape Type IDs, not folded into them.**
+  TagDrop's own first draft of this idea (structuring a private-use Type
+  ID as an app-id prefix plus a self-allocated subtype) was reconsidered
+  and set aside in favor of this decoupled sibling-Record approach — it
+  keeps an open, shared payload shape interoperable across independent
+  handling applications, and needs no adopter to restructure their
+  existing Type IDs to get auto-launch support. The structured-Type-ID
+  idea wasn't wasted, though: kept as general private-use tier guidance
+  (DESIGN.md's "Registry governance" entry) for implementers who want to
+  reduce CSPRNG draws across their own several Record Types, independent
+  of routing.
+- **Dispatch stays local and OS-level**, matched only against what's
+  actually installed on-device — no QDEF-level or central registry
+  needed for routing to function at all, the same reasoning that already
+  keeps registry governance (still open, above) from blocking anyone
+  using the private-use tier today.
+
+Prototyped in `prototype/test/app-route.test.js`: round-trips with and
+without the optional label, isn't positionally special (routes
+identically whether first or last in the Sequence), skips cleanly for an
+application with no interest in it, and — since §4.4 recommends
+repeating it verbatim across every code in a multi-code group — proves
+two independent encodes of the same fields produce byte-identical
+output, exercising §3.4's canonical-encoding guarantee rather than
+assuming it holds for a new Record Type too.
+
 ## Confirmed working as designed (no fix needed)
 
 - **Magic + version + CBOR-Sequence-of-Records** round-trips exactly as
