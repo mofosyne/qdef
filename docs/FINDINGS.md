@@ -595,11 +595,12 @@ available. End-user outcome is the same either way; the mechanism a
 scanner implementation needs is not. Spec §4.4 corrected to describe both
 paths explicitly rather than implying one uniform cross-platform API.
 
-**Second update:** TagDrop's actual deployment plan surfaced a use for
-key `2` the domain form can't serve well — a fast, per-code check that a
-scanned code plausibly belongs to the group being reassembled, run
-*before* attempting reassembly, on codes that aren't the designated
-App-Route-carrying one. Chasing whether CBOR reference tags could cut
+**Second update:** A scenario raised during design discussion surfaced a
+use for key `2` the domain form can't serve well — a fast, per-code
+check that a scanned code plausibly belongs to the group being
+reassembled, run *before* attempting reassembly, independent of which
+code(s) in the group happen to carry a full domain-form Record. Chasing
+whether CBOR reference tags could cut
 cross-code repetition (see DESIGN.md's reference-tags entry) confirmed
 those can't reach across physically separate codes at all — no shared
 decode state exists between them — which ruled that out as a fix for

@@ -653,11 +653,9 @@ an even bigger mistake to let the pre-filter's weaker guarantee quietly
 become load-bearing for dispatch.
 
 Concretely this is the same "magic byte" idea raised earlier in this
-project's history (see the ref-pointer/wire-bloat discussion above) in a
-narrower, already-motivated form: a real adopter (TagDrop) confirmed the
-actual plan is App Route on a first/metadata code only, plus exactly
-this kind of ID for fast misread rejection on the rest — not a
-hypothetical. Landed as one Record Type with two forms rather than a new
+project's history (see the ref-pointer/wire-bloat discussion above),
+given a specific pre-filter role instead of staying an abstract
+possibility. Landed as one Record Type with two forms rather than a new
 Record Type, since the wire shape, skip behavior, and Type Hint's
 name-binding pattern are all identical; only the trust model and the
 etiquette guidance around repetition differ (§4.4).
