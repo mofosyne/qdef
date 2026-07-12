@@ -19,7 +19,7 @@ test('a tagged item is malformed input, not an alternate route to unwrap', () =>
   // key 0 is the sole routing mechanism.
   const map = new Map([[0, 100], [2, 'SSID'], [4, 'pass'], [6, 2]]);
   const tagged = cbor.encode(new cbor.Tagged(105, map));
-  const container = Buffer.concat([core.MAGIC, Buffer.from([core.VERSION]), tagged]);
+  const container = Buffer.concat([core.MAGIC, tagged]);
 
   assert.throws(() => core.decodeContainer(container), /Record is not a CBOR map/);
 });
@@ -27,7 +27,7 @@ test('a tagged item is malformed input, not an alternate route to unwrap', () =>
 test('a record missing key 0 entirely aborts (cannot be routed by any parser)', () => {
   const map = new Map([[2, 'SSID']]); // no key 0
   const bytes = cbor.encode(map);
-  const container = Buffer.concat([core.MAGIC, Buffer.from([core.VERSION]), bytes]);
+  const container = Buffer.concat([core.MAGIC, bytes]);
 
   const { records } = core.decodeContainer(container);
   assert.equal(records[0].aborted, true);
@@ -35,10 +35,10 @@ test('a record missing key 0 entirely aborts (cannot be routed by any parser)', 
 });
 
 // ---------------------------------------------------------------------
-// NDEF path (§2): no magic/version prefix, just the bare CBOR Sequence,
+// NDEF path (§2): no magic prefix, just the bare CBOR Sequence,
 // because NDEF's own MIME type (application/vnd.qdef) already identifies it.
 // ---------------------------------------------------------------------
-test('NDEF path: a bare CBOR Sequence (no magic/version) still routes via decodeSequence', () => {
+test('NDEF path: a bare CBOR Sequence (no magic) still routes via decodeSequence', () => {
   const bareSeq = cbor.encode(new Map([[0, 100], [2, 'SSID'], [4, 'pass'], [6, 2]]));
   // Sanity: this must NOT be parseable as a magic-prefixed container.
   assert.throws(() => core.decodeContainer(bareSeq), /bad magic/);
