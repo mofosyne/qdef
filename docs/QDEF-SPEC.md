@@ -238,21 +238,45 @@ for why.
 
 **Optional, self-certifying strengthening (not required):** a private-use-
 random Type ID MAY be derived as a truncated hash of its own `key 1` name
-string (`TypeID = truncate(hash(name), N)`) rather than pure randomness.
-This upgrades the name from an unverifiable claim into something anyone
-can independently check — recompute the hash, compare to `key 0` — without
-trusting a registry or a possibly-unreachable original author, the same
-"hash as proof" instinct already behind `group_id` (§4.1) and the Sign
-coverage scheme (§9). No version marker is needed to record whether a
-given ID used this convention: verification is opportunistic — if the hash
-matches, the binding is confirmed; if it doesn't, `key 1` simply degrades
-to a plain, unverified label, exactly as if this convention weren't in use
-at all. Prototyped in `prototype/src/typeHint.js` (round-trip, opportunistic
+string rather than pure randomness. This upgrades the name from an
+unverifiable claim into something anyone can independently check —
+recompute the hash, compare to `key 0` — without trusting a registry or a
+possibly-unreachable original author, the same "hash as proof" instinct
+already behind `group_id` (§4.1) and the Sign coverage scheme (§9).
+
+**The derivation algorithm is pinned, not left as "hash(name)" with
+implementation-defined details** — "anyone can independently check" is
+only true if independent implementations actually agree on what they're
+computing:
+
+```
+digest = SHA-256(UTF-8(name))
+N      = 4 if TypeID fits in 32 bits, else 8
+TypeID = big-endian uint from digest[0..N]
+```
+
+`N` is not a separately-negotiated constant — it's the byte-width the
+candidate `TypeID` already needs to represent itself (4 bytes for a
+32-bit-class value, 8 for 64-bit-class), so a verifier derives it from
+the ID being checked rather than requiring out-of-band agreement on a
+width. SHA-256 over the name's raw UTF-8 bytes (not any CBOR encoding of
+the string) was chosen for the same reason `group_id` and CoAP/COSE
+registry reuse elsewhere in this spec favor already-ubiquitous,
+already-implemented primitives over inventing new ones.
+
+No version marker is needed to record whether a given ID used this
+convention: verification is opportunistic — if the hash matches, the
+binding is confirmed; if it doesn't, `key 1` simply degrades to a plain,
+unverified label, exactly as if this convention weren't in use at all.
+
+Prototyped in `prototype/src/typeHint.js` (round-trip, opportunistic
 verify, and graceful degradation on both a non-hash-derived ID and a
-non-string hint all pass — see `prototype/test/type-hint.test.js`) using a
-4-byte truncation as an illustrative width, not a spec decision — the hash
-width needed to keep collision probability negligible at whatever scale
-this tier actually sees remains an open parameter.
+non-string hint all pass — see `prototype/test/type-hint.test.js`). That
+same test file locks in a real bug this exact underspecification caused:
+an earlier version of this prototype always truncated to 4 bytes
+regardless of the candidate ID's actual width, silently unable to verify
+any 64-bit-class ID — exactly the width §9 itself recommends and a real
+adopter, TagDrop, actually uses. See FINDINGS.md #21.
 
 **Encoder etiquette (SHOULD, not required):** many optical codes are
 quantized into fixed-capacity classes (a QR Version's byte budget at a
@@ -517,7 +541,11 @@ parallel scheme — the same reasoning that makes a large random Type ID
 collision-safe without a registry applies identically to a namespace
 value. Key `5`'s Hint name plays Type Hint's exact role (§3.1),
 including the same optional, opportunistic self-certifying strengthening
-(`namespace = truncate(hash(name), N)`).
+and the same pinned algorithm (§3.1's SHA-256/UTF-8/magnitude-derived-
+width definition — reused exactly, not a second hash convention that
+happens to look similar). Prototyped in `prototype/src/header.js`'s
+`verifyNamespaceHint`, which calls the same `typeHint.js` derivation
+rather than reimplementing it.
 
 **No dedicated "version" field, and Type `0` does not get "versioned" by
 minting new Type IDs for future header revisions.** Both were considered

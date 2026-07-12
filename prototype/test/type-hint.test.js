@@ -105,3 +105,33 @@ test('verification is not-applicable for a registered (low) Type ID or a non-str
   assert.equal(verifyTypeHint(150, 'com.example/wifi-badge-v1'), 'not-applicable');
   assert.equal(verifyTypeHint(0x1a2b3c4d, 0x1a2b3c4d), 'not-applicable');
 });
+
+// ---------------------------------------------------------------------
+// Regression: verifyTypeHint used to call deriveHashId with no width
+// argument, silently defaulting to a 4-byte truncation regardless of
+// the candidate ID's actual magnitude -- meaning a genuinely 64-bit-
+// class Type ID (exactly what §9 recommends and what a real adopter,
+// TagDrop, actually uses) could never verify no matter how it was
+// derived. Caught by checking the prototype's real behavior, not
+// assumed from the spec text. Fixed via widthForId: the truncation
+// width now comes from the candidate ID's own magnitude.
+// ---------------------------------------------------------------------
+
+test('a hash-derived 64-bit-class Type ID verifies correctly (regression: used to always truncate to 4 bytes)', () => {
+  const name = 'com.example/tagdrop-paper';
+  const typeId = deriveHashId(name, 8); // wide derivation, matching a real 64-bit-class ID
+  assert.ok(typeId > 0xffffffffn);
+
+  assert.equal(verifyTypeHint(typeId, name), 'verified');
+});
+
+test('a narrow (4-byte) hash-derived ID is not wrongly verified against the wide (8-byte) derivation of the same name, or vice versa', () => {
+  const name = 'com.example/tagdrop-paper';
+  const narrowId = deriveHashId(name, 4);
+  const wideId = deriveHashId(name, 8);
+  assert.notEqual(BigInt(narrowId), BigInt(wideId));
+
+  // Each only verifies against the derivation matching its own width.
+  assert.equal(verifyTypeHint(narrowId, name), 'verified');
+  assert.equal(verifyTypeHint(wideId, name), 'verified');
+});

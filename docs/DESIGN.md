@@ -803,6 +803,64 @@ TagDrop's actual migration case end to end — verified real byte
 counts, not claimed ones: an existing 64-bit global Type ID costs 11
 bytes as a bare Record; a namespace-scoped small ID costs 4.
 
+## The hash-derivation algorithm was never actually pinned — a real bug, not just a documentation gap
+
+Three separate mechanisms (Type Hint, §3.1; App Route's decentralized
+form, §4.4; the format namespace, §3.5) all describe an optional
+strengthening: derive a private-use-random ID from a hash of its own
+name, so the binding is independently checkable. The spec text always
+wrote this as `ID = truncate(hash(name), N)` — which sounds precise but
+isn't: it never said which hash function, how the string gets encoded,
+how truncation/byte-order works, or what `N` actually is. §3.1 called
+`N` "an open parameter" outright.
+
+Asked directly whether this had actually been pinned down, the honest
+answer was no — and checking the real prototype rather than just the
+prose surfaced a live bug matching the gap exactly: `verifyTypeHint`
+called `deriveHashId` with no width argument, so it always truncated to
+4 bytes regardless of the candidate ID's actual magnitude. A genuinely
+64-bit-class ID — exactly what §9 recommends and what TagDrop's own
+existing Type IDs actually are — could never verify, silently, no
+matter how it was derived. "Anyone can independently check" (the whole
+point of building this) was false in practice for the width this
+project's own real adopter uses.
+
+**Fixed by making `N` derived, not negotiated.** `N` isn't a value two
+parties need to agree on out of band — it's simply the byte-width the
+candidate ID already needs to represent itself (4 bytes if it fits in
+32 bits, 8 otherwise), so a verifier reads it off the ID being checked.
+Pinned the rest too: SHA-256 over the name's raw UTF-8 bytes (not any
+CBOR encoding of the string), first `N` bytes of the digest read as a
+big-endian uint. No new primitives — SHA-256 is the same "borrow an
+already-ubiquitous primitive" instinct behind `group_id` and the
+COSE/CoAP registry reuse elsewhere in this spec.
+
+**A second, related bug caught while fixing the first:** comparing the
+derived value against the candidate ID with `===` is unsafe once both
+narrow (plain Number) and wide (BigInt, since `Buffer.readUIntBE` tops
+out at 6 bytes) derivations exist in the same function — `5 === 5n` is
+`false` in JS, a real trap this codebase's own Number/BigInt mixing
+(FINDINGS.md #14) makes concrete rather than theoretical. Fixed by
+normalizing both sides through `BigInt(...)` before comparing.
+
+**The namespace mechanism's own hash-check went from claimed to real.**
+§3.5 described `namespace = truncate(hash(name), N)` in prose from the
+day it landed, with nothing in the prototype actually implementing or
+testing it — caught in the same pass. `header.js`'s `verifyNamespaceHint`
+now exists, calling `typeHint.js`'s derivation directly rather than a
+second implementation of the same algorithm, so namespace values and
+Type IDs are checked identically by construction, not by two
+conventions that happen to look similar today and could silently drift
+apart later.
+
+Prototyped in `prototype/test/type-hint.test.js` (a regression test
+proving a 64-bit-class ID now verifies, and a narrow-vs-wide test
+confirming the two derivations for the same name don't cross-verify
+against each other) and `prototype/test/header.test.js` (the namespace
+hash-check exercised for the first time, mirroring Type Hint's own
+verify/degrade/not-applicable three-way split exactly). See
+FINDINGS.md #21.
+
 ## A confession (Parkinson's Law of Triviality, self-reported)
 
 C. Northcote Parkinson's original example: a committee approves a

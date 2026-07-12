@@ -763,6 +763,43 @@ end to end with real, verified byte counts: 11 bytes for a bare Record
 under an existing 64-bit global Type ID, 4 bytes for the same under a
 namespace-scoped small one.
 
+### 21. The hash-derivation algorithm was never pinned — and the prototype had a live bug matching the gap exactly
+
+Asked directly whether §3.1's `ID = truncate(hash(name), N)` had ever
+actually been specified precisely enough for independent implementations
+to agree. It hadn't: no hash function was named, no string encoding, no
+truncation/byte-order rule, and `N` was explicitly called "an open
+parameter." Checking the real prototype rather than trusting the prose
+surfaced a live bug matching the gap: `verifyTypeHint` called
+`deriveHashId` with no width argument, silently defaulting to a 4-byte
+truncation regardless of the candidate ID's actual magnitude — meaning a
+genuinely 64-bit-class ID (exactly what §9 recommends and what TagDrop's
+own existing Type IDs actually are) could never verify, no matter how it
+was derived. The "anyone can independently check" claim this whole
+mechanism exists to deliver was false in practice for the one adopter
+actually positioned to use it.
+
+Fixed by making `N` derived from the candidate ID's own byte-width (4 if
+it fits in 32 bits, 8 otherwise) instead of a free parameter, and pinning
+the rest: SHA-256 over the name's raw UTF-8 bytes, first `N` digest bytes
+as a big-endian uint. A second bug caught in the same pass: comparing a
+narrow (Number) and wide (BigInt) derivation with `===` is unsafe --
+`5 === 5n` is `false` in JS -- fixed by normalizing both sides through
+`BigInt(...)` before comparing. Also implemented `header.js`'s
+`verifyNamespaceHint` for the first time: §3.5 described the namespace
+mechanism's own hash-check in prose since it landed, with nothing in the
+prototype actually backing it. It calls `typeHint.js`'s derivation
+directly rather than reimplementing the algorithm, so namespace values
+and Type IDs are checked identically by construction.
+
+Prototyped in `prototype/test/type-hint.test.js` (a regression test
+proving a 64-bit-class ID now verifies where it silently couldn't
+before, and a narrow-vs-wide cross-verification test) and
+`prototype/test/header.test.js` (the namespace hash-check exercised for
+the first time, mirroring Type Hint's own three-way verify/degrade/
+not-applicable split). See DESIGN.md's matching entry for the full
+reasoning behind each fix.
+
 ## Confirmed working as designed (no fix needed)
 
 - **Magic + version + CBOR-Sequence-of-Records** round-trips exactly as

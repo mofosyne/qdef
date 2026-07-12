@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 
 const core = require('../src/core');
 const header = require('../src/header');
+const { deriveHashId } = require('../src/typeHint');
 
 // ---------------------------------------------------------------------
 // Record Type 0: reserved container-level metadata (format namespace +
@@ -228,4 +229,35 @@ test("TagDrop's migration case: an existing global 64-bit Type ID keeps working,
   const oldTypeIdBytes = core.encodeRecordBytes({ typeId: OLD_GLOBAL_TYPE_ID, fields: new Map() });
   const newTypeIdBytes = core.encodeRecordBytes({ typeId: NEW_NAMESPACE_LOCAL_ID, fields: new Map() });
   assert.ok(newTypeIdBytes.length < oldTypeIdBytes.length);
+});
+
+// ---------------------------------------------------------------------
+// §3.5's optional self-certifying strengthening for the namespace field
+// itself (`namespace = truncate(hash(name), N)`), reusing Type Hint's
+// exact algorithm (§3.1) via typeHint.js -- previously described in
+// spec prose only, with nothing in the prototype actually implementing
+// or testing it.
+// ---------------------------------------------------------------------
+
+test('a hash-derived namespace verifies against its own Hint name', () => {
+  const name = 'com.example/tagdrop-paper';
+  const namespace = deriveHashId(name, 8); // realistic: a 64-bit-class namespace
+
+  const container = core.encodeContainer([
+    { typeId: header.HEADER_TYPE, fields: new Map([[3, namespace], [5, name]]) },
+  ]);
+  const h = header.extractHeader(core.decodeContainer(container).records);
+
+  assert.equal(header.verifyNamespaceHint(h.namespace, h.hint), 'verified');
+});
+
+test('a namespace unrelated to its Hint name degrades to unverified, not an error', () => {
+  assert.equal(
+    header.verifyNamespaceHint(12271745624591856273n, 'com.example/totally-different-name'),
+    'unverified',
+  );
+});
+
+test('namespace hash-check is not-applicable with no Hint name present', () => {
+  assert.equal(header.verifyNamespaceHint(12271745624591856273n, undefined), 'not-applicable');
 });

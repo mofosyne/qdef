@@ -26,6 +26,7 @@
 // in advance.
 
 const core = require('./core');
+const { deriveHashId, widthForId } = require('./typeHint');
 
 const HEADER_TYPE = 0;
 const HEADER_NAMESPACE_KEY = 3; // odd/optional: format namespace uint
@@ -86,6 +87,21 @@ function resolveLookupKey(header, typeId) {
   return { scope: 'global', typeId };
 }
 
+/**
+ * §3.5's optional, opportunistic self-certifying strengthening for the
+ * namespace field: `namespace = truncate(hash(name), N)`, reusing Type
+ * Hint's exact algorithm (§3.1) and implementation (typeHint.js) rather
+ * than a second hash scheme -- same SHA-256-over-UTF-8, same width-
+ * derived-from-magnitude rule, so a namespace value and a Type ID are
+ * checked identically, not by two different conventions that happen to
+ * look similar.
+ */
+function verifyNamespaceHint(namespace, hint) {
+  if (typeof hint !== 'string') return 'not-applicable';
+  const derived = deriveHashId(hint, widthForId(namespace));
+  return BigInt(derived) === BigInt(namespace) ? 'verified' : 'unverified';
+}
+
 module.exports = {
   HEADER_TYPE,
   HEADER_KNOWN_KEYS,
@@ -94,4 +110,5 @@ module.exports = {
   STDLIB_MECHANISM_CEILING,
   extractHeader,
   resolveLookupKey,
+  verifyNamespaceHint,
 };
