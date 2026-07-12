@@ -146,6 +146,97 @@ Use App Route explicitly when routing is the actual goal; don't let a
 Type-ID-prefix convention become an accidental second routing channel
 nobody decided to build.
 
+## Registry entry template — a concrete, documentable shape, not yet a process
+
+The governance *authority* is still open (above), but the *shape* of a
+registry entry isn't — and doesn't need to wait for governance to be
+useful. Anyone can start documenting their own Type IDs in this format
+today, in their own README or spec, without permission from anyone. The
+template below is an informative, non-binding documentation convention,
+not a governance proposal.
+
+Adapted from IANA's own per-tag registration template for the CBOR tag
+registry (RFC 8949 §9.2), which is surprisingly lean — four fields
+total. QDEF needs more, because a single logical Record Type can have
+*two independent, unlinked identifiers*: a Record Type ID (global —
+common-vocabulary or private-use-random, works with no namespace
+declared) and a Scoped Type ID (cheap, only means anything paired with
+a specific declared namespace). Since nothing connects them by formula —
+a scoped ID is freshly chosen, not derived from the global one
+(DESIGN.md's "Fourth follow-on" under "Namespace-scoped Type IDs") — a
+registry entry recording only one form wouldn't let a reader who
+encounters the *other* form recognize it as the same thing.
+
+Two parallel identity pairs, each an ID plus an optional recoverable
+name:
+
+- **Record Type ID + Record Type Name** — the identity at key `0` /
+  key `1` on the Record itself (spec §3.1).
+- **Namespace ID + Namespace Name** — the identity at key `3` / key `5`
+  on the Type `0` header Record (spec §3.5).
+
+### Template
+
+```
+Record Type ID:             <uint, or "none — namespace-only">
+Record Type Name:           <reverse-domain name, e.g. com.example.tagdrop/route>
+
+Namespace ID:               <uint, or "none — global-only">
+Namespace Name:             <reverse-domain name, or "none — global-only">
+
+Scoped Type ID:             <uint, or "none — global-only">
+
+Data item:                  <CBOR shape description — e.g. "map { 2: bytes, 4: uint }">
+Semantics:                  <one-line functional description>
+Point of contact:           <email or URL>
+Reference:                  <link to spec/README defining this Type>
+```
+
+Every ID/Name field is optional — a Type that's only ever used
+namespace-scoped has no Record Type ID row to fill in, and vice versa.
+That's deliberate: it documents *whichever forms actually exist* for a
+given logical Type, not requiring both. The Name's presence implies the
+ID was hash-derived from it (spec §3.1); its absence means the ID was
+drawn at random with no recoverable name.
+
+### Worked hypothetical example
+
+A project called "TagDrop" defines a `route` Record Type for directing
+payloads to a physical delivery target. It uses both a global private-use
+Record Type ID (for standalone codes) and a Scoped Type ID (for codes
+within TagDrop's own namespace):
+
+```
+Record Type ID:             12271745624591856273
+Record Type Name:           com.example.tagdrop/route
+
+Namespace ID:               12271745624591856273
+Namespace Name:             com.example/tagdrop-paper
+
+Scoped Type ID:             32768
+
+Data item:                  map { 2: bytes (destination), 4: uint (priority) }
+Semantics:                  Routes payload to a physical delivery target
+Point of contact:           tagdrop-maintainers@example.com
+Reference:                  https://github.com/mofosyne/tagdrop/blob/main/SPEC.md#route
+```
+
+The same logical Type, two completely independent identifiers, both
+documented so a reader who encounters either form on the wire can
+recover the other from the registry.
+
+### Why not just mirror CBOR's four-field shape?
+
+CBOR tags don't have QDEF's namespace-scoping wrinkle — a CBOR tag
+number is always the *whole* identity, there's no compound-key
+relationship to another field the way `(Namespace ID, Scoped Type ID)`
+works here. So CBOR's template needs only one identity field ("Data
+item: unsigned integer"). QDEF needs two identity pairs (Record Type
+ID/Name and Namespace ID/Name) plus the Scoped Type ID, because the
+compound key `(N, T)` is the real lookup key once a namespace is
+declared, and documenting only `T` without `N` leaves the entry
+incomplete for any reader who encounters the scoped form.
+
 ## CBOR tag-number collision (resolved — the tag route was removed)
 
 An earlier draft wrapped every Record Map in a CBOR semantic tag equal to
