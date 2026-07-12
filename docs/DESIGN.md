@@ -566,6 +566,48 @@ names.
 Backlog, not urgent: tracked for whenever a version bump happens for
 some other reason, not a reason to force one on its own.
 
+## Reference/value-sharing tags for intra-Sequence repetition — future path, not built
+
+A related idea to Type ID inheritance above, raised while looking for a
+general fix to repeated-large-value wire cost: CBOR already has
+registered tags for exactly this — tag `25` ("reference the nth
+previously seen string") and the pair `28`/`29` ("mark value as shared" /
+"reference nth marked value," content a plain uint index). Checked
+directly against the IANA registry, not assumed. Mechanically skip-safe
+under one more small widening of the same rule generalized twice already
+(§3.2, FINDINGS.md #15/#16) — a tag wrapping a scalar directly is exactly
+as bounded as a tag wrapping a string, since the mandatory core only ever
+needs to skip the reference, never resolve what it points to; resolution
+is Record-Type-specific, optional work, same as unwrapping any other
+opaque content.
+
+**Doesn't solve the problem that motivated it, and that's worth being
+explicit about rather than letting the idea imply otherwise.** A
+reference requires shared decode state across everything it reaches
+into; two physical codes have none — each is parsed from a blank slate,
+in any order, with any of them possibly missing. So this hits the exact
+same wall as Type ID inheritance above, for the identical structural
+reason: it could only ever help repetition *within* one code's Sequence,
+never App Route's or Preview's cross-code repetition, which is the cost
+that actually prompted looking for a fix.
+
+Where it would genuinely help: the same large value repeated multiple
+times within one code — e.g. `IMPLEMENTATION-NOTES.md`'s calendar Option
+B (several sibling Records, same wide private-use Type ID, all small
+enough to sit on one code without needing Split). Real, but narrower
+than "wire bloat" as originally framed, and it comes with cost beyond the
+rule-widening: precise scope rules for what counts as "the stream" a
+reference can reach into (one Record's map? the whole Sequence? does a
+Wrapper's unwrapped content restart it?), and weaker real-world tooling
+support than tag `24` had — tags `25`/`28`/`29` come from an informal
+spec (schmorp.de's stringref/value-sharing drafts), not RFC 8949 proper,
+so "generic CBOR tooling already reads this" is a much weaker claim here.
+
+Not built. Noted as a future path specifically for the single-code
+repetition case, not a general wire-bloat fix — worth a concrete same-
+code case actually hitting this before adding the complexity, same
+discipline as everything else deferred in this document.
+
 ## A confession (Parkinson's Law of Triviality, self-reported)
 
 C. Northcote Parkinson's original example: a committee approves a
