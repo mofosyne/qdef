@@ -1,5 +1,5 @@
 'use strict';
-// QDEF core: magic/version framing, CBOR-Sequence-of-Records, key-0 routing,
+// QDEF core: magic framing, CBOR-Sequence-of-Records, key-0 routing,
 // even/odd unknown-key criticality. Deliberately has no knowledge of any
 // specific Record Type, compression, or reassembly (see docs/QDEF-SPEC.md §3.3).
 //
@@ -7,11 +7,17 @@
 // wrapped each Record in a CBOR semantic tag equal to its Type ID, dropped
 // after finding it collided with the IANA CBOR tag registry (see
 // docs/FINDINGS.md #11–#12). Key 0 is the only routing mechanism.
+//
+// No version byte: the container is just magic + a CBOR Sequence of
+// Records, full stop. Any container-level metadata (a format namespace)
+// lives inside the Sequence itself, as a Record with the reserved Type
+// ID 0 (see header.js) — reusing the same even/odd extensibility every
+// other Record already has, rather than a second, parallel
+// extensibility mechanism for the header alone.
 
 const cbor = require('cbor');
 
 const MAGIC = Buffer.from([0x51, 0x44, 0x45, 0x46]); // "QDEF"
-const VERSION = 0x01;
 
 /**
  * Encode a QDEF container from a list of records.
@@ -19,7 +25,7 @@ const VERSION = 0x01;
  */
 function encodeContainer(records) {
   const parts = records.map(encodeRecordBytes);
-  return Buffer.concat([MAGIC, Buffer.from([VERSION]), ...parts]);
+  return Buffer.concat([MAGIC, ...parts]);
 }
 
 function encodeRecordBytes({ typeId, fields }) {
@@ -38,18 +44,16 @@ function encodeRecordBytes({ typeId, fields }) {
  * criticality applied yet (that's per-Record-Type, see applyCriticality).
  */
 function decodeContainer(buf) {
-  if (buf.length < 5) throw new Error('QDEF container too short for magic+version');
+  if (buf.length < 4) throw new Error('QDEF container too short for magic');
   const magic = buf.subarray(0, 4);
   if (!magic.equals(MAGIC)) throw new Error(`bad magic: ${magic.toString('hex')}`);
-  const version = buf[4];
-  if (version !== VERSION) throw new Error(`unsupported version: ${version}`);
 
-  const seq = buf.subarray(5);
-  return { version, records: decodeSequence(seq) };
+  const seq = buf.subarray(4);
+  return { records: decodeSequence(seq) };
 }
 
 /**
- * Decode a bare CBOR Sequence of Records with no magic/version prefix — the
+ * Decode a bare CBOR Sequence of Records with no magic prefix — the
  * NDEF path (§2), where the outer NDEF record's MIME type
  * (application/vnd.qdef) already identifies the format.
  */
@@ -93,7 +97,7 @@ function applyCriticality(record, knownKeys) {
 }
 
 /**
- * Decode a single Record from raw bytes with no magic/version prefix — used
+ * Decode a single Record from raw bytes with no magic prefix — used
  * for the inner bytes a Wrapper Record (§4.1) unwraps, which are just "the
  * encoded bytes of another Record", not a fresh top-level QDEF container.
  */
@@ -104,7 +108,6 @@ function decodeRecordBytes(buf) {
 
 module.exports = {
   MAGIC,
-  VERSION,
   encodeContainer,
   encodeRecordBytes,
   decodeContainer,

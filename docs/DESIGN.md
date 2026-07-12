@@ -653,89 +653,99 @@ an even bigger mistake to let the pre-filter's weaker guarantee quietly
 become load-bearing for dispatch.
 
 Concretely this is the same "magic byte" idea raised earlier in this
-project's history (see the ref-pointer/wire-bloat discussion above) in a
-narrower, already-motivated form: a real adopter (TagDrop) confirmed the
-actual plan is App Route on a first/metadata code only, plus exactly
-this kind of ID for fast misread rejection on the rest — not a
-hypothetical. Landed as one Record Type with two forms rather than a new
+project's history (see the ref-pointer/wire-bloat discussion above),
+given a specific pre-filter role instead of staying an abstract
+possibility. Landed as one Record Type with two forms rather than a new
 Record Type, since the wire shape, skip behavior, and Type Hint's
 name-binding pattern are all identical; only the trust model and the
 etiquette guidance around repetition differ (§4.4).
 
-## App Route's Companion ID (key 5) — letting real verification back the cheap pre-filter, not just self-consistency
+## The container header collapsed to magic + a CBOR Sequence, full stop
 
-The decentralized form's hash-derivation (§3.1's pattern, reused at
-§4.4) proves a claim is internally consistent — this ID really was
-derived from this name — but never that the claimant was entitled to
-make it. That gap was always visible, not hidden (§4.4 says so
-directly), but it's a real gap: anyone can compute `hash("Example App")`
-and stamp the result on a code.
+What started as "can the header carry an optional format namespace for
+fast identification" ended somewhere more radical: there is no longer a
+distinct header structure at all. The container is `QDEF` (4 bytes) plus
+a CBOR Sequence of Records — nothing else, ever. Record Type `0` is
+reserved for what used to be header-level metadata (spec §3.5), but it's
+an ordinary Record, decoded by the exact same code path as any other
+Type, not a second wire structure living alongside the Sequence.
 
-The domain form doesn't have that gap — its trust comes from an actual
-external check (App Links / Universal Links `.well-known` verification),
-not from a hash anyone can reproduce. The natural next question, asked
-directly while preparing a reply about the decentralized form: could the
-domain form *hand that stronger trust down* to the cheap per-code
-pre-filter, instead of the pre-filter being stuck with hash-derivation's
-weaker guarantee forever?
+Getting there took several real corrections along the way, worth naming
+because each one fixed something that would have been a genuine
+inconsistency if it had shipped:
 
-Yes, and it costs one field. Key `5` (Companion ID) lets a domain-form
-Record declare the same private-use-random uint the decentralized form
-carries standalone on sibling codes. A scanner that verifies this
-Record's domain has, in the same step, verified the Companion ID
-binding too — the ID isn't a separate claim requiring separate proof, it
-rides on the domain check that already happened. Sibling codes then only
-need the lightweight decentralized form, and a scanner that saw the
-metadata code first now has verified-strength trust for them, not
-merely hash-consistent trust.
+- **A fixed-width raw namespace field, then a mandatory CBOR-uint one,
+  both rejected in favor of an ordinary optional Record.** Both earlier
+  shapes taxed every container that didn't use the mechanism at all (5,
+  then up to 13 bytes, always paid). Landing it as a plain odd/optional
+  key on Type `0` means a container using only known Type IDs pays
+  *nothing* — not even one byte — the same "unaware party pays nothing"
+  property every other stdlib mechanism already has.
+- **"Different Type ID = different header version" was a real mistake,
+  caught directly, not just a style preference.** It wasted low Type ID
+  space on hypothetical future header revisions and was inconsistent
+  with how every other stdlib Record actually evolves here (Encrypt and
+  App Route both gained fields on their *existing* Type IDs, never new
+  Types, when real needs showed up later). Corrected: Type `0` is the
+  one, permanent header Record; a genuinely incompatible future change
+  is just a new even/critical key on it, whenever actually needed —
+  even/odd extensibility already *is* the version mechanism, no
+  dedicated field required.
+- **Key `1` was briefly considered for a "version code" field and
+  rejected once the collision was spotted.** Key `1` is already,
+  globally, Type Hint (§3.1) — for a Type ID below `0x10000` (which `0`
+  is), it specifically means "the legacy ID this Type was promoted
+  from." A generic Type-Hint-aware decoder would have actively
+  misread a version integer sitting there as a bogus legacy-ID claim,
+  not just ignored it. No field ended up needed there at all, so the
+  question resolved itself, but the near-miss is worth recording: reusing
+  an already-load-bearing key for a second, unrelated purpose is exactly
+  the mistake this project already rejected once before, for even/odd
+  itself (see "Registry governance," above) — worth catching a second
+  time rather than assuming it wouldn't recur.
 
-**Two things keep this from silently overclaiming security it doesn't
-have**, both written into §4.4 explicitly rather than left implied:
+**Why the version byte itself is gone, not just smaller.** The old
+container-level version byte existed to gate *any* future change to the
+framing — a necessarily blunt, all-or-nothing tool, since a decoder has
+no way to know in advance which future changes a version bump will
+cover. §3.2's even/odd rule already solves this more precisely for
+ordinary Record evolution (skip an unrecognized Type, ignore an
+unrecognized odd key, abort just one Record on an unrecognized even
+key). The only gap left was safety for changes to the outermost framing
+itself — and Type `0` closes that gap using the identical mechanism,
+just aimed one level further in, rather than needing a cruder,
+separate all-or-nothing tool bolted on top of it. One extensibility
+story for the whole format, not two.
 
-- The binding is exactly as strong as the verification that produced
-  it. No verification (metadata code never seen) or failed verification
-  (domain claim doesn't check out) both mean the Companion ID reverts to
-  exactly what the plain decentralized form already offered — nothing is
-  lost by trying it, but nothing is gained without an actual successful
-  check either.
-- It's session-scoped, not a registry entry. The binding lives in
-  whatever state a scanner keeps across the codes in one scan; it says
-  nothing about a Companion ID value encountered again on an unrelated
-  occasion.
+Format namespace values reuse Type ID's own four-tier convention (§9's
+Registry governance) rather than inventing a second, parallel governance
+scheme — the same collision-safety math that makes a large random Type
+ID viable without a registry applies identically to a namespace value.
 
-This is additive, not a new form: same Record Type, same known-key set
-plus one new odd/optional key, so a decoder built before this field
-existed keeps working exactly as before (§3.2's even/odd rule doing
-precisely the job it exists for). Prototyped in
-`prototype/test/app-route.test.js`: the domain form with a Companion ID
-round-trips, a metadata code and a sibling code carrying the same ID
-produce values a scanner can compare directly, and a pre-Companion-ID
-decoder ignores key `5` without aborting.
+Prototyped end to end: `prototype/src/header.js` and
+`prototype/test/header.test.js` on the Node side, and
+`rust/qdef-core`'s `record_type_0_needs_no_special_handling_from_this_crate`
+test proving the claim in the name directly — the Rust mandatory core
+required zero new code to handle Type `0` correctly, only a fixture
+proving it.
 
-**Follow-on: unifying key `3`'s role across both forms, not leaving it
-split.** The domain form's key `3` had been documented as a
-human-readable label; the decentralized form's key `3` was already Type
-Hint's recoverable-name role. Pointed out directly: there's no reason
-for the same key number to mean two different things depending on which
-form of key `2` it's paired with — a reader shouldn't have to branch on
-that to know what key `3` is *for*. Unified both to the Hint-name role.
-This costs nothing (a Hint name can still be a human-presentable string
-if an encoder wants that — `"Open in Example App"` is as valid a Hint
-name as a reverse-domain string, the role constrains purpose, not
-spelling) and it buys something concrete: because key `3` is now always
-the same field, the domain form's own Companion ID can be hash-checked
-against it the exact same way the decentralized form's Type ID already
-is (`CompanionID = truncate(hash(name), N)`). That gives a scanner
-incapable of domain verification at all — no network, no platform
-dispatch API — a cheap, weaker-but-nonzero signal instead of nothing,
-stacking underneath the domain-verified guarantee rather than competing
-with it. Prototyped in `prototype/src/wrappers.js`'s `verifyCompanionId`
-(reusing `typeHint.js`'s `deriveHashId`, not a second hash
-implementation) and `prototype/test/app-route.test.js`: a hash-derived
-Companion ID verifies against its own Hint name, an unrelated name
-degrades to unverified, and a missing Hint name is not-applicable rather
-than an error — the same three-way degrade Type Hint's own verification
-already established (§3.1).
+**Consequence: App Route's Companion ID (key `5`) is removed, not kept
+alongside this.** Companion ID existed for exactly one job — a cheap,
+per-code misread pre-filter — and the namespace field now does that job
+better: structurally guaranteed first (Companion ID lived on App Route,
+which is explicitly *not* positionally special, so a scanner had to
+find it), and genuinely zero-cost when unused (Companion ID required a
+whole separate decentralized-form App Route record on every sibling
+code). Keeping both would have meant two private-use-random-plus-Hint
+mechanisms answering the same question from two different Record Types
+— exactly the kind of duplication this project avoids elsewhere (see
+"Registry governance," above, on not inventing a second governance
+scheme where one already fits). Nothing shipped yet, so this was a
+clean removal rather than a deprecation: §4.4's domain form and plain
+decentralized form are back to their pre-Companion-ID shape, and the
+domain form's key `3` is a label again, not unified with the
+decentralized form's Hint-name role — that unification's only real
+justification (letting Companion ID be hash-checked) is gone with it.
 
 ## A confession (Parkinson's Law of Triviality, self-reported)
 

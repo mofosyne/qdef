@@ -1,8 +1,8 @@
 # qdef-core (Rust prototype)
 
-A second, independent implementation of QDEF's *mandatory core* only (magic/
-version framing, CBOR-Sequence-of-Records walking, key-0 routing, the
-even/odd criticality rule — [spec §2–§3.3](../../docs/QDEF-SPEC.md)). Exists
+A second, independent implementation of QDEF's *mandatory core* only (magic
+framing, CBOR-Sequence-of-Records walking, key-0 routing, the even/odd
+criticality rule — [spec §2–§3.3](../../docs/QDEF-SPEC.md)). Exists
 to answer one question the [Node prototype](../../prototype) couldn't: is
 the spec's claim that a "deeply constrained embedded scanner with no
 semantic-tag-aware CBOR library" can implement the core actually true?
@@ -24,15 +24,17 @@ answered.
 
 ## What it found
 
-- The mandatory core compiles to **~3.2 KB of code** (release, Cortex-M0)
-  for magic/version framing + full CBOR-Sequence walking + key-0 routing +
-  the even/odd criticality helper — small enough that "a constrained
-  scanner can implement this" is a real, checked claim, not just an
-  aspiration. (This crate originally also implemented a CBOR-tag routing
-  path and the tag/key-0 mismatch detection that went with it — both
-  removed after finding the tag route conceptually unsound; see
-  FINDINGS.md #11–#12. That removal alone shrank the crate from ~3.7 KB to
-  ~3.2 KB, on top of the recursion fix below.)
+- The mandatory core compiles to a few KB of code (release, Cortex-M0) for
+  magic framing + full CBOR-Sequence walking + key-0 routing + the
+  even/odd criticality helper — small enough that "a constrained scanner
+  can implement this" is a real, checked claim, not just an aspiration.
+  (This crate originally also implemented a CBOR-tag routing path and the
+  tag/key-0 mismatch detection that went with it — both removed after
+  finding the tag route conceptually unsound; see FINDINGS.md #11–#12,
+  which shrank the crate meaningfully on top of the recursion fix below.
+  The precise KB figure predates the version-byte removal and Record
+  Type 0 addition and hasn't been re-measured against the original
+  methodology since — treat it as approximate until it is.)
 - Recursive CBOR skipping (needed to walk past a field, or a whole Record,
   the parser doesn't recognize) has unbounded stack depth on adversarial
   input unless something stops it — invisible when a hosted CBOR library

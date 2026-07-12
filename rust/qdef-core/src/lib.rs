@@ -1,8 +1,17 @@
-//! QDEF mandatory core: magic/version framing, CBOR-Sequence-of-Records
-//! walking, key-0 routing, the even/odd criticality rule
-//! (docs/QDEF-SPEC.md §2–§3.3). No knowledge of any specific Record Type,
-//! no compression, no reassembly — those live in a separate stdlib layer,
-//! not here, by design.
+//! QDEF mandatory core: magic framing, CBOR-Sequence-of-Records walking,
+//! key-0 routing, the even/odd criticality rule (docs/QDEF-SPEC.md
+//! §2–§3.3). No knowledge of any specific Record Type, no compression,
+//! no reassembly — those live in a separate stdlib layer, not here, by
+//! design.
+//!
+//! No version byte: the container is magic + a CBOR Sequence of Records,
+//! full stop. Container-level metadata (a format namespace) lives inside
+//! the Sequence itself as a Record with the reserved Type ID 0 — an
+//! ordinary Record, not special to this crate, since the mandatory core
+//! has no per-Type schema knowledge at all. A genuinely incompatible
+//! future change to that Record would be a new even/critical key on it,
+//! handled by the same even/odd criticality rule below, not by this
+//! crate.
 //!
 //! `no_std`, zero heap allocation, zero dependencies, and — thanks to
 //! §3.2's field-value-shape rule (Record field values are always a scalar
@@ -15,13 +24,11 @@
 mod cbor;
 
 pub const MAGIC: [u8; 4] = *b"QDEF";
-pub const VERSION: u8 = 1;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Error {
     TooShortForHeader,
     BadMagic,
-    UnsupportedVersion(u8),
     Cbor(cbor::Error),
 }
 
@@ -43,29 +50,21 @@ enum ControlFlow {
     Stop,
 }
 
-/// A parsed QDEF container: valid magic + supported version, wrapping the
-/// CBOR Sequence of Records that follows.
+/// A parsed QDEF container: valid magic, wrapping the CBOR Sequence of
+/// Records that follows.
 pub struct Container<'a> {
-    pub version: u8,
     seq: &'a [u8],
 }
 
 impl<'a> Container<'a> {
     pub fn parse(buf: &'a [u8]) -> Result<Self, Error> {
-        if buf.len() < 5 {
+        if buf.len() < 4 {
             return Err(Error::TooShortForHeader);
         }
         if buf[0..4] != MAGIC {
             return Err(Error::BadMagic);
         }
-        let version = buf[4];
-        if version != VERSION {
-            return Err(Error::UnsupportedVersion(version));
-        }
-        Ok(Container {
-            version,
-            seq: &buf[5..],
-        })
+        Ok(Container { seq: &buf[4..] })
     }
 
     pub fn records(&self) -> Records<'a> {
@@ -76,7 +75,7 @@ impl<'a> Container<'a> {
     }
 }
 
-/// The NDEF path (§2): a bare CBOR Sequence with no magic/version prefix,
+/// The NDEF path (§2): a bare CBOR Sequence with no magic prefix,
 /// because NDEF's own MIME type (`application/vnd.qdef`) already identifies
 /// the payload. Routes through the identical Record-parsing logic.
 pub fn records_from_sequence(seq: &[u8]) -> Records<'_> {

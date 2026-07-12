@@ -25,7 +25,8 @@ test('Type 100 (Wi-Fi) record round-trips through a full container', () => {
   ]);
 
   assert.equal(container.subarray(0, 4).toString('latin1'), 'QDEF');
-  assert.equal(container[4], 0x01);
+  // No version byte: the CBOR Sequence starts immediately after magic.
+  assert.equal(container[4] >> 5, 5); // CBOR major type 5 = map
 
   const { records } = core.decodeContainer(container);
   assert.equal(records.length, 1);

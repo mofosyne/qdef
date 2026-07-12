@@ -12,7 +12,6 @@ const WIFI_KNOWN_KEYS: &[u64] = &[0, 2, 3, 4, 6];
 #[test]
 fn wifi_record_routes_and_fields_extract() {
     let container = Container::parse(WIFI_CONTAINER).expect("valid container");
-    assert_eq!(container.version, 1);
 
     let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
     assert_eq!(records.len(), 1);
@@ -116,9 +115,9 @@ fn one_aborted_record_does_not_affect_its_sibling() {
 
 #[test]
 fn ndef_path_bare_sequence_with_no_magic_still_routes() {
-    // Strip the 5-byte magic/version prefix and decode the bare CBOR
-    // Sequence directly, simulating the NDEF MIME-typed path (§2).
-    let bare_seq = &WIFI_CONTAINER[5..];
+    // Strip the 4-byte magic prefix and decode the bare CBOR Sequence
+    // directly, simulating the NDEF MIME-typed path (§2).
+    let bare_seq = &WIFI_CONTAINER[4..];
     assert!(
         Container::parse(bare_seq).is_err(),
         "must not look like a valid magic-prefixed container"
@@ -131,17 +130,10 @@ fn ndef_path_bare_sequence_with_no_magic_still_routes() {
 }
 
 #[test]
-fn bad_magic_and_wrong_version_are_rejected() {
+fn bad_magic_is_rejected() {
     let mut bad_magic = WIFI_CONTAINER.to_vec();
     bad_magic[0] = 0x00;
     assert_eq!(Container::parse(&bad_magic).err(), Some(Error::BadMagic));
-
-    let mut bad_version = WIFI_CONTAINER.to_vec();
-    bad_version[4] = 0x02;
-    assert_eq!(
-        Container::parse(&bad_version).err(),
-        Some(Error::UnsupportedVersion(2))
-    );
 }
 
 #[test]
@@ -260,4 +252,29 @@ fn a_real_tag_whose_own_definition_requires_array_content_is_still_rejected() {
         result.err(),
         Some(Error::Cbor(cbor::Error::DisallowedFieldValueShape))
     );
+}
+
+#[test]
+fn record_type_0_needs_no_special_handling_from_this_crate() {
+    // The container-level header (a format namespace, §QDEF-SPEC.md §2) is
+    // Record Type 0 -- an ordinary Record, not a distinct wire structure.
+    // This crate has zero Type-0-specific code path; it's routed and
+    // walked by the exact same key-0/even-odd machinery as any other
+    // Type, proven here rather than just claimed. Field-level
+    // interpretation (namespace at key 3, Hint name at key 5) is a
+    // stdlib-layer concern, out of scope for this crate -- this test only
+    // proves the mandatory core doesn't choke on or need to recognize it.
+    let container = Container::parse(HEADER_CONTAINER).expect("valid container");
+    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
+    assert_eq!(records.len(), 2);
+
+    assert_eq!(records[0].type_id, Some(0));
+    assert!(!records[0].aborted);
+    let namespace = find_value(records[0].map_bytes, 3).unwrap().unwrap();
+    assert_eq!(read_uint(namespace).unwrap(), 12271745624591856273u64);
+
+    assert_eq!(records[1].type_id, Some(100));
+    assert!(!records[1].aborted);
+    let ssid = find_value(records[1].map_bytes, 2).unwrap().unwrap();
+    assert_eq!(read_definite_string(ssid).unwrap(), b"SSID");
 }

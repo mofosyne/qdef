@@ -595,11 +595,12 @@ available. End-user outcome is the same either way; the mechanism a
 scanner implementation needs is not. Spec §4.4 corrected to describe both
 paths explicitly rather than implying one uniform cross-platform API.
 
-**Second update:** TagDrop's actual deployment plan surfaced a use for
-key `2` the domain form can't serve well — a fast, per-code check that a
-scanned code plausibly belongs to the group being reassembled, run
-*before* attempting reassembly, on codes that aren't the designated
-App-Route-carrying one. Chasing whether CBOR reference tags could cut
+**Second update:** A scenario raised during design discussion surfaced a
+use for key `2` the domain form can't serve well — a fast, per-code
+check that a scanned code plausibly belongs to the group being
+reassembled, run *before* attempting reassembly, independent of which
+code(s) in the group happen to carry a full domain-form Record. Chasing
+whether CBOR reference tags could cut
 cross-code repetition (see DESIGN.md's reference-tags entry) confirmed
 those can't reach across physically separate codes at all — no shared
 decode state exists between them — which ruled that out as a fix for
@@ -614,48 +615,36 @@ in `prototype/test/app-route.test.js`: the uint form round-trips, and a
 decoder that only checks Type ID `7` presence skips it cleanly without
 needing to know key `2`'s shape in advance.
 
-**Third update:** the decentralized form's own weakness — hash-
-derivation proves self-consistency, not entitlement — turned out to
-have a fix hiding in the domain form, once asked directly whether the
-two forms could reinforce each other instead of staying fully separate.
-Added key `5` (Companion ID, odd/optional): a domain-form Record can
-declare the same private-use-random uint the decentralized form carries
-standalone elsewhere, so a scanner that verifies the domain has, for
-free, also verified that ID — a genuinely stronger binding than hash-
-derivation, since it rides on real App Links/Universal Links
-verification instead of a reproducible-but-unauthorized claim. Bounded
-carefully in §4.4 so it can't be mistaken for more than it is: the
-binding is exactly as strong as the verification that produced it (no
-verification, or a failed one, means it reverts to plain
-decentralized-form strength), and it's scoped to the scanning session
-that actually saw the metadata code, not a durable registry entry.
-Additive, not a new form — one new odd key, so a pre-existing decoder's
-behavior is unchanged (§3.2 doing exactly its job). Prototyped in
-`prototype/test/app-route.test.js`: the domain form with a Companion ID
-round-trips, a metadata code and a sibling code carrying the same ID
-produce comparable values, and a decoder built before this field existed
-ignores it without aborting.
+**Third update:** briefly added, then removed, a Companion ID field
+(key `5`) letting the domain form vouch for the decentralized form's
+per-code pre-filter with real, App-Links-verified trust instead of just
+hash-derivation self-consistency — TagDrop independently confirmed its
+session-scoping bound was correctly shaped for their own (session-
+discontinuous) use case, not a gap. Removed once §3.5's format-namespace
+mechanism (Record Type `0`) landed and turned out to do the same
+per-code pre-filter job better: structurally guaranteed first (Companion
+ID lived on App Route, explicitly *not* positionally special) and
+genuinely zero-cost when unused (Companion ID needed a full decentralized-
+form App Route record on every sibling code). Two mechanisms answering
+the same question from different Record Types would have been exactly
+the duplication this project avoids elsewhere — see FINDINGS #19 and
+DESIGN.md's "container header collapsed" entry for the full reasoning.
+Nothing had shipped, so this was a clean removal: §4.4 is back to its
+pre-Companion-ID shape, including the domain form's key `3` reverting to
+a plain label (the unification with the decentralized form's Hint-name
+role existed only to make Companion ID hash-checkable).
 
-**Fourth update:** the domain form's key `3` had been documented as a
-separate "human-readable label" concept from the decentralized form's
-key `3` (Type Hint's recoverable-name role) — pointed out directly that
-this split was arbitrary, since nothing requires the same key number to
-mean different things depending on which form of key `2` it's paired
-with. Unified both to the Hint-name role; a human-presentable string is
-still perfectly valid content for it, only the documented *purpose*
-changed. This unification wasn't just tidying: because key `3` is now
-reliably the same field in both forms, the domain form's own Companion
-ID can be hash-checked against it exactly the way the decentralized
-form's Type ID already is — giving a scanner that can't perform domain
-verification at all (no network, no platform dispatch API) a cheap,
-weaker-but-nonzero signal for free, instead of nothing. Implemented as
-`verifyCompanionId` in `prototype/src/wrappers.js`, reusing
-`typeHint.js`'s `deriveHashId` rather than a second hash
-implementation. Prototyped in `prototype/test/app-route.test.js`: a
-hash-derived Companion ID verifies against its Hint name, an unrelated
-name degrades to unverified, and a missing Hint name is not-applicable —
-matching the three-way degrade Type Hint's own verification (§3.1)
-already established, not a new pattern invented for this.
+**Fourth update:** TagDrop checked the decentralized form's 41-byte
+figure independently (map head + `{0:7}` + `{2:<uint64>}` + `{3:"..."}`,
+byte for byte) and it matched, but flagged something the spec text
+hadn't said explicitly: mandatory per-code repetition means "cheap"
+describes one code's cost, not a multi-code group's total — a 7-code
+group pays 7×41 = 287 bytes for App Route alone. Verified directly
+against the actual encoder (`core.encodeRecordBytes`) rather than
+re-deriving the arithmetic by hand: 41 bytes with a Hint name, 13
+without, confirming both the flagged number and the cheaper
+no-Hint-name variant. §4.4 still says this explicitly, independent of
+the Companion ID removal above.
 
 ### 18. "Private-use" was being misread as "closed/internal" — the tier description was wrong, not just imprecise
 
@@ -692,6 +681,52 @@ built on top of the wrong premise is removed rather than patched, since
 there was no widening to warn about once the premise is fixed. Nothing
 about the wire format, the Node prototype, or any Rust code needed to
 change — this was a documentation-only error, never a shipped behavior.
+
+### 19. The container header collapsed to magic + a CBOR Sequence — no version byte, no separate header structure
+
+What began as a request for an optional format-namespace field on the
+header (RIFF's `WAVE` form-type was the explicit reference point) ended
+as a wire-format simplification: the container is now `QDEF` (4 bytes)
+plus a CBOR Sequence of Records, nothing else. The version byte is gone.
+Container-level metadata (a format namespace, an optional recoverable
+name for it) lives inside the Sequence as Record Type `0` — an ordinary
+Record, not a second wire structure, decoded by the exact same key-0/
+even-odd machinery as everything else (spec §3.5).
+
+Landed after several rounds that each corrected a real, specific
+overreach rather than converging in one pass — three worth naming since
+each would have shipped a genuine inconsistency otherwise: a fixed-width
+header field taxing every container regardless of use, "different Type
+ID = different header version" wasting Type ID space and breaking with
+how every other stdlib Record actually evolves, and a near-miss reusing
+key `1` for a version field despite it already being globally reserved
+as Type Hint. See DESIGN.md's "The container header collapsed" entry for
+the full reasoning on each.
+
+**Concretely, what changed:**
+
+- `prototype/src/core.js`: `encodeContainer`/`decodeContainer` no longer
+  read or write a version byte. `core.VERSION` no longer exists.
+- `prototype/src/header.js` (new): Type `0`, namespace at key `3`, Hint
+  name at key `5`, both odd/optional, positional-first requirement
+  enforced by `extractHeader()` with a graceful (never hard-failing)
+  degrade to unnamespaced otherwise.
+- `rust/qdef-core`: `VERSION` constant, the `version` field on
+  `Container`, and the `UnsupportedVersion` error variant all removed.
+  No Type-0-specific code added — proven, not just asserted, by
+  `record_type_0_needs_no_special_handling_from_this_crate` decoding a
+  Type `0` + Wi-Fi container through the unmodified generic path.
+- `prototype/scripts/gen-rust-fixtures.js` had six stray references to
+  the now-removed `core.VERSION` that would have silently produced
+  `Buffer.from([undefined])` garbage bytes into the committed fixtures —
+  caught by CI's fixtures-in-sync check failing on push, not by manual
+  inspection. Regenerated correctly, plus a new cross-implementation
+  fixture (`HEADER_CONTAINER`) for the Type `0` case.
+
+Verified: Node 55/55, Rust 16/16, `clippy` clean, `fmt` clean,
+`thumbv6m-none-eabi` release build succeeds, PR #12 CI green on both
+jobs across two pushes (the second push fixing exactly the fixture-sync
+failure the first one caused).
 
 ## Confirmed working as designed (no fix needed)
 
