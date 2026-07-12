@@ -564,8 +564,8 @@ Record's "unaware party pays nothing" property (§4).
 
 **Format namespace values follow the same tiering convention as Record
 Type IDs (§9's Registry governance): a small span for reviewed/common
-formats, a first-come span, and an open private-use-random span with no
-allocation authority needed at all.** This is a deliberate reuse, not a
+formats, and an open private-use-random span with no allocation
+authority needed at all.** This is a deliberate reuse, not a
 parallel scheme — the same reasoning that makes a large random Type ID
 collision-safe without a registry applies identically to a namespace
 value. Key `5`'s Hint name plays Type Hint's exact role (§3.1),
@@ -600,34 +600,48 @@ proven degrade every other stdlib Record already has, with nothing
 pre-allocated in advance.
 
 **What a declared namespace changes, and what it doesn't.** Type IDs
-`1`–`999` always stay globally, absolutely interpreted regardless of any
-declared namespace — `1`–`99` (stdlib mechanisms, §4: a generic tool
-must still be able to unwrap Split/Compress/Encrypt and recognize App
-Route inside a namespaced file) *and* `100`–`999` (the reviewed
-common-vocabulary tier, §9's Registry governance). Extending the
-always-global floor to cover common-vocabulary too, not just stdlib, is
-deliberate: that tier is exactly the range a decoder is most likely to
-hardcode against without ever reading this section at all — an
-implementer who only cares about, say, Wi-Fi provisioning (Type `100`,
-§5) has no reason to learn about namespaces, and their assumption that
-`100` always means what §5 says it means must keep holding regardless
-of what any container's Type `0` declares.
+`1`–`32767` always stay globally, absolutely interpreted regardless of
+any declared namespace — `1`–`99` (stdlib mechanisms, §4: a generic
+tool must still be able to unwrap Split/Compress/Encrypt and recognize
+App Route inside a namespaced file) *and* `100`–`32767` (the reviewed
+common-vocabulary tier, §9's Registry governance, whose ceiling is
+deliberately aligned with IANA's own CBOR tag registry boundary for its
+"Specification Required" span — see §9). Extending the always-global
+floor to cover common-vocabulary too, not just stdlib, is deliberate:
+that tier is exactly the range a decoder is most likely to hardcode
+against without ever reading this section at all — an implementer who
+only cares about, say, Wi-Fi provisioning (Type `100`, §5) has no
+reason to learn about namespaces, and their assumption that `100`
+always means what §5 says it means must keep holding regardless of
+what any container's Type `0` declares.
 
-**Only the first-come tier (`1000`+) becomes namespace-scoped once a
+**Every other Type ID (`32768`+) becomes namespace-scoped once a
 namespace is declared, reusing the existing flat numbering space rather
 than carving out a new range for it.** When Type `0` declares namespace
-`N`, a subsequent Record's Type ID `T` (`T ≥ 1000`) is no longer looked
-up as the bare global identity `T` — its real identity is the *compound*
-key `(N, T)`, exactly the way a Bluetooth short UUID only means anything
-paired with the Base UUID it's declared against. This is why no new
-numeric range is needed for the scoped tier itself: nothing is
-reinterpreting what `T` means in isolation, because `T` in isolation is
-no longer the lookup key at all once a namespace is present. An app with
-its own declared namespace can freely use small, sequential Type IDs
-(`1000`, `1001`, `1002`...) for as many Record Types as it needs — cheap
-on the wire (3 bytes instead of a 9-byte private-use-random draw) and
-collision-free by construction, since collision safety now comes from
-the namespace, not from the ID's own width.
+`N`, a subsequent Record's Type ID `T` (`T ≥ 32768`) is no longer
+looked up as the bare global identity `T` — its real identity is the
+*compound* key `(N, T)`, exactly the way a Bluetooth short UUID only
+means anything paired with the Base UUID it's declared against. This is
+why no new numeric range is needed for the scoped tier itself: nothing
+is reinterpreting what `T` means in isolation, because `T` in isolation
+is no longer the lookup key at all once a namespace is present. An app
+with its own declared namespace can freely use small, sequential Type
+IDs (`32768`, `32769`, `32770`...) for as many Record Types as it needs
+— cheap on the wire (5 bytes instead of an 11-byte 64-bit private-use-
+random draw) and collision-free by construction, since collision safety
+now comes from the namespace, not from the ID's own width.
+
+**QDEF does not define a separate, ungoverned "first-come-first-served"
+tier of small numbers below `32768` for unnamespaced use — that idea
+was considered and dropped (see DESIGN.md's Registry governance
+section).** Collision-avoidance for a Type ID only ever comes from one
+of three sources: registry curation (`100`–`32767`), the ID's own
+numeric width (`0x10000`+, §3.1's private-use-random tier), or a
+declared namespace (`32768`+, this section). A small, unreviewed,
+un-namespaced number in `32768`–`0xFFFF` has none of the three and is
+not a supported allocation strategy — the range exists so namespace
+scoping has somewhere cheap to put Type IDs, not as a fourth,
+uncoordinated way to claim a global one.
 
 **This is Record-Type-interpretation-specific handling (§3.3's optional
 tier), not a mandatory-core requirement — the same category Type Hint's
@@ -636,7 +650,7 @@ unaffected: it still just reads `map[0]` to route or skip, with zero
 knowledge of namespaces, exactly as validated today (`rust/qdef-core`
 needs no Type-`0`-specific code at all). The correctness obligation
 falls on any decoder that implements specific semantics for *any*
-`1000`+ Type ID: such a decoder MUST check for a declared namespace
+`32768`+ Type ID: such a decoder MUST check for a declared namespace
 before applying its interpretation, and MUST NOT fall back to a global
 reading merely because it doesn't recognize the specific `(namespace,
 TypeID)` pair — that pair is simply unrecognized, skipped the same way
@@ -644,16 +658,16 @@ any other unrecognized Type ID is, never silently reinterpreted as the
 global meaning of the same number. Getting this wrong is a real, worse-
 than-usual failure mode (a *wrong* match, not a clean miss) — it is the
 one sharp edge this mechanism has, and it exists precisely because
-`1000`+ is being asked to serve two different lookup schemes (global,
+`32768`+ is being asked to serve two different lookup schemes (global,
 namespace-scoped) depending on context a decoder must actually check,
-not assume. Deliberately traded one extra wire byte (`1000`'s minimum
-cost is 5 bytes, `100`'s would have been 4) to keep this edge confined
-to the less-curated first-come tier — where a decoder hardcoding
-against one specific uncoordinated registration is a real but
-meaningfully rarer case than hardcoding against the reviewed
-common-vocabulary tier — rather than accepting the cheapest possible
-design at the cost of exposing the tier most likely to actually be
-hardcoded against in practice.
+not assume. Deliberately traded one extra wire byte (`32768`'s minimum
+cost is 5 bytes, `100`'s is 4) to keep this edge confined to numbers
+above the reviewed tier — where a decoder hardcoding against one
+specific uncoordinated, unnamespaced number is a real but meaningfully
+rarer case than hardcoding against the reviewed common-vocabulary tier
+— rather than accepting the cheapest possible design at the cost of
+exposing the tier most likely to actually be hardcoded against in
+practice.
 
 **Fully additive, no migration forced.** An app with existing global
 private-use-random Type IDs keeps them working forever, namespaced
@@ -1144,7 +1158,7 @@ the same mechanism.)
 
 **Registering a real Type ID before governance exists.** `900` here is an
 illustrative placeholder, not a protected allocation — §9's registry
-governance for the `100`–`999` "common vocabulary" tier has no authority
+governance for the `100`–`32767` "common vocabulary" tier has no authority
 yet, so nothing stops an unrelated adopter from also picking `900`. Any
 adopter wiring this pattern into real shipping code *before* that
 governance exists should use the `0x10000`+ private-use-random tier (§9)

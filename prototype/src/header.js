@@ -33,23 +33,30 @@ const HEADER_NAMESPACE_KEY = 3; // odd/optional: format namespace uint
 const HEADER_NAMESPACE_HINT_KEY = 5; // odd/optional: recoverable name for it
 const HEADER_KNOWN_KEYS = new Set([0, HEADER_NAMESPACE_KEY, HEADER_NAMESPACE_HINT_KEY]);
 
-// Type IDs 1-999 always stay global regardless of any declared
+// Type IDs 1-32767 always stay global regardless of any declared
 // namespace: 1-99 is stdlib mechanisms (§4) -- a generic tool must
 // still be able to unwrap Split/Compress/Encrypt/App Route inside a
-// namespaced file -- and 100-999 is the reviewed common-vocabulary
-// tier (§9's Registry governance), extended into this same
-// always-global floor deliberately. That tier is exactly the one a
-// decoder is most likely to hardcode against without ever reading this
-// section (someone implementing "the well-known Type IDs" has no
-// reason to learn about namespaces at all), so it gets the same
-// unconditional protection as the stdlib range rather than being left
-// exposed to the general sharp edge below. The less-curated first-come
-// tier (1000-0xFFFF) does not get this protection -- it's where
-// namespace-scoping actually applies, trading 1 extra wire byte
-// (5 bytes minimum vs. 4) for closing off the collision risk that
-// actually matters in practice, not the cheapest theoretically
-// possible design.
-const GLOBAL_TIER_CEILING = 1000;
+// namespaced file -- and 100-32767 is the reviewed common-vocabulary
+// tier (§9's Registry governance, boundary aligned with IANA's own
+// CBOR tag registry's "Specification Required" span). That tier is
+// exactly the one a decoder is most likely to hardcode against without
+// ever reading this section (someone implementing "the well-known Type
+// IDs" has no reason to learn about namespaces at all), so it gets the
+// same unconditional protection as the stdlib range rather than being
+// left exposed to the general sharp edge below.
+//
+// There is no third, separately-governed "first-come-first-served"
+// tier below this ceiling -- considered and dropped (DESIGN.md's
+// Registry governance section). Every Type ID at or above this ceiling
+// is either namespace-scoped (a declared namespace turns it into the
+// compound key (namespace, typeId), collision-safe by construction, no
+// registry needed) or expected to be a private-use-random ID
+// (>=0x10000, §3.1/§9) if left unnamespaced, collision-safe by its own
+// width instead. Picking an arbitrary small number in this range and
+// leaving it unnamespaced was never a governed path: nothing --
+// curation, width, or scoping -- protects it from colliding with
+// someone else's unrelated choice of the same number.
+const GLOBAL_TIER_CEILING = 32768;
 
 /**
  * Peek at a decoded record list for a valid Type 0 header. Returns
@@ -74,17 +81,17 @@ function extractHeader(records) {
  * Resolves the correct lookup key for a Record's Type ID, given the
  * container's header (as returned by extractHeader, or undefined).
  *
- * Type IDs below GLOBAL_TIER_CEILING (stdlib + common-vocabulary, 1-999)
- * always resolve globally. Every other Type ID (the first-come tier,
- * 1000+) becomes namespace-scoped once a namespace is declared: the
- * real identity is the *compound* (namespace, typeId) pair, not typeId
+ * Type IDs below GLOBAL_TIER_CEILING (stdlib + common-vocabulary,
+ * 1-32767) always resolve globally. Every other Type ID (32768+)
+ * becomes namespace-scoped once a namespace is declared: the real
+ * identity is the *compound* (namespace, typeId) pair, not typeId
  * alone -- the same way a Bluetooth short UUID only means anything
  * paired with the Base UUID it's declared against.
  *
  * This is Record-Type-interpretation-specific handling (spec §3.3's
  * optional tier), not a mandatory-core concern -- the mandatory core
  * (core.js) never calls this and needs no namespace knowledge at all.
- * Callers that DO interpret specific 1000+ Type IDs must use this (or
+ * Callers that DO interpret specific 32768+ Type IDs must use this (or
  * equivalent logic) rather than looking typeId up directly, or they
  * risk the sharp edge this mechanism has: misapplying a *global*
  * interpretation to a namespace-scoped Record that merely shares the

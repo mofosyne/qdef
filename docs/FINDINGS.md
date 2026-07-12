@@ -766,18 +766,56 @@ first-come tier's edge too) was considered and set aside at 7 bytes
 minimum — real, but paying for safety margin against a risk already
 judged lower-stakes than the one actually being closed.
 
+**Second follow-up, same day: is `1000` a principled number, or just a
+round one?** The latter — corrected once pointed at IANA's own CBOR tag
+registry, which draws the identical three-way split verbatim: `0`–`23`
+Standards Action, `24`–`32767` Specification Required, `32768`+ First
+Come First Served (checked directly against
+[iana.org/assignments/cbor-tags](https://www.iana.org/assignments/cbor-tags/cbor-tags.xhtml),
+not from memory). Checked the real cost before moving, the same
+discipline as every other boundary decision here: `1000` and `32768`
+both fall inside CBOR's `256`–`65535` uint class, so both cost 5 bytes
+minimum — moving the floor to `32768` was a free upgrade (more
+common-vocabulary headroom, an externally-citable boundary), not a
+tradeoff. `1`–`99` (stdlib) was deliberately left un-aligned with
+IANA's `0`–`23` — that tier answers a different question (what a
+generic tool must unwrap regardless of namespace) than IANA's Standards
+Action band (who can change the CBOR spec itself), and renumbering
+seven already-shipped mechanism IDs would have bought nothing.
+
+**Third follow-up, same day: does the first-come tier still earn its
+place, now that namespace-scoping exists?** Asked directly, once it was
+noticed that first-come is exactly the range namespace-scoping applies
+to, and is a no-op the moment no namespace is declared. No — dropped
+it. Collision-avoidance for a Type ID only ever comes from one of
+three sources: registry curation, the ID's own numeric width, or a
+declared namespace. First-come tried to be cheap *and* uncoordinated
+without picking any of the three, which is exactly why it never had a
+real governance model (this project's own earlier "no registry
+authority exists yet" admission, and its own §6 worked example already
+steered real adopters toward private-use-random instead, in practice).
+Declaring a namespace and using small sequential IDs inside it already
+covers the first-come tier's entire use case, with a mechanism that has
+a real governance story. Needed no code change: `resolveLookupKey`'s
+floor check never implemented "first-come" as a distinct mechanism, so
+this was purely a governance/vocabulary simplification, not a wire
+change.
+
 Prototyped in `prototype/src/header.js`'s `resolveLookupKey` and
 `prototype/test/header.test.js`: compound-key resolution differs by
-namespace, `1`–`999` stays global unconditionally (both stdlib and
-common-vocabulary, tested explicitly), a namespace-aware dispatcher
-correctly refuses to fall back to a recognized global meaning for an
-unrecognized namespace-scoped first-come pairing (the sharp edge,
-demonstrated rather than described), a naive decoder with zero namespace
-awareness still correctly resolves a common-vocabulary Type ID (the
-specific failure mode the floor extension exists to close), and
-TagDrop's own migration case end to end with real, verified byte
-counts: 11 bytes for a bare Record under an existing 64-bit global Type
-ID, 5 bytes for the same under a namespace-scoped small one.
+namespace, `1`–`32767` stays global unconditionally (both stdlib and
+the full IANA-aligned common-vocabulary range, tested explicitly), a
+namespace-aware dispatcher correctly refuses to fall back to a
+recognized global meaning for an unrecognized namespace-scoped pairing
+above the ceiling (the sharp edge, demonstrated rather than described),
+a naive decoder with zero namespace awareness still correctly resolves
+a common-vocabulary Type ID (the specific failure mode the floor
+extension exists to close), and TagDrop's own migration case end to end
+with real, verified byte counts: 11 bytes for a bare Record under an
+existing 64-bit global Type ID, 5 bytes for the same under a
+namespace-scoped small one at the current `32768` floor — unchanged
+from the old `1000` floor, confirming the free-upgrade cost claim
+against the actual encoder rather than just the size-class table.
 
 ### 21. The hash-derivation algorithm was never pinned — and the prototype had a live bug matching the gap exactly
 

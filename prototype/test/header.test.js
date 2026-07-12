@@ -134,39 +134,44 @@ test('the container is exactly magic + CBOR Sequence, no version byte', () => {
 });
 
 // ---------------------------------------------------------------------
-// Namespace-scoped Type IDs (1000+): resolveLookupKey is what a decoder
-// that interprets specific Type IDs must use instead of looking typeId
-// up directly, so a namespace-scoped Record never gets silently
-// misread as the *global* meaning of the same number -- a wrong match,
-// not a clean miss, which is the one sharp edge this mechanism has.
+// Namespace-scoped Type IDs (32768+): resolveLookupKey is what a
+// decoder that interprets specific Type IDs must use instead of
+// looking typeId up directly, so a namespace-scoped Record never gets
+// silently misread as the *global* meaning of the same number -- a
+// wrong match, not a clean miss, which is the one sharp edge this
+// mechanism has.
 //
-// The floor is 1000, not 100: 1-999 (stdlib mechanisms, §4, PLUS the
-// reviewed common-vocabulary tier, §9) stays unconditionally global.
-// That's a deliberate widening of the always-global range beyond just
-// stdlib -- the common-vocabulary tier is exactly what a decoder is
-// most likely to hardcode against without ever reading this section at
-// all, so it gets the same unconditional protection stdlib mechanisms
-// already have. Only the less-curated first-come tier (1000-0xFFFF) is
-// actually namespace-scopable, trading one extra wire byte (5 minimum
-// instead of 4) for closing off the collision risk that matters most
-// in practice.
+// The floor is 32768, not 100: 1-32767 (stdlib mechanisms, §4, PLUS
+// the reviewed common-vocabulary tier, §9 -- aligned with IANA's own
+// CBOR tag registry boundary for its "Specification Required" span)
+// stays unconditionally global. That's a deliberate widening of the
+// always-global range beyond just stdlib -- the common-vocabulary tier
+// is exactly what a decoder is most likely to hardcode against without
+// ever reading this section at all, so it gets the same unconditional
+// protection stdlib mechanisms already have. There is no separate
+// "first-come-first-served" governed tier below this floor (considered
+// and dropped, DESIGN.md's Registry governance section): everything
+// at or above the floor is either namespace-scoped or expected to be a
+// self-certifying private-use-random ID if left unnamespaced -- never
+// an ungoverned flat small number.
 // ---------------------------------------------------------------------
 
 test('the same Type ID resolves to a different compound key under different namespaces', () => {
-  const keyA = header.resolveLookupKey({ namespace: 111n }, 1000);
-  const keyB = header.resolveLookupKey({ namespace: 222n }, 1000);
+  const keyA = header.resolveLookupKey({ namespace: 111n }, 32768);
+  const keyB = header.resolveLookupKey({ namespace: 222n }, 32768);
 
   assert.notDeepEqual(keyA, keyB);
-  assert.deepEqual(keyA, { scope: 'namespace', namespace: 111n, typeId: 1000 });
-  assert.deepEqual(keyB, { scope: 'namespace', namespace: 222n, typeId: 1000 });
+  assert.deepEqual(keyA, { scope: 'namespace', namespace: 111n, typeId: 32768 });
+  assert.deepEqual(keyB, { scope: 'namespace', namespace: 222n, typeId: 32768 });
 });
 
-test('Type IDs 1-999 always resolve globally, regardless of any declared namespace', () => {
-  // Both the stdlib range (7 = App Route) and the common-vocabulary
-  // range (100 = Wi-Fi Provisioning, §5) get the same unconditional
-  // protection -- the whole point of extending the floor beyond just
-  // stdlib mechanisms.
-  for (const typeId of [7, 100, 999]) {
+test('Type IDs 1-32767 always resolve globally, regardless of any declared namespace', () => {
+  // The stdlib range (7 = App Route), the low common-vocabulary range
+  // (100 = Wi-Fi Provisioning, §5), and the top of the extended
+  // common-vocabulary range (32767, the IANA-aligned ceiling) all get
+  // the same unconditional protection -- the whole point of extending
+  // the floor beyond just stdlib mechanisms.
+  for (const typeId of [7, 100, 999, 32767]) {
     const withNamespace = header.resolveLookupKey({ namespace: 111n }, typeId);
     const withoutNamespace = header.resolveLookupKey(undefined, typeId);
 
@@ -175,21 +180,23 @@ test('Type IDs 1-999 always resolve globally, regardless of any declared namespa
   }
 });
 
-test('Type IDs 1000+ resolve globally when no namespace is declared', () => {
-  assert.deepEqual(header.resolveLookupKey(undefined, 1000), { scope: 'global', typeId: 1000 });
+test('Type IDs 32768+ resolve globally when no namespace is declared', () => {
+  assert.deepEqual(header.resolveLookupKey(undefined, 32768), { scope: 'global', typeId: 32768 });
   assert.deepEqual(
-    header.resolveLookupKey({ namespace: undefined }, 1000),
-    { scope: 'global', typeId: 1000 },
+    header.resolveLookupKey({ namespace: undefined }, 32768),
+    { scope: 'global', typeId: 32768 },
   );
 });
 
 test('a namespace-aware dispatcher never misapplies a recognized global Type ID to an unrecognized namespace-scoped one', () => {
-  // Simulates two independent decoders: one that only knows a GLOBAL
-  // first-come registration, one that's namespace-aware but has never
-  // heard of this particular namespace. Both must skip cleanly, never
-  // fall back to the global interpretation for a namespaced Record
-  // that merely shares the same number.
-  const GLOBAL_KNOWN_TYPES = new Map([[1500, 'Some First-Come Registration']]);
+  // Simulates two independent decoders: one that only knows some
+  // adopter's own unnamespaced Type ID (an ungoverned flat number --
+  // there is no registry backing it, it's just whatever that adopter
+  // happened to pick), one that's namespace-aware but has never heard
+  // of this particular namespace. Both must skip cleanly, never fall
+  // back to the global interpretation for a namespaced Record that
+  // merely shares the same number.
+  const GLOBAL_KNOWN_TYPES = new Map([[40000, "Some Adopter's Own Unnamespaced ID"]]);
   const NAMESPACE_KNOWN_TYPES = new Map(); // empty: this namespace is unrecognized
 
   function dispatch(header_, typeId) {
@@ -199,22 +206,23 @@ test('a namespace-aware dispatcher never misapplies a recognized global Type ID 
     return nsTable ? nsTable.get(key.typeId) : undefined;
   }
 
-  // Unnamespaced Type 1500 resolves to the real global meaning.
-  assert.equal(dispatch(undefined, 1500), 'Some First-Come Registration');
+  // Unnamespaced Type 40000 resolves to the real global meaning.
+  assert.equal(dispatch(undefined, 40000), "Some Adopter's Own Unnamespaced ID");
 
-  // The SAME Type 1500, inside a declared-but-unrecognized namespace,
+  // The SAME Type 40000, inside a declared-but-unrecognized namespace,
   // must NOT resolve to that global meaning -- that would be a wrong
   // match (a namespace-scoped Record misread as something it isn't),
   // not a clean skip.
-  assert.equal(dispatch({ namespace: 999999n }, 1500), undefined);
+  assert.equal(dispatch({ namespace: 999999n }, 40000), undefined);
 });
 
 test('a common-vocabulary Type ID stays global even inside a declared namespace -- the exact naive-decoder case this floor exists to close off', () => {
   // A decoder that only knows the common-vocabulary registry (never
   // reads §3.5, has no reason to) hardcodes Type 100 = Wi-Fi
   // Provisioning directly. That assumption must hold even inside an
-  // arbitrary declared namespace -- unlike the first-come tier tested
-  // above, this one is NOT allowed to be silently reinterpreted.
+  // arbitrary declared namespace -- unlike a Type ID above the ceiling
+  // (tested above), this one is NOT allowed to be silently
+  // reinterpreted.
   const GLOBAL_KNOWN_TYPES = new Map([[100, 'Wi-Fi Provisioning']]);
   function naiveDispatch(typeId) {
     return GLOBAL_KNOWN_TYPES.get(typeId); // no namespace check at all -- and none needed
@@ -228,7 +236,7 @@ test('a common-vocabulary Type ID stays global even inside a declared namespace 
 test("TagDrop's migration case: an existing global 64-bit Type ID keeps working, a new small namespace-scoped one for \"the same\" logical type never collides with it", () => {
   const TAGDROP_NAMESPACE = 12271745624591856273n;
   const OLD_GLOBAL_TYPE_ID = 18446744073709551615n; // pre-existing, unnamespaced
-  const NEW_NAMESPACE_LOCAL_ID = 1000; // cheap, chosen after adopting Type 0
+  const NEW_NAMESPACE_LOCAL_ID = 32768; // cheap, chosen after adopting Type 0
 
   const oldStyleContainer = core.encodeContainer([
     { typeId: OLD_GLOBAL_TYPE_ID, fields: new Map([[2, 'legacy payload']]) },

@@ -15,32 +15,40 @@ Who allocates application-specific Record Type IDs (`100`+) if this is
 meant to be shared across unrelated projects is still open — no registry
 authority exists yet, and IDs in the spec remain illustrative placeholders.
 But the *shape* of the range has an answer: tier it the way CBOR's own tag
-registry (RFC 8949 §9.2) tiers tag numbers — a small span requiring
-registration/review, then a larger "first-come" span, then an explicit
-private-use span for never-shared/internal Type IDs. QDEF doesn't use CBOR
-tags itself (see "CBOR tag-number collision" below), but the *governance
-pattern* a mature numeric-ID registry uses is worth borrowing on its own
-merits, independent of whether QDEF's wire format happens to touch tags at
-all. Two options were weighed and this is the one to build the eventual
-policy on:
+registry (RFC 8949 §9.2, and its IANA-maintained assignments table) tiers
+tag numbers — a small span requiring registration/review, then an explicit
+private-use span for never-shared/internal Type IDs, with no third
+ungoverned middle tier between them. QDEF doesn't use CBOR tags itself
+(see "CBOR tag-number collision" below), but the *governance pattern* a
+mature numeric-ID registry uses is worth borrowing on its own merits,
+independent of whether QDEF's wire format happens to touch tags at all.
+Two options were weighed and this is the one to build the eventual policy
+on:
 
-- **Tiered ranges (recommended):** four tiers, not two, each with a
+- **Tiered ranges (recommended):** three tiers, not two, each with a
   different reason to exist:
   - `1`–`99`: mechanism/plumbing (already spec'd, §4) — Wrapper Records
     and other stdlib infrastructure, not application content.
-  - `100`–`999`: **common vocabulary** — reviewed, widely-recognized
+  - `100`–`32767`: **common vocabulary** — reviewed, widely-recognized
     content types (Wi-Fi, a URL/URI record, the kind of thing NDEF calls
     a "Well Known Type"). This is the tier for a Record Type enough
     unrelated implementers would want to recognize that it's worth a
     shared, reviewed number rather than everyone reinventing their own —
     the spec's §5 examples (`100`, `105`) already sit here informally.
-  - `1000`–`0xFFFF`: first-come-first-served — registered, but no review
-    gate beyond "not already taken."
-  - `0x10000`+: **decentralized — self-allocated via a large random
-    value, not a registry.** This tier needs no allocation authority at
-    all: because Type IDs are CBOR uints with no fixed width, an
-    implementer who picks a sufficiently large (e.g. 32- or 64-bit)
-    *random* number gets collision avoidance from the sheer size of the
+    Ceiling aligned with IANA's own CBOR tag registry boundary
+    ([iana.org/assignments/cbor-tags](https://www.iana.org/assignments/cbor-tags/cbor-tags.xhtml))
+    between "Specification Required" (`24`–`32767`) and "First Come
+    First Served" (`32768`+) — see "Namespace-scoped Type IDs," below,
+    for the full rationale — since that's conceptually the same
+    distinction: this tier IS the "Specification Required" one,
+    reviewed before allocation.
+  - `32768`+: **decentralized — self-allocated via a large random
+    value, not a registry** (once a namespace is declared, §3.5, small
+    numbers in this range become cheap *and* collision-free without any
+    self-allocated width at all — see "Namespace-scoped Type IDs,"
+    below). Outside a namespace, an implementer who picks a
+    sufficiently large (e.g. 32- or 64-bit) *random* number, conventionally
+    `0x10000`+, gets collision avoidance from the sheer size of the
     number space, the same way a UUID does — not from anyone checking a
     list. Call it "private-use" if the CBOR/IANA-registry parallel this
     name draws on is useful (RFC 8949 §9.2's own private-use ranges), but
@@ -50,14 +58,34 @@ policy on:
     Bluetooth's private/random device addresses are both self-assigned
     the same way, and neither implies the result is never published or
     never recognized by an unrelated party. What actually distinguishes
-    this tier from `100`–`999` isn't visibility, it's *authority*: no
+    this tier from `100`–`32767` isn't visibility, it's *authority*: no
     registry vouches for what a self-allocated ID means, so any
     cross-implementer recognition has to come from somewhere else — Type
-    Hint's hash-derivation (§3.1) or App Route (§4.4), not a lookup
-    table. It's only viable at all because the wire format never fixed
-    Type IDs to a small byte-width field.
+    Hint's hash-derivation (§3.1), a declared namespace (§3.5), or App
+    Route (§4.4), not a lookup table. It's only viable at all because the
+    wire format never fixed Type IDs to a small byte-width field.
   Exact boundaries remain a policy decision for whoever ends up running
   the registry, not a wire-format one.
+- **No separate "first-come-first-served" tier (considered, dropped).** An
+  earlier version of this range had a third band, `1000`–`0xFFFF`,
+  registered but with no review gate beyond "not already taken" — meant
+  to give a cheap small number to anyone who didn't want to wait for
+  common-vocabulary review. Dropped once namespace-scoped Type IDs
+  (§3.5) landed and made it redundant in principle, not just in practice:
+  collision-avoidance for a Type ID only ever comes from one of three
+  sources — registry curation, the ID's own numeric width, or a declared
+  namespace. The first-come tier tried to be cheap *and* uncoordinated
+  without picking any of the three, which is exactly why it never had a
+  viable governance model to begin with (the paragraph above already
+  says "no registry authority exists yet," and even the spec's own §6
+  worked example steers real adopters away from it and toward
+  private-use-random instead, in practice). Anyone who wants a cheap
+  small ID with zero coordination can get one today by declaring their
+  own namespace — itself decentralized, since the namespace value can be
+  private-use-random — and using small sequential IDs inside it. That
+  covers the first-come tier's entire use case with a mechanism that
+  already has a real governance story, so keeping a second, weaker
+  path to the same outcome added a distinction without a difference.
 - **Even/odd for governance tier (considered, rejected):** reuse the
   even/odd convention itself to mean "pre-registered vs. free-for-all,"
   the same way it already means critical-vs-optional for keys (spec
@@ -747,7 +775,7 @@ domain form's key `3` is a label again, not unified with the
 decentralized form's Hint-name role — that unification's only real
 justification (letting Companion ID be hash-checked) is gone with it.
 
-## Namespace-scoped Type IDs (1000+) — resolved, not left open, once a real adopter had a concrete want
+## Namespace-scoped Type IDs (32768+) — resolved, not left open, once a real adopter had a concrete want
 
 §3.5's namespace mechanism launched with one deliberate gap: whether and
 how Type IDs `100`+ become namespace-local once a namespace is declared
@@ -796,31 +824,74 @@ someone?** The original design let namespace-scoping apply to anything
 Reconsidered once the actual risk profile was thought through properly:
 the sharp edge isn't equally dangerous everywhere in that range. A
 decoder implementer who only cares about the reviewed, well-known
-common-vocabulary tier (`100`–`999`) has no reason to ever read §3.5 at
-all — they're not choosing to accept the sharp edge, they may never
-even learn it exists, which is a meaningfully worse failure mode than
-"an implementer who read the spec and got the check wrong." The
-first-come tier (`1000`–`0xFFFF`) is different in kind, not just degree:
-it's explicitly uncurated ("registered, but no review gate beyond not-
-already-taken"), so a decoder hardcoding against one specific
-registration there is both a rarer thing to do and a lower-stakes thing
-to get wrong.
+common-vocabulary tier (`100`–`999`, as it was numbered at the time) has
+no reason to ever read §3.5 at all — they're not choosing to accept the
+sharp edge, they may never even learn it exists, which is a meaningfully
+worse failure mode than "an implementer who read the spec and got the
+check wrong." The first-come tier (`1000`–`0xFFFF`, as it existed at the
+time) was different in kind, not just degree: it was explicitly
+uncurated ("registered, but no review gate beyond not-already-taken"),
+so a decoder hardcoding against one specific registration there was
+both a rarer thing to do and a lower-stakes thing to get wrong.
 
 Resolved by extending the always-global floor from `100` to `1000` —
-`1`–`999` (stdlib mechanisms *and* common-vocabulary) stays
-unconditionally global; only the first-come tier is actually
-namespace-scopable. Verified the real cost of this choice rather than
-asserting it was cheap: the cheapest possible namespace-scoped Type ID
-moved from 4 bytes (`100`) to 5 bytes (`1000`) — one extra byte, traded
-for closing off the specific failure mode most likely to occur in
-practice rather than the theoretically cheapest design. A third,
-stricter option (require namespace-scoped IDs to be 32-bit-class,
-`≥ 0x10000`, matching the private-use-random floor exactly) was
-considered and set aside: it closes the first-come tier's sharp edge
-too, at 7 bytes minimum — a real, defensible choice, but one paying for
-safety margin against a risk already judged low-stakes, for a
-proportionally much larger wire-cost regression against what motivated
-building this mechanism in the first place.
+`1`–`999` (stdlib mechanisms *and* common-vocabulary) stayed
+unconditionally global; only the first-come tier was namespace-scopable.
+Verified the real cost of this choice rather than asserting it was
+cheap: the cheapest possible namespace-scoped Type ID moved from 4
+bytes (`100`) to 5 bytes (`1000`) — one extra byte, traded for closing
+off the specific failure mode most likely to occur in practice rather
+than the theoretically cheapest design. A third, stricter option
+(require namespace-scoped IDs to be 32-bit-class, `≥ 0x10000`, matching
+the private-use-random floor exactly) was considered and set aside: it
+closes the first-come tier's sharp edge too, at 7 bytes minimum — a
+real, defensible choice, but one paying for safety margin against a
+risk already judged low-stakes, for a proportionally much larger
+wire-cost regression against what motivated building this mechanism in
+the first place.
+
+**Second follow-on, same day: does the floor's exact number (`1000`)
+have any principled basis, or is it just a round number this project
+picked?** It was the latter — and the user pointed at a better anchor:
+IANA's own CBOR tag registry
+([iana.org/assignments/cbor-tags](https://www.iana.org/assignments/cbor-tags/cbor-tags.xhtml))
+already draws this exact three-way distinction, verbatim: `0`–`23`
+"Standards Action," `24`–`32767` "Specification Required," `32768`+
+"First Come First Served." Verified directly against the registry
+rather than assumed. Checked the real wire cost of moving the floor
+from `1000` to `32768` before adopting it, the same way every other
+boundary choice here has been checked rather than asserted: both values
+fall inside CBOR's same 2-extra-byte uint encoding class (`256`–`65535`),
+so `cost(1000) == cost(32768) == 5` bytes — moving the floor is a free
+upgrade, not a tradeoff, and was adopted on that basis. The
+common-vocabulary tier's ceiling moved with it, `999` → `32767`,
+deliberately mapped onto IANA's "Specification Required" span — which
+is conceptually the right label for it, since that tier already *is* a
+review-gated allocation, just one QDEF governs itself rather than IANA.
+`1`–`99` (stdlib) was deliberately left unaligned with IANA's `0`–`23`:
+renumbering seven already-shipped-in-examples mechanism IDs to fit a
+foreign registry's unrelated tier (Standards Action is about who can
+change the *CBOR* spec, not "generic tools must unwrap this regardless
+of namespace") would have bought nothing.
+
+**Third follow-on, same day: since namespace-scoping only ever applies
+above the common-vocabulary ceiling, and it's disabled (falls back to
+plain global) whenever no namespace is declared, does the first-come
+tier still earn its place at all?** Asked directly, and the answer was
+no — see "No separate 'first-come-first-served' tier (considered,
+dropped)" under "Registry governance," above, for the full reasoning.
+In short: first-come tried to give a cheap, uncoordinated, small Type
+ID without picking any of the three actual sources of collision-safety
+(curation, width, or namespace scoping), which is exactly why it never
+had a real governance model — and namespace-scoping already covers its
+entire use case with a mechanism that does. Dropping it needed no code
+or wire-format change at all: `resolveLookupKey`'s floor check never
+implemented "first-come" as a distinct mechanism to begin with, so
+removing the tier is purely a governance/vocabulary simplification —
+`GLOBAL_TIER_CEILING`'s value and the paragraphs above already describe
+the result (everything at or above the ceiling is either namespace-
+scoped or expected to be private-use-random, never an ungoverned flat
+number) without needing a separate tier concept to explain it.
 
 **Fully additive.** An app's existing global private-use-random Type
 IDs keep working forever; adopting namespace-scoped small IDs for new
@@ -830,17 +901,19 @@ namespace-scoped to begin with.
 
 Prototyped in `prototype/src/header.js`'s `resolveLookupKey` and
 `prototype/test/header.test.js`: the same Type ID resolving to different
-compound keys under different namespaces, `1`–`999` staying global
-regardless (both the stdlib range and, deliberately, the
-common-vocabulary range), a namespace-aware dispatcher correctly *not*
-falling back to a recognized global meaning for an unrecognized
-namespace-scoped first-come Record (the sharp edge, demonstrated rather
-than just described), a naive decoder that never checks for a namespace
-at all still correctly resolving a common-vocabulary Type ID (the
-specific failure mode the floor extension exists to close off), and
-TagDrop's actual migration case end to end — verified real byte counts,
-not claimed ones: an existing 64-bit global Type ID costs 11 bytes as a
-bare Record; a namespace-scoped small ID costs 5.
+compound keys under different namespaces, `1`–`32767` staying global
+regardless (both the stdlib range and, deliberately, the full
+IANA-aligned common-vocabulary range up to `32767`), a namespace-aware
+dispatcher correctly *not* falling back to a recognized global meaning
+for an unrecognized namespace-scoped Record above the ceiling (the
+sharp edge, demonstrated rather than just described), a naive decoder
+that never checks for a namespace at all still correctly resolving a
+common-vocabulary Type ID (the specific failure mode the floor
+extension exists to close off), and TagDrop's actual migration case end
+to end — verified real byte counts, not claimed ones: an existing
+64-bit global Type ID costs 11 bytes as a bare Record; a namespace-
+scoped small ID (`32768`, the current floor) costs 5, the same as it
+would have cost at the old `1000` floor.
 
 ## The hash-derivation algorithm was never actually pinned — a real bug, not just a documentation gap
 
