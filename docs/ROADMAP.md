@@ -9,7 +9,7 @@ found that prose review didn't.
 
 ## Done
 
-**The core is validated, not just written.** Magic/version framing, the
+**The core is validated, not just written.** Magic framing, the
 CBOR-Sequence-of-Records layout, key-`0`-only routing, and the even/odd
 criticality rule have each been built twice, independently — a Node
 prototype covering the full design, and a `#![no_std]`, zero-dependency

@@ -718,6 +718,52 @@ there was no widening to warn about once the premise is fixed. Nothing
 about the wire format, the Node prototype, or any Rust code needed to
 change — this was a documentation-only error, never a shipped behavior.
 
+### 19. The container header collapsed to magic + a CBOR Sequence — no version byte, no separate header structure
+
+What began as a request for an optional format-namespace field on the
+header (RIFF's `WAVE` form-type was the explicit reference point) ended
+as a wire-format simplification: the container is now `QDEF` (4 bytes)
+plus a CBOR Sequence of Records, nothing else. The version byte is gone.
+Container-level metadata (a format namespace, an optional recoverable
+name for it) lives inside the Sequence as Record Type `0` — an ordinary
+Record, not a second wire structure, decoded by the exact same key-0/
+even-odd machinery as everything else (spec §3.5).
+
+Landed after several rounds that each corrected a real, specific
+overreach rather than converging in one pass — three worth naming since
+each would have shipped a genuine inconsistency otherwise: a fixed-width
+header field taxing every container regardless of use, "different Type
+ID = different header version" wasting Type ID space and breaking with
+how every other stdlib Record actually evolves, and a near-miss reusing
+key `1` for a version field despite it already being globally reserved
+as Type Hint. See DESIGN.md's "The container header collapsed" entry for
+the full reasoning on each.
+
+**Concretely, what changed:**
+
+- `prototype/src/core.js`: `encodeContainer`/`decodeContainer` no longer
+  read or write a version byte. `core.VERSION` no longer exists.
+- `prototype/src/header.js` (new): Type `0`, namespace at key `3`, Hint
+  name at key `5`, both odd/optional, positional-first requirement
+  enforced by `extractHeader()` with a graceful (never hard-failing)
+  degrade to unnamespaced otherwise.
+- `rust/qdef-core`: `VERSION` constant, the `version` field on
+  `Container`, and the `UnsupportedVersion` error variant all removed.
+  No Type-0-specific code added — proven, not just asserted, by
+  `record_type_0_needs_no_special_handling_from_this_crate` decoding a
+  Type `0` + Wi-Fi container through the unmodified generic path.
+- `prototype/scripts/gen-rust-fixtures.js` had six stray references to
+  the now-removed `core.VERSION` that would have silently produced
+  `Buffer.from([undefined])` garbage bytes into the committed fixtures —
+  caught by CI's fixtures-in-sync check failing on push, not by manual
+  inspection. Regenerated correctly, plus a new cross-implementation
+  fixture (`HEADER_CONTAINER`) for the Type `0` case.
+
+Verified: Node 55/55, Rust 16/16, `clippy` clean, `fmt` clean,
+`thumbv6m-none-eabi` release build succeeds, PR #12 CI green on both
+jobs across two pushes (the second push fixing exactly the fixture-sync
+failure the first one caused).
+
 ## Confirmed working as designed (no fix needed)
 
 - **Magic + version + CBOR-Sequence-of-Records** round-trips exactly as

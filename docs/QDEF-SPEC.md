@@ -46,7 +46,7 @@ uints, and strings.
 
 QDEF is deliberately two things, not one:
 
-- A minimal **core format** (§3): magic/version framing, a CBOR Sequence of
+- A minimal **core format** (§3): magic framing, a CBOR Sequence of
   Records, Type-ID routing via a plain map key, and a per-key criticality
   rule. A parser that only implements this can route or skip any Record
   without knowing anything else about it.
@@ -75,46 +75,58 @@ lean on instead.
 ## 2. Container Wire Format
 
 8-bit byte mode only — never alphanumeric; text-safety is explicitly not a
-goal. A 4-byte magic header plus a 1-byte version (5 bytes total) for
-instant optical-stream validation, followed by a CBOR Sequence (RFC 8742)
-of Records — a sequence rather than a wrapping CBOR array, so a constrained
+goal. A 4-byte magic header (4 bytes total, no version byte) for instant
+optical-stream validation, followed by a CBOR Sequence (RFC 8742) of
+Records — a sequence rather than a wrapping CBOR array, so a constrained
 parser can process each Record as it streams in without buffering the
 whole payload first (validated in the prototype against a real incremental
 CBOR decoder fed arbitrary byte chunks).
 
 ```
-+---------------------+--------------+----------------------------------+
-|   Magic (4 bytes)    | Version (1B) |     CBOR Sequence of Records     |
-+---------------------+--------------+----------------------------------+
-| 0x51 0x44 0x45 0x46  |    0x01      |  Record, Record, Record, ...     |
-|       "QDEF"         |  (Version 1) |                                  |
-+---------------------+--------------+----------------------------------+
++----------------------+----------------------------------+
+|   Magic (4 bytes)     |     CBOR Sequence of Records     |
++----------------------+----------------------------------+
+| 0x51 0x44 0x45 0x46   |  Record, Record, Record, ...     |
+|       "QDEF"          |                                  |
++----------------------+----------------------------------+
 ```
 
-For NFC, the magic+version prefix is redundant: NDEF's own MIME-type field
-already identifies the payload. An NDEF record carrying QDEF content uses
-MIME type `application/vnd.qdef` with just the CBOR Sequence of Records as
-the payload, no magic bytes. The magic header exists only for the
-QR/optical case, where a scanner needs to recognize the byte stream's
-format before any higher-level dispatch exists to tell it what it's
-looking at. (Validated in the prototype: a bare CBOR Sequence with no magic
-prefix decodes through the exact same Record-routing logic as the full
+For NFC, the magic prefix is redundant: NDEF's own MIME-type field already
+identifies the payload. An NDEF record carrying QDEF content uses MIME type
+`application/vnd.qdef` with just the CBOR Sequence of Records as the
+payload, no magic bytes. The magic header exists only for the QR/optical
+case, where a scanner needs to recognize the byte stream's format before
+any higher-level dispatch exists to tell it what it's looking at.
+(Validated in the prototype: a bare CBOR Sequence with no magic prefix
+decodes through the exact same Record-routing logic as the full
 container.)
 
-**Unknown version byte: reject the whole container.** The version byte
-gates the interpretation of everything after it. A decoder that reads a
-version it does not implement MUST reject the entire container and MUST NOT
-attempt to parse the Sequence that follows — a future version is free to
-change the framing, the routing rules, or the even/odd criticality
-convention itself, i.e. the very machinery a decoder would otherwise rely
-on to skip safely. This is the one point in QDEF where "skip what you don't
-understand" deliberately does *not* apply: an unknown Record Type ID (skip
-the record) and an unknown even key (abort the record) both have local,
-recoverable rules, but an unknown *version* is a global "I cannot safely
-interpret any of this" signal. Version bumps are
-expected to be rare precisely because §3.2's per-field forward
-compatibility absorbs most evolution without one; the version byte moves
-only for a change to the core framing itself.
+**No version byte, deliberately.** An earlier draft had one, gating the
+interpretation of everything after it — but that design forces a hard,
+global "I cannot safely interpret any of this" failure for *any* future
+change to the container, however small, since a decoder has no way to
+know in advance which changes a version bump will cover. §3.2's even/odd
+criticality rule already provides graceful, *local* forward compatibility
+for ordinary Record evolution — new Record Types are skipped, new odd
+keys are ignored, new even keys abort only the one Record that has them.
+The only thing a version byte still gave beyond that was safety for
+changes to the container's own outermost framing — and even that need is
+now covered without one: see §3.5 (Record Type `0`, the container's
+namespace/header mechanism), which extends exactly the same even/odd
+tools inward, rather than needing a separate, cruder all-or-nothing gate
+around them.
+
+**Deliberately no record count or total payload size in the header** —
+suggested more than once as a natural addition to a binary header, and
+deliberately left out. Either field would require an encoder to know its
+final size before writing the header, and a decoder to trust a value that
+duplicates information already recoverable by walking the Sequence, adding
+a way for the two to disagree with no benefit: the entire point of a CBOR
+*Sequence* over a wrapping array (above) is that a Record's presence is
+self-delimiting and a constrained parser can stream through Records one at
+a time without ever needing to know the total count up front. A count/size
+field would sit unused by that parser and be one more thing a fuzzer or a
+malformed input could make lie.
 
 **Deliberately no record count or total payload size in the header** —
 suggested more than once as a natural addition to a binary header, and
@@ -368,11 +380,12 @@ QDEF is designed so a minimal, generic parser is genuinely minimal — no
 implementer has to bring a compression library or sector-reassembly logic
 just to support the *container*:
 
-- **Core QDEF parser (mandatory, all implementers):** verify magic/version,
-  walk the CBOR Sequence, read each Record's `map[0]` to route or skip it,
+- **Core QDEF parser (mandatory, all implementers):** verify magic, walk
+  the CBOR Sequence, read each Record's `map[0]` to route or skip it,
   apply the even/odd rule (§3.2) to unrecognized keys. That's the entire
   surface area — no compression, no multi-code state, no knowledge of any
-  specific Record Type's fields.
+  specific Record Type's fields (including Type `0`, §3.5 — the core
+  needs no special case for it).
 - **Record-Type-specific handling (optional, per Record Type an implementer
   chooses to support):** everything else — including whether a given
   Record Type's payload happens to be compressed, or happens to require
@@ -427,6 +440,93 @@ requirement that needs explicit encoder discipline is map key
 ordering — sorting a Record's handful of keys before serializing is
 cheap, including on constrained hardware, and §3's Record Maps are small
 by construction (a flat set of fields, never nested).
+
+### 3.5 Record Type 0 — the Container Header
+
+Record Type `0` is reserved for container-level metadata — currently just
+a format namespace, for a QDEF-based file format that wants a fast,
+early "what kind of file is this" identifier, RIFF's form-type
+(`WAVE`/`AVI `) being the closest existing analogue. It is an ordinary
+Record, not a distinct wire structure: same key-`0` routing, same
+even/odd criticality (§3.2), same canonical encoding (§3.4). No new
+parsing concept exists for it, and the mandatory core (§3.3) needs zero
+special-cased knowledge of Type `0` to route or skip it correctly.
+
+```
+Type 0: {                            // Container Header (stdlib)
+  0: 0,                              // CRITICAL: fixed, this is what
+                                      //   makes it the header
+  3: 12271745624591856273,           // OPTIONAL: format namespace, a
+                                      //   private-use-random uint (same
+                                      //   tier convention as §3.1's Type
+                                      //   IDs — see below)
+  5: "com.example/tagdrop-paper"     // OPTIONAL: recoverable name for
+                                      //   the namespace, Type Hint's
+                                      //   exact pattern (§3.1)
+}
+```
+
+**MUST be the first Record in the Sequence to serve its purpose.** Unlike
+every other stdlib Record (App Route, Media Payload, Fallback Hint are
+all explicitly *not* positionally special, §4), Type `0`'s entire reason
+to exist is early identification without scanning the whole container —
+a decoder shouldn't have to walk the full Sequence just to find out what
+it's looking at. A Type `0` Record found anywhere but first is simply
+not treated as the header: the container degrades to unnamespaced,
+never a hard failure. The same graceful degrade applies if Type `0` is
+absent entirely, or if it's present but aborts (an unrecognized future
+even key, per the versioning note below) — all three cases mean exactly
+the same thing to a decoder: no namespace declared, interpret every
+other Record's Type ID globally, as if this section didn't exist.
+
+**Zero cost when unused.** Because the field is a plain odd/optional key
+on an ordinary Record rather than a mandatory part of the fixed header,
+a container using only known, global Type IDs pays nothing at all for
+this mechanism — not even one byte — matching every other stdlib
+Record's "unaware party pays nothing" property (§4).
+
+**Format namespace values follow the same tiering convention as Record
+Type IDs (§9's Registry governance): a small span for reviewed/common
+formats, a first-come span, and an open private-use-random span with no
+allocation authority needed at all.** This is a deliberate reuse, not a
+parallel scheme — the same reasoning that makes a large random Type ID
+collision-safe without a registry applies identically to a namespace
+value. Key `5`'s Hint name plays Type Hint's exact role (§3.1),
+including the same optional, opportunistic self-certifying strengthening
+(`namespace = truncate(hash(name), N)`).
+
+**No dedicated "version" field, and Type `0` does not get "versioned" by
+minting new Type IDs for future header revisions.** Both were considered
+and rejected: minting new low Type IDs for header generations would
+waste Type ID space that should stay available for real future stdlib
+mechanisms, and it's inconsistent with how every other stdlib Record
+actually evolves here (Encrypt gained Algorithm/Key Algorithm and App
+Route gained Companion ID as new keys on their *existing* Type IDs,
+never as new Types). Even/odd extensibility already *is* the version
+mechanism, for free: a genuinely incompatible future change to Type `0`
+itself is just a new even/critical key, whenever it's actually needed.
+An old decoder that doesn't recognize it aborts only this one Record
+(§3.2) and falls back to unnamespaced — the same graceful, already-
+proven degrade every other stdlib Record already has, with nothing
+pre-allocated in advance.
+
+**What a declared namespace changes, and what it doesn't.** Stdlib
+mechanism Type IDs (`1`–`99`, §4) always stay globally, absolutely
+interpreted regardless of any declared namespace — a generic tool must
+still be able to unwrap Split/Compress/Encrypt and recognize App Route
+inside a namespaced file. Whether and how *other* Record Type IDs
+(`100`+) become namespace-local once a namespace is declared — the
+truncation idea that motivated this mechanism in the first place — is
+deliberately left open here rather than pinned down: `1`–`99` staying
+global is settled; the exact scoping rule for everything else is a
+follow-on decision, not yet made.
+
+Prototyped in `prototype/src/header.js` and `prototype/test/header.test.js`:
+namespace/hint round-trip, both fields independently optional, the
+positional requirement (misplaced Type `0` is not treated as the
+header), the JS falsy-zero trap guarded against explicitly, and
+cross-validated against the Rust core (`rust/qdef-core`), which needs no
+Type-`0`-specific code at all to route and walk it correctly.
 
 ## 4. The QDEF Standard Library
 

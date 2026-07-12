@@ -735,6 +735,75 @@ degrades to unverified, and a missing Hint name is not-applicable rather
 than an error — the same three-way degrade Type Hint's own verification
 already established (§3.1).
 
+## The container header collapsed to magic + a CBOR Sequence, full stop
+
+What started as "can the header carry an optional format namespace for
+fast identification" ended somewhere more radical: there is no longer a
+distinct header structure at all. The container is `QDEF` (4 bytes) plus
+a CBOR Sequence of Records — nothing else, ever. Record Type `0` is
+reserved for what used to be header-level metadata (spec §3.5), but it's
+an ordinary Record, decoded by the exact same code path as any other
+Type, not a second wire structure living alongside the Sequence.
+
+Getting there took several real corrections along the way, worth naming
+because each one fixed something that would have been a genuine
+inconsistency if it had shipped:
+
+- **A fixed-width raw namespace field, then a mandatory CBOR-uint one,
+  both rejected in favor of an ordinary optional Record.** Both earlier
+  shapes taxed every container that didn't use the mechanism at all (5,
+  then up to 13 bytes, always paid). Landing it as a plain odd/optional
+  key on Type `0` means a container using only known Type IDs pays
+  *nothing* — not even one byte — the same "unaware party pays nothing"
+  property every other stdlib mechanism already has.
+- **"Different Type ID = different header version" was a real mistake,
+  caught directly, not just a style preference.** It wasted low Type ID
+  space on hypothetical future header revisions and was inconsistent
+  with how every other stdlib Record actually evolves here (Encrypt and
+  App Route both gained fields on their *existing* Type IDs, never new
+  Types, when real needs showed up later). Corrected: Type `0` is the
+  one, permanent header Record; a genuinely incompatible future change
+  is just a new even/critical key on it, whenever actually needed —
+  even/odd extensibility already *is* the version mechanism, no
+  dedicated field required.
+- **Key `1` was briefly considered for a "version code" field and
+  rejected once the collision was spotted.** Key `1` is already,
+  globally, Type Hint (§3.1) — for a Type ID below `0x10000` (which `0`
+  is), it specifically means "the legacy ID this Type was promoted
+  from." A generic Type-Hint-aware decoder would have actively
+  misread a version integer sitting there as a bogus legacy-ID claim,
+  not just ignored it. No field ended up needed there at all, so the
+  question resolved itself, but the near-miss is worth recording: reusing
+  an already-load-bearing key for a second, unrelated purpose is exactly
+  the mistake this project already rejected once before, for even/odd
+  itself (see "Registry governance," above) — worth catching a second
+  time rather than assuming it wouldn't recur.
+
+**Why the version byte itself is gone, not just smaller.** The old
+container-level version byte existed to gate *any* future change to the
+framing — a necessarily blunt, all-or-nothing tool, since a decoder has
+no way to know in advance which future changes a version bump will
+cover. §3.2's even/odd rule already solves this more precisely for
+ordinary Record evolution (skip an unrecognized Type, ignore an
+unrecognized odd key, abort just one Record on an unrecognized even
+key). The only gap left was safety for changes to the outermost framing
+itself — and Type `0` closes that gap using the identical mechanism,
+just aimed one level further in, rather than needing a cruder,
+separate all-or-nothing tool bolted on top of it. One extensibility
+story for the whole format, not two.
+
+Format namespace values reuse Type ID's own four-tier convention (§9's
+Registry governance) rather than inventing a second, parallel governance
+scheme — the same collision-safety math that makes a large random Type
+ID viable without a registry applies identically to a namespace value.
+
+Prototyped end to end: `prototype/src/header.js` and
+`prototype/test/header.test.js` on the Node side, and
+`rust/qdef-core`'s `record_type_0_needs_no_special_handling_from_this_crate`
+test proving the claim in the name directly — the Rust mandatory core
+required zero new code to handle Type `0` correctly, only a fixture
+proving it.
+
 ## A confession (Parkinson's Law of Triviality, self-reported)
 
 C. Northcote Parkinson's original example: a committee approves a
