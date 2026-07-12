@@ -662,6 +662,56 @@ Record Type, since the wire shape, skip behavior, and Type Hint's
 name-binding pattern are all identical; only the trust model and the
 etiquette guidance around repetition differ (§4.4).
 
+## App Route's Companion ID (key 5) — letting real verification back the cheap pre-filter, not just self-consistency
+
+The decentralized form's hash-derivation (§3.1's pattern, reused at
+§4.4) proves a claim is internally consistent — this ID really was
+derived from this name — but never that the claimant was entitled to
+make it. That gap was always visible, not hidden (§4.4 says so
+directly), but it's a real gap: anyone can compute `hash("Example App")`
+and stamp the result on a code.
+
+The domain form doesn't have that gap — its trust comes from an actual
+external check (App Links / Universal Links `.well-known` verification),
+not from a hash anyone can reproduce. The natural next question, asked
+directly while preparing a reply about the decentralized form: could the
+domain form *hand that stronger trust down* to the cheap per-code
+pre-filter, instead of the pre-filter being stuck with hash-derivation's
+weaker guarantee forever?
+
+Yes, and it costs one field. Key `5` (Companion ID) lets a domain-form
+Record declare the same private-use-random uint the decentralized form
+carries standalone on sibling codes. A scanner that verifies this
+Record's domain has, in the same step, verified the Companion ID
+binding too — the ID isn't a separate claim requiring separate proof, it
+rides on the domain check that already happened. Sibling codes then only
+need the lightweight decentralized form, and a scanner that saw the
+metadata code first now has verified-strength trust for them, not
+merely hash-consistent trust.
+
+**Two things keep this from silently overclaiming security it doesn't
+have**, both written into §4.4 explicitly rather than left implied:
+
+- The binding is exactly as strong as the verification that produced
+  it. No verification (metadata code never seen) or failed verification
+  (domain claim doesn't check out) both mean the Companion ID reverts to
+  exactly what the plain decentralized form already offered — nothing is
+  lost by trying it, but nothing is gained without an actual successful
+  check either.
+- It's session-scoped, not a registry entry. The binding lives in
+  whatever state a scanner keeps across the codes in one scan; it says
+  nothing about a Companion ID value encountered again on an unrelated
+  occasion.
+
+This is additive, not a new form: same Record Type, same known-key set
+plus one new odd/optional key, so a decoder built before this field
+existed keeps working exactly as before (§3.2's even/odd rule doing
+precisely the job it exists for). Prototyped in
+`prototype/test/app-route.test.js`: the domain form with a Companion ID
+round-trips, a metadata code and a sibling code carrying the same ID
+produce values a scanner can compare directly, and a pre-Companion-ID
+decoder ignores key `5` without aborting.
+
 ## A confession (Parkinson's Law of Triviality, self-reported)
 
 C. Northcote Parkinson's original example: a committee approves a

@@ -20,7 +20,7 @@ const COMPRESS_KNOWN_KEYS = new Set([0, 2]);
 const ENCRYPT_KNOWN_KEYS = new Set([0, 2, 4, 5, 7]);
 const FALLBACK_HINT_KNOWN_KEYS = new Set([0, 1, 2]);
 const MEDIA_PAYLOAD_KNOWN_KEYS = new Set([0, 2, 4]);
-const APP_ROUTE_KNOWN_KEYS = new Set([0, 2, 3]);
+const APP_ROUTE_KNOWN_KEYS = new Set([0, 2, 3, 5]);
 
 const PARITY_SCHEME_NONE = 0;
 const PARITY_SCHEME_XOR = 1; // prototype-only single-parity-fragment scheme

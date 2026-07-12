@@ -711,7 +711,12 @@ Type 7: {                          // App Route (stdlib) — domain form
   0: 7,
   2: "example.com",                // CRITICAL: a domain the routing
                                     //   target has verified control over
-  3: "Open in Example App"         // OPTIONAL: human-readable label
+  3: "Open in Example App",        // OPTIONAL: human-readable label
+  5: 12271745624591856273          // OPTIONAL: Companion ID — a private-
+                                    //   use-random ID (same tier as the
+                                    //   decentralized form's key 2) that
+                                    //   sibling codes in this group will
+                                    //   carry standalone
 }
 
 Type 7: {                          // App Route (stdlib) — decentralized form
@@ -755,6 +760,42 @@ code) before attempting the real work of reassembly, layered *ahead of*
 §4.1's `group_id` integrity check, never as a replacement for it. A false
 match here just means a decoder wastes effort before `group_id` catches
 the mismatch anyway — not a wrongly-launched application.
+
+**Key `5` (Companion ID, OPTIONAL) lets the domain form train a scanner
+on the decentralized form's ID, so verified trust — not just hash
+consistency — can back the cheap pre-filter on sibling codes.** A
+private-use-random uint, same shape and same tier as the decentralized
+form's key `2`, declared alongside a verified domain. A scanner that
+successfully verifies this Record's domain (via App Links / Universal
+Links) has, in the same step, learned a *real*, authorization-backed
+binding between that domain and the Companion ID — strictly stronger
+than the decentralized form's own hash-derivation, which only ever
+proves a self-claim is internally consistent, never that its claimant
+was entitled to make it. Sibling codes then only need to carry the
+lightweight decentralized form (key `2` alone, no domain, no per-code
+verification cost) for the scanner to recognize them as belonging to the
+same, now-verified, source.
+
+**This binding is exactly as strong as the verification that produced
+it, and no stronger.** Two failure modes to keep straight:
+
+- **Verification never happened.** A scanner that only ever sees a
+  sibling code — the metadata code carrying key `5` was lost, scanned
+  out of order and not yet processed, or never present — gets no benefit
+  over the plain decentralized form: an unverified Companion ID is just
+  an unverified private-use-random ID, full stop.
+- **Verification was attempted and failed.** Presence of key `5` proves
+  nothing by itself; a forger can stamp any Companion ID next to a
+  domain claim that fails its `.well-known` check just as easily as next
+  to one that succeeds. The Companion ID inherits the domain form's
+  authority only when that verification step actually succeeds — never
+  from the field merely being present on the wire.
+
+Also **session-scoped, not durable.** The learned binding lives in
+whatever scanner state persists across the codes in one scan/session —
+it is not a registry entry, has no expiry semantics of its own, and
+carries no claim about a Companion ID seen again in an unrelated scan on
+a different occasion.
 
 Resolving a domain to an actual launch target is intentionally left to
 local, OS-level dispatch — no centralized QDEF-level registry or
@@ -818,6 +859,15 @@ repetition across a multi-code group:
   this form is for. An encoder that places it on a single code should
   treat that as accepting no pre-filtering on the rest of the group, not
   as an oversight-free equivalent to repeating it.
+
+**Combining the two, recommended pattern:** put the domain form, with
+key `5` set, on the one metadata code (no need to repeat the domain form
+itself elsewhere); put the plain decentralized form, key `2` equal to
+that same Companion ID value, on every other code. This gets the
+strongest available property — verified-domain-backed trust — on every
+code, for the cost of one full domain form plus one small uint per code,
+rather than either paying the domain form's registration weight on every
+code or settling for hash-derivation-only trust everywhere.
 
 **Scope note.** App Route is QDEF's dedicated mechanism for
 cross-implementer routing — not a special case carved out of some

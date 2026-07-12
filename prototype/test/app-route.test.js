@@ -131,6 +131,83 @@ test('a scanner that only understands the domain form still skips a decentralize
   assert.equal(rec.aborted, false);
 });
 
+// ---------------------------------------------------------------------
+// Companion ID (key 5, spec update): lets the domain form declare the
+// same private-use-random ID the decentralized form carries standalone
+// on sibling codes, so a scanner that verifies this Record's domain
+// learns a verified-trust binding for that ID — stronger than the
+// decentralized form's own hash-derivation, which only proves
+// self-consistency. QDEF itself only carries the bytes; "verification
+// succeeded" is a scanner-side fact these tests simulate by choosing to
+// trust the domain field, the same way every other App Route test
+// simulates OS-level dispatch without an actual OS present.
+// ---------------------------------------------------------------------
+
+test('domain form with a Companion ID round-trips both the domain and the ID together', () => {
+  const container = core.encodeContainer([
+    {
+      typeId: wrappers.APP_ROUTE_TYPE,
+      fields: new Map([
+        [2, 'example.com'],
+        [3, 'Open in Example App'],
+        [5, 12271745624591856273n],
+      ]),
+    },
+  ]);
+
+  const { records } = core.decodeContainer(container);
+  const rec = core.applyCriticality(records[0], wrappers.APP_ROUTE_KNOWN_KEYS);
+
+  assert.equal(rec.aborted, false);
+  assert.equal(rec.map.get(2), 'example.com');
+  assert.equal(rec.map.get(5), 12271745624591856273n);
+});
+
+test('a metadata code (domain form + Companion ID) and a sibling code (decentralized form alone) carry a matching ID a scanner can bind together', () => {
+  const metadataCode = core.encodeContainer([
+    {
+      typeId: wrappers.APP_ROUTE_TYPE,
+      fields: new Map([[2, 'example.com'], [5, 12271745624591856273n]]),
+    },
+  ]);
+  const siblingCode = core.encodeContainer([
+    { typeId: wrappers.APP_ROUTE_TYPE, fields: new Map([[2, 12271745624591856273n]]) },
+  ]);
+
+  const metadataRec = core.applyCriticality(
+    core.decodeContainer(metadataCode).records[0],
+    wrappers.APP_ROUTE_KNOWN_KEYS,
+  );
+  const siblingRec = core.applyCriticality(
+    core.decodeContainer(siblingCode).records[0],
+    wrappers.APP_ROUTE_KNOWN_KEYS,
+  );
+
+  // The wire-level fact QDEF guarantees: the two IDs are the same value.
+  // Whether a scanner actually treats that as "verified trust" depends on
+  // whether it verified the metadata code's domain claim first (§4.4) —
+  // out of scope for QDEF itself, simulated here as already having
+  // happened.
+  assert.equal(metadataRec.map.get(5), siblingRec.map.get(2));
+});
+
+test('a decoder from before Companion ID existed still accepts the domain form — key 5 is odd/optional, not a breaking addition', () => {
+  const container = core.encodeContainer([
+    {
+      typeId: wrappers.APP_ROUTE_TYPE,
+      fields: new Map([[2, 'example.com'], [5, 12271745624591856273n]]),
+    },
+  ]);
+
+  const PRE_COMPANION_ID_KNOWN_KEYS = new Set([0, 2, 3]);
+  const { records } = core.decodeContainer(container);
+  const rec = core.applyCriticality(records[0], PRE_COMPANION_ID_KNOWN_KEYS);
+
+  assert.equal(rec.aborted, false);
+  assert.equal(rec.map.get(2), 'example.com');
+  assert.deepEqual(rec.ignoredKeys, [5]); // odd key, unrecognized, ignored not aborted
+});
+
 test('encoding the same App Route fields twice (simulating repetition across a multi-code group) produces identical bytes', () => {
   // §4.4's etiquette: repeat verbatim on every code in a multi-code group,
   // so a scanner can decide from any single scanned code. That guarantee

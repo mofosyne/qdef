@@ -614,6 +614,28 @@ in `prototype/test/app-route.test.js`: the uint form round-trips, and a
 decoder that only checks Type ID `7` presence skips it cleanly without
 needing to know key `2`'s shape in advance.
 
+**Third update:** the decentralized form's own weakness — hash-
+derivation proves self-consistency, not entitlement — turned out to
+have a fix hiding in the domain form, once asked directly whether the
+two forms could reinforce each other instead of staying fully separate.
+Added key `5` (Companion ID, odd/optional): a domain-form Record can
+declare the same private-use-random uint the decentralized form carries
+standalone elsewhere, so a scanner that verifies the domain has, for
+free, also verified that ID — a genuinely stronger binding than hash-
+derivation, since it rides on real App Links/Universal Links
+verification instead of a reproducible-but-unauthorized claim. Bounded
+carefully in §4.4 so it can't be mistaken for more than it is: the
+binding is exactly as strong as the verification that produced it (no
+verification, or a failed one, means it reverts to plain
+decentralized-form strength), and it's scoped to the scanning session
+that actually saw the metadata code, not a durable registry entry.
+Additive, not a new form — one new odd key, so a pre-existing decoder's
+behavior is unchanged (§3.2 doing exactly its job). Prototyped in
+`prototype/test/app-route.test.js`: the domain form with a Companion ID
+round-trips, a metadata code and a sibling code carrying the same ID
+produce comparable values, and a decoder built before this field existed
+ignores it without aborting.
+
 ### 18. "Private-use" was being misread as "closed/internal" — the tier description was wrong, not just imprecise
 
 While drafting a reply to TagDrop about App Route's decentralized form,
