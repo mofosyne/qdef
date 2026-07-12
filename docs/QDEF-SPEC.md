@@ -711,7 +711,8 @@ Type 7: {                          // App Route (stdlib) — domain form
   0: 7,
   2: "example.com",                // CRITICAL: a domain the routing
                                     //   target has verified control over
-  3: "Open in Example App",        // OPTIONAL: human-readable label
+  3: "com.example/tagdrop-paper",  // OPTIONAL: Hint name, same role as
+                                    //   Type Hint (§3.1) — not a label
   5: 12271745624591856273          // OPTIONAL: Companion ID — a private-
                                     //   use-random ID (same tier as the
                                     //   decentralized form's key 2) that
@@ -742,6 +743,20 @@ association` on iOS — hosted on the domain the claimant controls) — QDEF
 inherits that existing, proven trust machinery on both platforms instead
 of inventing a new one. Use this form for auto-launch dispatch, where
 getting it wrong means the wrong application opens.
+
+**Key `3` (Hint name, OPTIONAL) plays the same role in both forms — a
+recoverable name, exactly as Type Hint (§3.1) defines it, never a
+display label.** This is a deliberate unification, not independent
+choices per form: a decoder reading key `3` never needs to branch on
+which form of key `2` it's paired with. In the domain form specifically,
+key `3` mostly documents intent for a future reader rather than
+resolving ambiguity — the domain itself (key `2`) is already a stable,
+human-legible identity — but keeping the same field playing the same
+role everywhere is what lets it double as the hash-derivation input for
+Companion ID below. Nothing stops an encoder from choosing a
+human-presentable string here (`"Open in Example App"` is just as valid
+a Hint name as a reverse-domain string); the role is about what the
+field is *for*, not a constraint on how it reads.
 
 *The decentralized form* reuses Type Hint's exact pattern (§3.1): a
 private-use-random uint, with key `3` playing Hint's role — a recoverable
@@ -775,6 +790,20 @@ was entitled to make it. Sibling codes then only need to carry the
 lightweight decentralized form (key `2` alone, no domain, no per-code
 verification cost) for the scanner to recognize them as belonging to the
 same, now-verified, source.
+
+**Companion ID MAY also be checked the cheap way, independent of domain
+verification, because key `3` is now the same field either form uses:**
+`CompanionID = truncate(hash(name), N)` against key `3`'s Hint name,
+identical to the decentralized form's own optional strengthening above.
+This is strictly weaker than the domain-verified binding — it only
+proves self-consistency, the same limit hash-derivation always has — but
+it costs a scanner nothing beyond local computation, no network call and
+no platform dispatch API, so it's available even to a scanner that can't
+or won't perform domain verification at all. The two checks stack
+without conflict: a scanner capable of both gets the domain-verified
+guarantee; a scanner capable of only the hash check gets a weaker but
+nonzero one; a scanner capable of neither is exactly where the plain
+decentralized form already leaves it.
 
 **This binding is exactly as strong as the verification that produced
 it, and no stronger.** Two failure modes to keep straight:

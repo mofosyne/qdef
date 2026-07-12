@@ -7,6 +7,7 @@ const crypto = require('crypto');
 const zlib = require('zlib');
 const cbor = require('cbor');
 const core = require('./core');
+const { deriveHashId } = require('./typeHint');
 
 const SPLIT_TYPE = 2;
 const COMPRESS_TYPE = 3;
@@ -21,6 +22,18 @@ const ENCRYPT_KNOWN_KEYS = new Set([0, 2, 4, 5, 7]);
 const FALLBACK_HINT_KNOWN_KEYS = new Set([0, 1, 2]);
 const MEDIA_PAYLOAD_KNOWN_KEYS = new Set([0, 2, 4]);
 const APP_ROUTE_KNOWN_KEYS = new Set([0, 2, 3, 5]);
+
+/**
+ * §4.4's cheap, no-network check for App Route's Companion ID (key 5):
+ * key 3 (Hint name) now plays the same role in both App Route forms, so
+ * the same hash-derivation trick Type Hint uses (§3.1) applies here too.
+ * Strictly weaker than domain verification — self-consistency only,
+ * never authorization — but requires nothing but local computation.
+ */
+function verifyCompanionId(companionId, hint) {
+  if (typeof hint !== 'string') return 'not-applicable';
+  return deriveHashId(hint) === companionId ? 'verified' : 'unverified';
+}
 
 const PARITY_SCHEME_NONE = 0;
 const PARITY_SCHEME_XOR = 1; // prototype-only single-parity-fragment scheme
@@ -325,6 +338,7 @@ module.exports = {
   FALLBACK_HINT_KNOWN_KEYS,
   MEDIA_PAYLOAD_KNOWN_KEYS,
   APP_ROUTE_KNOWN_KEYS,
+  verifyCompanionId,
   PARITY_SCHEME_NONE,
   PARITY_SCHEME_XOR,
   COSE_ALG_A256GCM,

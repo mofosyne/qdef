@@ -712,6 +712,31 @@ round-trips, a metadata code and a sibling code carrying the same ID
 produce values a scanner can compare directly, and a pre-Companion-ID
 decoder ignores key `5` without aborting.
 
+**Follow-on: unifying key `3`'s role across both forms, not leaving it
+split.** The domain form's key `3` had been documented as a
+human-readable label; the decentralized form's key `3` was already Type
+Hint's recoverable-name role. Pointed out directly: there's no reason
+for the same key number to mean two different things depending on which
+form of key `2` it's paired with — a reader shouldn't have to branch on
+that to know what key `3` is *for*. Unified both to the Hint-name role.
+This costs nothing (a Hint name can still be a human-presentable string
+if an encoder wants that — `"Open in Example App"` is as valid a Hint
+name as a reverse-domain string, the role constrains purpose, not
+spelling) and it buys something concrete: because key `3` is now always
+the same field, the domain form's own Companion ID can be hash-checked
+against it the exact same way the decentralized form's Type ID already
+is (`CompanionID = truncate(hash(name), N)`). That gives a scanner
+incapable of domain verification at all — no network, no platform
+dispatch API — a cheap, weaker-but-nonzero signal instead of nothing,
+stacking underneath the domain-verified guarantee rather than competing
+with it. Prototyped in `prototype/src/wrappers.js`'s `verifyCompanionId`
+(reusing `typeHint.js`'s `deriveHashId`, not a second hash
+implementation) and `prototype/test/app-route.test.js`: a hash-derived
+Companion ID verifies against its own Hint name, an unrelated name
+degrades to unverified, and a missing Hint name is not-applicable rather
+than an error — the same three-way degrade Type Hint's own verification
+already established (§3.1).
+
 ## A confession (Parkinson's Law of Triviality, self-reported)
 
 C. Northcote Parkinson's original example: a committee approves a

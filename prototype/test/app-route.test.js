@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 
 const core = require('../src/core');
 const wrappers = require('../src/wrappers');
+const { deriveHashId } = require('../src/typeHint');
 
 // ---------------------------------------------------------------------
 // §4.4's App Route (Type 7): a plain stdlib Record, not a wrapper, for
@@ -14,13 +15,13 @@ const wrappers = require('../src/wrappers');
 // verification or dispatch actually happens, only carries the identifier.
 // ---------------------------------------------------------------------
 
-test('App Route with a domain and a human-readable label round-trips', () => {
+test('App Route with a domain and a Hint name round-trips', () => {
   const container = core.encodeContainer([
     {
       typeId: wrappers.APP_ROUTE_TYPE,
       fields: new Map([
         [2, 'example.com'],
-        [3, 'Open in Example App'],
+        [3, 'com.example/tagdrop-paper'],
       ]),
     },
   ]);
@@ -30,10 +31,10 @@ test('App Route with a domain and a human-readable label round-trips', () => {
 
   assert.equal(rec.aborted, false);
   assert.equal(rec.map.get(2), 'example.com');
-  assert.equal(rec.map.get(3), 'Open in Example App');
+  assert.equal(rec.map.get(3), 'com.example/tagdrop-paper');
 });
 
-test('the label is optional — a domain alone is a complete App Route Record', () => {
+test('the Hint name is optional — a domain alone is a complete App Route Record', () => {
   const container = core.encodeContainer([
     { typeId: wrappers.APP_ROUTE_TYPE, fields: new Map([[2, 'example.com']]) },
   ]);
@@ -206,6 +207,45 @@ test('a decoder from before Companion ID existed still accepts the domain form �
   assert.equal(rec.aborted, false);
   assert.equal(rec.map.get(2), 'example.com');
   assert.deepEqual(rec.ignoredKeys, [5]); // odd key, unrecognized, ignored not aborted
+});
+
+// ---------------------------------------------------------------------
+// Key 3 unification (spec update): the domain form's key 3 now plays the
+// exact same "Hint name" role as the decentralized form's, not a separate
+// display-label concept. That's what makes this cheap, no-network check
+// possible — a scanner that can't or won't do domain verification (no
+// network, no platform dispatch API) still gets a weaker, self-
+// consistency-only signal for the Companion ID, stacking with (never
+// replacing) the domain-verified guarantee above.
+// ---------------------------------------------------------------------
+
+test('a hash-derived Companion ID verifies against its own Hint name, independent of domain verification', () => {
+  const name = 'com.example/tagdrop-paper';
+  const derivedId = deriveHashId(name);
+
+  const container = core.encodeContainer([
+    {
+      typeId: wrappers.APP_ROUTE_TYPE,
+      fields: new Map([[2, 'example.com'], [3, name], [5, derivedId]]),
+    },
+  ]);
+  const rec = core.applyCriticality(
+    core.decodeContainer(container).records[0],
+    wrappers.APP_ROUTE_KNOWN_KEYS,
+  );
+
+  assert.equal(wrappers.verifyCompanionId(rec.map.get(5), rec.map.get(3)), 'verified');
+});
+
+test('a Companion ID unrelated to its Hint name degrades to unverified, not an error', () => {
+  assert.equal(
+    wrappers.verifyCompanionId(12271745624591856273n, 'com.example/totally-different-name'),
+    'unverified',
+  );
+});
+
+test('Companion ID hash-check is not-applicable with no Hint name present', () => {
+  assert.equal(wrappers.verifyCompanionId(12271745624591856273n, undefined), 'not-applicable');
 });
 
 test('encoding the same App Route fields twice (simulating repetition across a multi-code group) produces identical bytes', () => {

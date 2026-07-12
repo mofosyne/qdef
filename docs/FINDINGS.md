@@ -636,6 +636,27 @@ round-trips, a metadata code and a sibling code carrying the same ID
 produce comparable values, and a decoder built before this field existed
 ignores it without aborting.
 
+**Fourth update:** the domain form's key `3` had been documented as a
+separate "human-readable label" concept from the decentralized form's
+key `3` (Type Hint's recoverable-name role) — pointed out directly that
+this split was arbitrary, since nothing requires the same key number to
+mean different things depending on which form of key `2` it's paired
+with. Unified both to the Hint-name role; a human-presentable string is
+still perfectly valid content for it, only the documented *purpose*
+changed. This unification wasn't just tidying: because key `3` is now
+reliably the same field in both forms, the domain form's own Companion
+ID can be hash-checked against it exactly the way the decentralized
+form's Type ID already is — giving a scanner that can't perform domain
+verification at all (no network, no platform dispatch API) a cheap,
+weaker-but-nonzero signal for free, instead of nothing. Implemented as
+`verifyCompanionId` in `prototype/src/wrappers.js`, reusing
+`typeHint.js`'s `deriveHashId` rather than a second hash
+implementation. Prototyped in `prototype/test/app-route.test.js`: a
+hash-derived Companion ID verifies against its Hint name, an unrelated
+name degrades to unverified, and a missing Hint name is not-applicable —
+matching the three-way degrade Type Hint's own verification (§3.1)
+already established, not a new pattern invented for this.
+
 ### 18. "Private-use" was being misread as "closed/internal" — the tier description was wrong, not just imprecise
 
 While drafting a reply to TagDrop about App Route's decentralized form,
