@@ -9,11 +9,11 @@
 // docs/FINDINGS.md #11–#12). Key 0 is the only routing mechanism.
 //
 // No version byte: the container is just magic + a CBOR Sequence of
-// Records, full stop. Any header-level metadata (format namespace, a
-// future incompatible header shape) lives inside the Sequence itself, as
-// a Record with the reserved Type ID 0 (see header.js) — reusing the
-// same even/odd extensibility every other Record already has, rather
-// than a second, parallel extensibility mechanism for the header alone.
+// Records, full stop. Any container-level metadata (a format namespace)
+// lives inside the Sequence itself, as a Record with the reserved Type
+// ID 0 (see header.js) — reusing the same even/odd extensibility every
+// other Record already has, rather than a second, parallel
+// extensibility mechanism for the header alone.
 
 const cbor = require('cbor');
 

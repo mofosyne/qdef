@@ -11,12 +11,19 @@
 // or found anywhere but first, the container is simply treated as
 // unnamespaced -- a safe, graceful degrade, never a hard failure.
 //
-// The choice of Type ID is the version/generation signal for this
-// mechanism: Type 0 is the only header shape defined today. A
-// genuinely incompatible future header shape would claim a different
-// reserved low Type ID; an old decoder simply doesn't recognize it and
-// skips the whole Record via the ordinary unrecognized-Type-ID path --
-// no separate version field needed.
+// Type 0 is the one, permanent header Record Type -- it does not get
+// "versioned" by minting new Type IDs (that would waste low Type IDs on
+// header revisions instead of saving them for real future mechanisms,
+// and it's inconsistent with how every other stdlib Record evolves:
+// Encrypt gained Algorithm/Key Algorithm and App Route gained Companion
+// ID as new keys on their existing Type IDs, never as new Types). No
+// dedicated "version" field either -- even/odd extensibility already is
+// the version mechanism, for free: a genuinely incompatible future
+// change to Type 0 itself is just a new even/critical key, whenever
+// it's actually needed. An old decoder that doesn't recognize it aborts
+// only this one Record (§3.2) and falls back to unnamespaced, the same
+// graceful, already-proven degrade every other stdlib Record already
+// has -- no field needs to be pre-allocated in advance.
 
 const core = require('./core');
 
