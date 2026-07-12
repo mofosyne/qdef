@@ -4,7 +4,6 @@ const assert = require('node:assert/strict');
 
 const core = require('../src/core');
 const wrappers = require('../src/wrappers');
-const { deriveHashId } = require('../src/typeHint');
 
 // ---------------------------------------------------------------------
 // §4.4's App Route (Type 7): a plain stdlib Record, not a wrapper, for
@@ -15,13 +14,13 @@ const { deriveHashId } = require('../src/typeHint');
 // verification or dispatch actually happens, only carries the identifier.
 // ---------------------------------------------------------------------
 
-test('App Route with a domain and a Hint name round-trips', () => {
+test('App Route with a domain and a human-readable label round-trips', () => {
   const container = core.encodeContainer([
     {
       typeId: wrappers.APP_ROUTE_TYPE,
       fields: new Map([
         [2, 'example.com'],
-        [3, 'com.example/tagdrop-paper'],
+        [3, 'Open in Example App'],
       ]),
     },
   ]);
@@ -31,10 +30,10 @@ test('App Route with a domain and a Hint name round-trips', () => {
 
   assert.equal(rec.aborted, false);
   assert.equal(rec.map.get(2), 'example.com');
-  assert.equal(rec.map.get(3), 'com.example/tagdrop-paper');
+  assert.equal(rec.map.get(3), 'Open in Example App');
 });
 
-test('the Hint name is optional — a domain alone is a complete App Route Record', () => {
+test('the label is optional — a domain alone is a complete App Route Record', () => {
   const container = core.encodeContainer([
     { typeId: wrappers.APP_ROUTE_TYPE, fields: new Map([[2, 'example.com']]) },
   ]);
@@ -130,122 +129,6 @@ test('a scanner that only understands the domain form still skips a decentralize
   // (e.g. "is *any* App Route present") never needs to inspect key 2's
   // shape at all to skip cleanly.
   assert.equal(rec.aborted, false);
-});
-
-// ---------------------------------------------------------------------
-// Companion ID (key 5, spec update): lets the domain form declare the
-// same private-use-random ID the decentralized form carries standalone
-// on sibling codes, so a scanner that verifies this Record's domain
-// learns a verified-trust binding for that ID — stronger than the
-// decentralized form's own hash-derivation, which only proves
-// self-consistency. QDEF itself only carries the bytes; "verification
-// succeeded" is a scanner-side fact these tests simulate by choosing to
-// trust the domain field, the same way every other App Route test
-// simulates OS-level dispatch without an actual OS present.
-// ---------------------------------------------------------------------
-
-test('domain form with a Companion ID round-trips both the domain and the ID together', () => {
-  const container = core.encodeContainer([
-    {
-      typeId: wrappers.APP_ROUTE_TYPE,
-      fields: new Map([
-        [2, 'example.com'],
-        [3, 'Open in Example App'],
-        [5, 12271745624591856273n],
-      ]),
-    },
-  ]);
-
-  const { records } = core.decodeContainer(container);
-  const rec = core.applyCriticality(records[0], wrappers.APP_ROUTE_KNOWN_KEYS);
-
-  assert.equal(rec.aborted, false);
-  assert.equal(rec.map.get(2), 'example.com');
-  assert.equal(rec.map.get(5), 12271745624591856273n);
-});
-
-test('a metadata code (domain form + Companion ID) and a sibling code (decentralized form alone) carry a matching ID a scanner can bind together', () => {
-  const metadataCode = core.encodeContainer([
-    {
-      typeId: wrappers.APP_ROUTE_TYPE,
-      fields: new Map([[2, 'example.com'], [5, 12271745624591856273n]]),
-    },
-  ]);
-  const siblingCode = core.encodeContainer([
-    { typeId: wrappers.APP_ROUTE_TYPE, fields: new Map([[2, 12271745624591856273n]]) },
-  ]);
-
-  const metadataRec = core.applyCriticality(
-    core.decodeContainer(metadataCode).records[0],
-    wrappers.APP_ROUTE_KNOWN_KEYS,
-  );
-  const siblingRec = core.applyCriticality(
-    core.decodeContainer(siblingCode).records[0],
-    wrappers.APP_ROUTE_KNOWN_KEYS,
-  );
-
-  // The wire-level fact QDEF guarantees: the two IDs are the same value.
-  // Whether a scanner actually treats that as "verified trust" depends on
-  // whether it verified the metadata code's domain claim first (§4.4) —
-  // out of scope for QDEF itself, simulated here as already having
-  // happened.
-  assert.equal(metadataRec.map.get(5), siblingRec.map.get(2));
-});
-
-test('a decoder from before Companion ID existed still accepts the domain form — key 5 is odd/optional, not a breaking addition', () => {
-  const container = core.encodeContainer([
-    {
-      typeId: wrappers.APP_ROUTE_TYPE,
-      fields: new Map([[2, 'example.com'], [5, 12271745624591856273n]]),
-    },
-  ]);
-
-  const PRE_COMPANION_ID_KNOWN_KEYS = new Set([0, 2, 3]);
-  const { records } = core.decodeContainer(container);
-  const rec = core.applyCriticality(records[0], PRE_COMPANION_ID_KNOWN_KEYS);
-
-  assert.equal(rec.aborted, false);
-  assert.equal(rec.map.get(2), 'example.com');
-  assert.deepEqual(rec.ignoredKeys, [5]); // odd key, unrecognized, ignored not aborted
-});
-
-// ---------------------------------------------------------------------
-// Key 3 unification (spec update): the domain form's key 3 now plays the
-// exact same "Hint name" role as the decentralized form's, not a separate
-// display-label concept. That's what makes this cheap, no-network check
-// possible — a scanner that can't or won't do domain verification (no
-// network, no platform dispatch API) still gets a weaker, self-
-// consistency-only signal for the Companion ID, stacking with (never
-// replacing) the domain-verified guarantee above.
-// ---------------------------------------------------------------------
-
-test('a hash-derived Companion ID verifies against its own Hint name, independent of domain verification', () => {
-  const name = 'com.example/tagdrop-paper';
-  const derivedId = deriveHashId(name);
-
-  const container = core.encodeContainer([
-    {
-      typeId: wrappers.APP_ROUTE_TYPE,
-      fields: new Map([[2, 'example.com'], [3, name], [5, derivedId]]),
-    },
-  ]);
-  const rec = core.applyCriticality(
-    core.decodeContainer(container).records[0],
-    wrappers.APP_ROUTE_KNOWN_KEYS,
-  );
-
-  assert.equal(wrappers.verifyCompanionId(rec.map.get(5), rec.map.get(3)), 'verified');
-});
-
-test('a Companion ID unrelated to its Hint name degrades to unverified, not an error', () => {
-  assert.equal(
-    wrappers.verifyCompanionId(12271745624591856273n, 'com.example/totally-different-name'),
-    'unverified',
-  );
-});
-
-test('Companion ID hash-check is not-applicable with no Hint name present', () => {
-  assert.equal(wrappers.verifyCompanionId(12271745624591856273n, undefined), 'not-applicable');
 });
 
 test('encoding the same App Route fields twice (simulating repetition across a multi-code group) produces identical bytes', () => {

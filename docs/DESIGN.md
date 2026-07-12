@@ -660,81 +660,6 @@ Record Type, since the wire shape, skip behavior, and Type Hint's
 name-binding pattern are all identical; only the trust model and the
 etiquette guidance around repetition differ (§4.4).
 
-## App Route's Companion ID (key 5) — letting real verification back the cheap pre-filter, not just self-consistency
-
-The decentralized form's hash-derivation (§3.1's pattern, reused at
-§4.4) proves a claim is internally consistent — this ID really was
-derived from this name — but never that the claimant was entitled to
-make it. That gap was always visible, not hidden (§4.4 says so
-directly), but it's a real gap: anyone can compute `hash("Example App")`
-and stamp the result on a code.
-
-The domain form doesn't have that gap — its trust comes from an actual
-external check (App Links / Universal Links `.well-known` verification),
-not from a hash anyone can reproduce. The natural next question, asked
-directly while preparing a reply about the decentralized form: could the
-domain form *hand that stronger trust down* to the cheap per-code
-pre-filter, instead of the pre-filter being stuck with hash-derivation's
-weaker guarantee forever?
-
-Yes, and it costs one field. Key `5` (Companion ID) lets a domain-form
-Record declare the same private-use-random uint the decentralized form
-carries standalone on sibling codes. A scanner that verifies this
-Record's domain has, in the same step, verified the Companion ID
-binding too — the ID isn't a separate claim requiring separate proof, it
-rides on the domain check that already happened. Sibling codes then only
-need the lightweight decentralized form, and a scanner that saw the
-metadata code first now has verified-strength trust for them, not
-merely hash-consistent trust.
-
-**Two things keep this from silently overclaiming security it doesn't
-have**, both written into §4.4 explicitly rather than left implied:
-
-- The binding is exactly as strong as the verification that produced
-  it. No verification (metadata code never seen) or failed verification
-  (domain claim doesn't check out) both mean the Companion ID reverts to
-  exactly what the plain decentralized form already offered — nothing is
-  lost by trying it, but nothing is gained without an actual successful
-  check either.
-- It's session-scoped, not a registry entry. The binding lives in
-  whatever state a scanner keeps across the codes in one scan; it says
-  nothing about a Companion ID value encountered again on an unrelated
-  occasion.
-
-This is additive, not a new form: same Record Type, same known-key set
-plus one new odd/optional key, so a decoder built before this field
-existed keeps working exactly as before (§3.2's even/odd rule doing
-precisely the job it exists for). Prototyped in
-`prototype/test/app-route.test.js`: the domain form with a Companion ID
-round-trips, a metadata code and a sibling code carrying the same ID
-produce values a scanner can compare directly, and a pre-Companion-ID
-decoder ignores key `5` without aborting.
-
-**Follow-on: unifying key `3`'s role across both forms, not leaving it
-split.** The domain form's key `3` had been documented as a
-human-readable label; the decentralized form's key `3` was already Type
-Hint's recoverable-name role. Pointed out directly: there's no reason
-for the same key number to mean two different things depending on which
-form of key `2` it's paired with — a reader shouldn't have to branch on
-that to know what key `3` is *for*. Unified both to the Hint-name role.
-This costs nothing (a Hint name can still be a human-presentable string
-if an encoder wants that — `"Open in Example App"` is as valid a Hint
-name as a reverse-domain string, the role constrains purpose, not
-spelling) and it buys something concrete: because key `3` is now always
-the same field, the domain form's own Companion ID can be hash-checked
-against it the exact same way the decentralized form's Type ID already
-is (`CompanionID = truncate(hash(name), N)`). That gives a scanner
-incapable of domain verification at all — no network, no platform
-dispatch API — a cheap, weaker-but-nonzero signal instead of nothing,
-stacking underneath the domain-verified guarantee rather than competing
-with it. Prototyped in `prototype/src/wrappers.js`'s `verifyCompanionId`
-(reusing `typeHint.js`'s `deriveHashId`, not a second hash
-implementation) and `prototype/test/app-route.test.js`: a hash-derived
-Companion ID verifies against its own Hint name, an unrelated name
-degrades to unverified, and a missing Hint name is not-applicable rather
-than an error — the same three-way degrade Type Hint's own verification
-already established (§3.1).
-
 ## The container header collapsed to magic + a CBOR Sequence, full stop
 
 What started as "can the header carry an optional format namespace for
@@ -803,6 +728,24 @@ Prototyped end to end: `prototype/src/header.js` and
 test proving the claim in the name directly — the Rust mandatory core
 required zero new code to handle Type `0` correctly, only a fixture
 proving it.
+
+**Consequence: App Route's Companion ID (key `5`) is removed, not kept
+alongside this.** Companion ID existed for exactly one job — a cheap,
+per-code misread pre-filter — and the namespace field now does that job
+better: structurally guaranteed first (Companion ID lived on App Route,
+which is explicitly *not* positionally special, so a scanner had to
+find it), and genuinely zero-cost when unused (Companion ID required a
+whole separate decentralized-form App Route record on every sibling
+code). Keeping both would have meant two private-use-random-plus-Hint
+mechanisms answering the same question from two different Record Types
+— exactly the kind of duplication this project avoids elsewhere (see
+"Registry governance," above, on not inventing a second governance
+scheme where one already fits). Nothing shipped yet, so this was a
+clean removal rather than a deprecation: §4.4's domain form and plain
+decentralized form are back to their pre-Companion-ID shape, and the
+domain form's key `3` is a label again, not unified with the
+decentralized form's Hint-name role — that unification's only real
+justification (letting Companion ID be hash-checked) is gone with it.
 
 ## A confession (Parkinson's Law of Triviality, self-reported)
 

@@ -500,9 +500,9 @@ minting new Type IDs for future header revisions.** Both were considered
 and rejected: minting new low Type IDs for header generations would
 waste Type ID space that should stay available for real future stdlib
 mechanisms, and it's inconsistent with how every other stdlib Record
-actually evolves here (Encrypt gained Algorithm/Key Algorithm and App
-Route gained Companion ID as new keys on their *existing* Type IDs,
-never as new Types). Even/odd extensibility already *is* the version
+actually evolves here (Encrypt gained Algorithm/Key Algorithm as new
+keys on its *existing* Type ID, never a new Type). Even/odd
+extensibility already *is* the version
 mechanism, for free: a genuinely incompatible future change to Type `0`
 itself is just a new even/critical key, whenever it's actually needed.
 An old decoder that doesn't recognize it aborts only this one Record
@@ -811,13 +811,7 @@ Type 7: {                          // App Route (stdlib) — domain form
   0: 7,
   2: "example.com",                // CRITICAL: a domain the routing
                                     //   target has verified control over
-  3: "com.example/tagdrop-paper",  // OPTIONAL: Hint name, same role as
-                                    //   Type Hint (§3.1) — not a label
-  5: 12271745624591856273          // OPTIONAL: Companion ID — a private-
-                                    //   use-random ID (same tier as the
-                                    //   decentralized form's key 2) that
-                                    //   sibling codes in this group will
-                                    //   carry standalone
+  3: "Open in Example App"         // OPTIONAL: human-readable label
 }
 
 Type 7: {                          // App Route (stdlib) — decentralized form
@@ -844,20 +838,6 @@ inherits that existing, proven trust machinery on both platforms instead
 of inventing a new one. Use this form for auto-launch dispatch, where
 getting it wrong means the wrong application opens.
 
-**Key `3` (Hint name, OPTIONAL) plays the same role in both forms — a
-recoverable name, exactly as Type Hint (§3.1) defines it, never a
-display label.** This is a deliberate unification, not independent
-choices per form: a decoder reading key `3` never needs to branch on
-which form of key `2` it's paired with. In the domain form specifically,
-key `3` mostly documents intent for a future reader rather than
-resolving ambiguity — the domain itself (key `2`) is already a stable,
-human-legible identity — but keeping the same field playing the same
-role everywhere is what lets it double as the hash-derivation input for
-Companion ID below. Nothing stops an encoder from choosing a
-human-presentable string here (`"Open in Example App"` is just as valid
-a Hint name as a reverse-domain string); the role is about what the
-field is *for*, not a constraint on how it reads.
-
 *The decentralized form* reuses Type Hint's exact pattern (§3.1): a
 private-use-random uint, with key `3` playing Hint's role — a recoverable
 name, optionally derived as `ID = truncate(hash(name), N)` so the binding
@@ -875,56 +855,6 @@ code) before attempting the real work of reassembly, layered *ahead of*
 §4.1's `group_id` integrity check, never as a replacement for it. A false
 match here just means a decoder wastes effort before `group_id` catches
 the mismatch anyway — not a wrongly-launched application.
-
-**Key `5` (Companion ID, OPTIONAL) lets the domain form train a scanner
-on the decentralized form's ID, so verified trust — not just hash
-consistency — can back the cheap pre-filter on sibling codes.** A
-private-use-random uint, same shape and same tier as the decentralized
-form's key `2`, declared alongside a verified domain. A scanner that
-successfully verifies this Record's domain (via App Links / Universal
-Links) has, in the same step, learned a *real*, authorization-backed
-binding between that domain and the Companion ID — strictly stronger
-than the decentralized form's own hash-derivation, which only ever
-proves a self-claim is internally consistent, never that its claimant
-was entitled to make it. Sibling codes then only need to carry the
-lightweight decentralized form (key `2` alone, no domain, no per-code
-verification cost) for the scanner to recognize them as belonging to the
-same, now-verified, source.
-
-**Companion ID MAY also be checked the cheap way, independent of domain
-verification, because key `3` is now the same field either form uses:**
-`CompanionID = truncate(hash(name), N)` against key `3`'s Hint name,
-identical to the decentralized form's own optional strengthening above.
-This is strictly weaker than the domain-verified binding — it only
-proves self-consistency, the same limit hash-derivation always has — but
-it costs a scanner nothing beyond local computation, no network call and
-no platform dispatch API, so it's available even to a scanner that can't
-or won't perform domain verification at all. The two checks stack
-without conflict: a scanner capable of both gets the domain-verified
-guarantee; a scanner capable of only the hash check gets a weaker but
-nonzero one; a scanner capable of neither is exactly where the plain
-decentralized form already leaves it.
-
-**This binding is exactly as strong as the verification that produced
-it, and no stronger.** Two failure modes to keep straight:
-
-- **Verification never happened.** A scanner that only ever sees a
-  sibling code — the metadata code carrying key `5` was lost, scanned
-  out of order and not yet processed, or never present — gets no benefit
-  over the plain decentralized form: an unverified Companion ID is just
-  an unverified private-use-random ID, full stop.
-- **Verification was attempted and failed.** Presence of key `5` proves
-  nothing by itself; a forger can stamp any Companion ID next to a
-  domain claim that fails its `.well-known` check just as easily as next
-  to one that succeeds. The Companion ID inherits the domain form's
-  authority only when that verification step actually succeeds — never
-  from the field merely being present on the wire.
-
-Also **session-scoped, not durable.** The learned binding lives in
-whatever scanner state persists across the codes in one scan/session —
-it is not a registry entry, has no expiry semantics of its own, and
-carries no claim about a Companion ID seen again in an unrelated scan on
-a different occasion.
 
 Resolving a domain to an actual launch target is intentionally left to
 local, OS-level dispatch — no centralized QDEF-level registry or
@@ -1002,15 +932,6 @@ per-code repetition requirement is exactly what makes the pre-filter
 work at all — but an adopter choosing between the two forms should
 weigh this against actual group size, not just the anti-spoofing
 difference.
-
-**Combining the two, recommended pattern:** put the domain form, with
-key `5` set, on the one metadata code (no need to repeat the domain form
-itself elsewhere); put the plain decentralized form, key `2` equal to
-that same Companion ID value, on every other code. This gets the
-strongest available property — verified-domain-backed trust — on every
-code, for the cost of one full domain form plus one small uint per code,
-rather than either paying the domain form's registration weight on every
-code or settling for hash-derivation-only trust everywhere.
 
 **Scope note.** App Route is QDEF's dedicated mechanism for
 cross-implementer routing — not a special case carved out of some

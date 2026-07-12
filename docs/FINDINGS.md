@@ -615,72 +615,36 @@ in `prototype/test/app-route.test.js`: the uint form round-trips, and a
 decoder that only checks Type ID `7` presence skips it cleanly without
 needing to know key `2`'s shape in advance.
 
-**Third update:** the decentralized form's own weakness — hash-
-derivation proves self-consistency, not entitlement — turned out to
-have a fix hiding in the domain form, once asked directly whether the
-two forms could reinforce each other instead of staying fully separate.
-Added key `5` (Companion ID, odd/optional): a domain-form Record can
-declare the same private-use-random uint the decentralized form carries
-standalone elsewhere, so a scanner that verifies the domain has, for
-free, also verified that ID — a genuinely stronger binding than hash-
-derivation, since it rides on real App Links/Universal Links
-verification instead of a reproducible-but-unauthorized claim. Bounded
-carefully in §4.4 so it can't be mistaken for more than it is: the
-binding is exactly as strong as the verification that produced it (no
-verification, or a failed one, means it reverts to plain
-decentralized-form strength), and it's scoped to the scanning session
-that actually saw the metadata code, not a durable registry entry.
-Additive, not a new form — one new odd key, so a pre-existing decoder's
-behavior is unchanged (§3.2 doing exactly its job). Prototyped in
-`prototype/test/app-route.test.js`: the domain form with a Companion ID
-round-trips, a metadata code and a sibling code carrying the same ID
-produce comparable values, and a decoder built before this field existed
-ignores it without aborting.
+**Third update:** briefly added, then removed, a Companion ID field
+(key `5`) letting the domain form vouch for the decentralized form's
+per-code pre-filter with real, App-Links-verified trust instead of just
+hash-derivation self-consistency — TagDrop independently confirmed its
+session-scoping bound was correctly shaped for their own (session-
+discontinuous) use case, not a gap. Removed once §3.5's format-namespace
+mechanism (Record Type `0`) landed and turned out to do the same
+per-code pre-filter job better: structurally guaranteed first (Companion
+ID lived on App Route, explicitly *not* positionally special) and
+genuinely zero-cost when unused (Companion ID needed a full decentralized-
+form App Route record on every sibling code). Two mechanisms answering
+the same question from different Record Types would have been exactly
+the duplication this project avoids elsewhere — see FINDINGS #19 and
+DESIGN.md's "container header collapsed" entry for the full reasoning.
+Nothing had shipped, so this was a clean removal: §4.4 is back to its
+pre-Companion-ID shape, including the domain form's key `3` reverting to
+a plain label (the unification with the decentralized form's Hint-name
+role existed only to make Companion ID hash-checkable).
 
-**Fourth update:** the domain form's key `3` had been documented as a
-separate "human-readable label" concept from the decentralized form's
-key `3` (Type Hint's recoverable-name role) — pointed out directly that
-this split was arbitrary, since nothing requires the same key number to
-mean different things depending on which form of key `2` it's paired
-with. Unified both to the Hint-name role; a human-presentable string is
-still perfectly valid content for it, only the documented *purpose*
-changed. This unification wasn't just tidying: because key `3` is now
-reliably the same field in both forms, the domain form's own Companion
-ID can be hash-checked against it exactly the way the decentralized
-form's Type ID already is — giving a scanner that can't perform domain
-verification at all (no network, no platform dispatch API) a cheap,
-weaker-but-nonzero signal for free, instead of nothing. Implemented as
-`verifyCompanionId` in `prototype/src/wrappers.js`, reusing
-`typeHint.js`'s `deriveHashId` rather than a second hash
-implementation. Prototyped in `prototype/test/app-route.test.js`: a
-hash-derived Companion ID verifies against its Hint name, an unrelated
-name degrades to unverified, and a missing Hint name is not-applicable —
-matching the three-way degrade Type Hint's own verification (§3.1)
-already established, not a new pattern invented for this.
-
-**Fifth update:** TagDrop checked the 41-byte figure independently
-(map head + `{0:7}` + `{2:<uint64>}` + `{3:"..."}`, byte for byte) and it
-matched, but flagged something the spec text hadn't said explicitly:
-the decentralized form's mandatory per-code repetition means "cheap"
+**Fourth update:** TagDrop checked the decentralized form's 41-byte
+figure independently (map head + `{0:7}` + `{2:<uint64>}` + `{3:"..."}`,
+byte for byte) and it matched, but flagged something the spec text
+hadn't said explicitly: mandatory per-code repetition means "cheap"
 describes one code's cost, not a multi-code group's total — a 7-code
 group pays 7×41 = 287 bytes for App Route alone. Verified directly
 against the actual encoder (`core.encodeRecordBytes`) rather than
 re-deriving the arithmetic by hand: 41 bytes with a Hint name, 13
 without, confirming both the flagged number and the cheaper
-no-Hint-name variant. §4.4 now says this explicitly rather than leaving
-"cheap" to be read as a group-wide claim it never was.
-
-TagDrop also independently confirmed Companion ID's session-scoping
-bound is correctly shaped, not a gap: reasoning from their own use case
-(physical, printed artifacts scanned asynchronously, possibly weeks or
-months apart, never one continuous session — close to worst-case for
-anything session-scoped) and their own existing durable mechanism for a
-related problem (a first-seen public key cached under signer identity,
-persisted indefinitely), they concluded that Companion-ID-shaped trust
-for their own multi-code case would need its own durable mechanism,
-not a lean on this one — exactly the boundary §4.4 already draws.
-External validation that the scoping caveat is doing its job, not
-independent confirmation of a new requirement.
+no-Hint-name variant. §4.4 still says this explicitly, independent of
+the Companion ID removal above.
 
 ### 18. "Private-use" was being misread as "closed/internal" — the tier description was wrong, not just imprecise
 
