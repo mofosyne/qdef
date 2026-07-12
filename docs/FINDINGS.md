@@ -657,6 +657,30 @@ name degrades to unverified, and a missing Hint name is not-applicable —
 matching the three-way degrade Type Hint's own verification (§3.1)
 already established, not a new pattern invented for this.
 
+**Fifth update:** TagDrop checked the 41-byte figure independently
+(map head + `{0:7}` + `{2:<uint64>}` + `{3:"..."}`, byte for byte) and it
+matched, but flagged something the spec text hadn't said explicitly:
+the decentralized form's mandatory per-code repetition means "cheap"
+describes one code's cost, not a multi-code group's total — a 7-code
+group pays 7×41 = 287 bytes for App Route alone. Verified directly
+against the actual encoder (`core.encodeRecordBytes`) rather than
+re-deriving the arithmetic by hand: 41 bytes with a Hint name, 13
+without, confirming both the flagged number and the cheaper
+no-Hint-name variant. §4.4 now says this explicitly rather than leaving
+"cheap" to be read as a group-wide claim it never was.
+
+TagDrop also independently confirmed Companion ID's session-scoping
+bound is correctly shaped, not a gap: reasoning from their own use case
+(physical, printed artifacts scanned asynchronously, possibly weeks or
+months apart, never one continuous session — close to worst-case for
+anything session-scoped) and their own existing durable mechanism for a
+related problem (a first-seen public key cached under signer identity,
+persisted indefinitely), they concluded that Companion-ID-shaped trust
+for their own multi-code case would need its own durable mechanism,
+not a lean on this one — exactly the boundary §4.4 already draws.
+External validation that the scoping caveat is doing its job, not
+independent confirmation of a new requirement.
+
 ### 18. "Private-use" was being misread as "closed/internal" — the tier description was wrong, not just imprecise
 
 While drafting a reply to TagDrop about App Route's decentralized form,

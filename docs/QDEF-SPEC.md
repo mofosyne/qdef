@@ -889,6 +889,20 @@ repetition across a multi-code group:
   treat that as accepting no pre-filtering on the rest of the group, not
   as an oversight-free equivalent to repeating it.
 
+**"Cheap" describes the decentralized form's per-code cost, not its
+group-wide total — the two are not the same claim.** Mandatory
+per-code repetition means the cost multiplies by fragment count: the
+41-byte Record shown above (uint ID plus a Hint name) is cheap on any
+one code, but a 7-code Split group pays that 7 times over — 287 bytes —
+for App Route alone, on top of whatever else repeats per code (Split's
+own Wrapper framing, Type Hint, etc.). Dropping the Hint name shrinks a
+single Record to 13 bytes (91 bytes across the same 7 codes) at the cost
+of losing the hash-derivation check. Not a flaw in the mechanism — the
+per-code repetition requirement is exactly what makes the pre-filter
+work at all — but an adopter choosing between the two forms should
+weigh this against actual group size, not just the anti-spoofing
+difference.
+
 **Combining the two, recommended pattern:** put the domain form, with
 key `5` set, on the one metadata code (no need to repeat the domain form
 itself elsewhere); put the plain decentralized form, key `2` equal to
