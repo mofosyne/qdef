@@ -36,16 +36,26 @@ policy on:
     the spec's §5 examples (`100`, `105`) already sit here informally.
   - `1000`–`0xFFFF`: first-come-first-served — registered, but no review
     gate beyond "not already taken."
-  - `0x10000`+: **private-use, via a large random value, not a
-    registry.** This tier needs no allocation authority at all: because
-    Type IDs are CBOR uints with no fixed width, an implementer who picks
-    a sufficiently large (e.g. 32- or 64-bit) *random* number gets
-    collision avoidance from the sheer size of the number space, the same
-    way a UUID does — not from anyone checking a list. This is the
-    correct answer for closed/internal Record Types that will never be
-    published or need to interoperate with an unrelated implementer, and
-    it's only viable because the wire format never fixed Type IDs to a
-    small byte-width field.
+  - `0x10000`+: **decentralized — self-allocated via a large random
+    value, not a registry.** This tier needs no allocation authority at
+    all: because Type IDs are CBOR uints with no fixed width, an
+    implementer who picks a sufficiently large (e.g. 32- or 64-bit)
+    *random* number gets collision avoidance from the sheer size of the
+    number space, the same way a UUID does — not from anyone checking a
+    list. Call it "private-use" if the CBOR/IANA-registry parallel this
+    name draws on is useful (RFC 8949 §9.2's own private-use ranges), but
+    don't read "private" as "closed." Self-allocation is about who has to
+    grant permission to mint an ID — nobody — not about whether the ID
+    stays undisclosed or single-party: Unicode's Private Use Areas and
+    Bluetooth's private/random device addresses are both self-assigned
+    the same way, and neither implies the result is never published or
+    never recognized by an unrelated party. What actually distinguishes
+    this tier from `100`–`999` isn't visibility, it's *authority*: no
+    registry vouches for what a self-allocated ID means, so any
+    cross-implementer recognition has to come from somewhere else — Type
+    Hint's hash-derivation (§3.1) or App Route (§4.4), not a lookup
+    table. It's only viable at all because the wire format never fixed
+    Type IDs to a small byte-width field.
   Exact boundaries remain a policy decision for whoever ends up running
   the registry, not a wire-format one.
 - **Even/odd for governance tier (considered, rejected):** reuse the
@@ -57,6 +67,56 @@ policy on:
   unrelated meanings of "even/odd" depending on whether they're looking
   at a key or a Type ID — and it halves the usable ID space for no
   benefit a tiered range doesn't already provide more cheaply.
+
+**Guidance, not a requirement: structured composition within the
+private-use tier.** [GitHub issue #10](https://github.com/mofosyne/qdef/issues/10)
+raised this after building against the tier as recommended: an
+implementer defining several related Record Types MAY compose a
+private-use Type ID as a random prefix plus a locally self-assigned
+suffix (`TypeID = (prefix << suffix_bits) | suffix`), rather than
+drawing an independent CSPRNG value for each one. Costs zero additional
+wire bytes either way — the field is the same width regardless of how
+its bits were chosen — and reduces the number of independent random
+draws a single implementer needs to make from one per Record Type to
+one per implementer.
+
+Two things worth stating plainly if this gets used, not left implied:
+
+- **Skew the split toward the prefix, not evenly.** Suffix demand for a
+  single implementer is typically small (single digits to low tens of
+  distinct Record Types), so the suffix should get the minimum obviously
+  sufficient width, not a 50/50 split — every bit shifted to the prefix
+  meaningfully improves the number that actually matters.
+- **Effective collision safety is governed by the prefix width alone,
+  not the full field width.** Suffix values will cluster around small
+  sequential integers (`0`, `1`, `2`...) in practice, since that's what
+  any implementer will naturally reach for. Conditional on two
+  implementers' prefixes colliding, a full-value collision on a low
+  suffix value becomes near-certain rather than merely possible — so a
+  56-bit prefix gives *56-bit-class* safety, not 64-bit-class, and
+  narrower prefixes should be sized off real numbers, not intuition: at
+  10 million independent draws, birthday-bound collision probability is
+  ~2.7×10⁻⁶ at 64 bits, ~6.9×10⁻⁴ at 56 bits, and already past 1 expected
+  collision at 32 bits — 32-bit alone is not safe at any serious
+  ecosystem scale.
+
+**Scope note, corrected.** An earlier version of this note warned that
+using a private-use Type ID for cross-implementer coordination was a
+"widening" beyond the tier's scope, on the premise that the tier meant
+closed/internal-only use. That premise was wrong (corrected above) —
+self-allocation was never a promise to stay undiscovered, and Type
+Hint's whole reason to exist (§3.1) is letting an unrelated implementer
+recognize a self-allocated ID. So there's no widening to guard against
+there.
+
+The caution actually worth keeping is narrower and still real: if a
+structured private-use ID's prefix starts getting treated as an
+*implicit* cross-implementer routing signal — "anything sharing my
+prefix is safe to auto-launch for" — that's quietly reinventing App
+Route (§4.4) without App Route's domain-verified trust model behind it.
+Use App Route explicitly when routing is the actual goal; don't let a
+Type-ID-prefix convention become an accidental second routing channel
+nobody decided to build.
 
 ## CBOR tag-number collision (resolved — the tag route was removed)
 
@@ -487,6 +547,195 @@ reject a non-conformant Wrapper nesting order (FINDINGS.md #7); spec
 §4.1's text has been corrected accordingly. This entry is resolved and
 kept here only as a record of the change from the prior draft's "leaning
 toward" language.
+
+## Type ID inheritance within a Sequence — backlog, needs a version bump
+
+Raised alongside [GitHub issue #10](https://github.com/mofosyne/qdef/issues/10):
+allow a Record's Type ID (key `0`) to be omitted, meaning "same Type ID
+as the immediately preceding Record in this CBOR Sequence" — a wire-
+efficiency optimization for adjacent same-type Records with a wide
+private-use Type ID (the repeated calendar-event case in
+`IMPLEMENTATION-NOTES.md` is exactly this shape).
+
+Not something this draft can add as a plain additive extension the way
+everything else in this document was. Spec §3.1 already defines a
+missing key `0` as a MUST-abort condition — redefining that meaning is a
+behavior change to already-shipped semantics, not an addition, so two
+decoder versions would interpret identical bytes differently depending
+on which one they implement. That's exactly the class of change spec §2
+reserves the Version byte for ("a future version is free to change...
+the routing rules... themselves"), not something to introduce via the
+odd-key extensibility path the way Type Hint, Media Payload, and the
+tag-24 generalization all were.
+
+Scope, resolved as a side effect of a separate discussion (checking
+issue #10's cross-code repeated-Type-ID cost against this idea): "the
+immediately preceding Record" can only ever mean within one Sequence —
+there's no cross-code Record continuity in the format at all, since each
+physical code is parsed as its own independent container from a blank
+slate. This means the mechanism would help intra-Sequence repetition
+(the calendar-events case) but not cross-code repetition (issue #10's
+motivating Preview cost) — worth being clear these are two different
+problems with two different possible fixes, not one problem with two
+names.
+
+Backlog, not urgent: tracked for whenever a version bump happens for
+some other reason, not a reason to force one on its own.
+
+## Reference/value-sharing tags for intra-Sequence repetition — future path, not built
+
+A related idea to Type ID inheritance above, raised while looking for a
+general fix to repeated-large-value wire cost: CBOR already has
+registered tags for exactly this — tag `25` ("reference the nth
+previously seen string") and the pair `28`/`29` ("mark value as shared" /
+"reference nth marked value," content a plain uint index). Checked
+directly against the IANA registry, not assumed. Mechanically skip-safe
+under one more small widening of the same rule generalized twice already
+(§3.2, FINDINGS.md #15/#16) — a tag wrapping a scalar directly is exactly
+as bounded as a tag wrapping a string, since the mandatory core only ever
+needs to skip the reference, never resolve what it points to; resolution
+is Record-Type-specific, optional work, same as unwrapping any other
+opaque content.
+
+**Doesn't solve the problem that motivated it, and that's worth being
+explicit about rather than letting the idea imply otherwise.** A
+reference requires shared decode state across everything it reaches
+into; two physical codes have none — each is parsed from a blank slate,
+in any order, with any of them possibly missing. So this hits the exact
+same wall as Type ID inheritance above, for the identical structural
+reason: it could only ever help repetition *within* one code's Sequence,
+never App Route's or Preview's cross-code repetition, which is the cost
+that actually prompted looking for a fix.
+
+Where it would genuinely help: the same large value repeated multiple
+times within one code — e.g. `IMPLEMENTATION-NOTES.md`'s calendar Option
+B (several sibling Records, same wide private-use Type ID, all small
+enough to sit on one code without needing Split). Real, but narrower
+than "wire bloat" as originally framed, and it comes with cost beyond the
+rule-widening: precise scope rules for what counts as "the stream" a
+reference can reach into (one Record's map? the whole Sequence? does a
+Wrapper's unwrapped content restart it?), and weaker real-world tooling
+support than tag `24` had — tags `25`/`28`/`29` come from an informal
+spec (schmorp.de's stringref/value-sharing drafts), not RFC 8949 proper,
+so "generic CBOR tooling already reads this" is a much weaker claim here.
+
+Not built. Noted as a future path specifically for the single-code
+repetition case, not a general wire-bloat fix — worth a concrete same-
+code case actually hitting this before adding the complexity, same
+discipline as everything else deferred in this document.
+
+## App Route's decentralized form — a second use case surfaced late, not a second mechanism
+
+The domain-verified form of App Route (§4.4, FINDINGS.md #17) was built
+to answer one question: which installed application should this scanned
+code auto-launch. Working through GitHub issue #10 with TagDrop surfaced
+a second, genuinely different question that key `2` also turns out to
+answer well: *before* attempting reassembly at all, is this scanned code
+even plausibly part of the group the scanner thinks it's building —
+cheap, per-code triage against a misread or an unrelated nearby code,
+layered ahead of §4.1's `group_id` integrity check rather than
+duplicating it.
+
+These two questions have different stakes, and conflating them would
+have been the actual design error. Auto-launch dispatch is a
+security-relevant decision — get it wrong and the wrong application
+opens, so it needs the domain form's real, platform-verified ownership
+proof (Android App Links / iOS Universal Links). The pre-filter is not
+security-relevant — get it wrong and a decoder wastes a little effort
+before `group_id` catches the mismatch anyway, exactly the same outcome
+as not pre-filtering at all. That gap in stakes is *why* the
+decentralized form is allowed to reuse Type Hint's cheaper,
+unauthenticated pattern (a private-use-random uint at key `2`, an
+optional recoverable name at key `3`) instead of requiring domain
+verification for both — it would be a mistake to make the pre-filter pay
+the domain form's registration cost for a property it doesn't need, and
+an even bigger mistake to let the pre-filter's weaker guarantee quietly
+become load-bearing for dispatch.
+
+Concretely this is the same "magic byte" idea raised earlier in this
+project's history (see the ref-pointer/wire-bloat discussion above) in a
+narrower, already-motivated form: a real adopter (TagDrop) confirmed the
+actual plan is App Route on a first/metadata code only, plus exactly
+this kind of ID for fast misread rejection on the rest — not a
+hypothetical. Landed as one Record Type with two forms rather than a new
+Record Type, since the wire shape, skip behavior, and Type Hint's
+name-binding pattern are all identical; only the trust model and the
+etiquette guidance around repetition differ (§4.4).
+
+## App Route's Companion ID (key 5) — letting real verification back the cheap pre-filter, not just self-consistency
+
+The decentralized form's hash-derivation (§3.1's pattern, reused at
+§4.4) proves a claim is internally consistent — this ID really was
+derived from this name — but never that the claimant was entitled to
+make it. That gap was always visible, not hidden (§4.4 says so
+directly), but it's a real gap: anyone can compute `hash("Example App")`
+and stamp the result on a code.
+
+The domain form doesn't have that gap — its trust comes from an actual
+external check (App Links / Universal Links `.well-known` verification),
+not from a hash anyone can reproduce. The natural next question, asked
+directly while preparing a reply about the decentralized form: could the
+domain form *hand that stronger trust down* to the cheap per-code
+pre-filter, instead of the pre-filter being stuck with hash-derivation's
+weaker guarantee forever?
+
+Yes, and it costs one field. Key `5` (Companion ID) lets a domain-form
+Record declare the same private-use-random uint the decentralized form
+carries standalone on sibling codes. A scanner that verifies this
+Record's domain has, in the same step, verified the Companion ID
+binding too — the ID isn't a separate claim requiring separate proof, it
+rides on the domain check that already happened. Sibling codes then only
+need the lightweight decentralized form, and a scanner that saw the
+metadata code first now has verified-strength trust for them, not
+merely hash-consistent trust.
+
+**Two things keep this from silently overclaiming security it doesn't
+have**, both written into §4.4 explicitly rather than left implied:
+
+- The binding is exactly as strong as the verification that produced
+  it. No verification (metadata code never seen) or failed verification
+  (domain claim doesn't check out) both mean the Companion ID reverts to
+  exactly what the plain decentralized form already offered — nothing is
+  lost by trying it, but nothing is gained without an actual successful
+  check either.
+- It's session-scoped, not a registry entry. The binding lives in
+  whatever state a scanner keeps across the codes in one scan; it says
+  nothing about a Companion ID value encountered again on an unrelated
+  occasion.
+
+This is additive, not a new form: same Record Type, same known-key set
+plus one new odd/optional key, so a decoder built before this field
+existed keeps working exactly as before (§3.2's even/odd rule doing
+precisely the job it exists for). Prototyped in
+`prototype/test/app-route.test.js`: the domain form with a Companion ID
+round-trips, a metadata code and a sibling code carrying the same ID
+produce values a scanner can compare directly, and a pre-Companion-ID
+decoder ignores key `5` without aborting.
+
+**Follow-on: unifying key `3`'s role across both forms, not leaving it
+split.** The domain form's key `3` had been documented as a
+human-readable label; the decentralized form's key `3` was already Type
+Hint's recoverable-name role. Pointed out directly: there's no reason
+for the same key number to mean two different things depending on which
+form of key `2` it's paired with — a reader shouldn't have to branch on
+that to know what key `3` is *for*. Unified both to the Hint-name role.
+This costs nothing (a Hint name can still be a human-presentable string
+if an encoder wants that — `"Open in Example App"` is as valid a Hint
+name as a reverse-domain string, the role constrains purpose, not
+spelling) and it buys something concrete: because key `3` is now always
+the same field, the domain form's own Companion ID can be hash-checked
+against it the exact same way the decentralized form's Type ID already
+is (`CompanionID = truncate(hash(name), N)`). That gives a scanner
+incapable of domain verification at all — no network, no platform
+dispatch API — a cheap, weaker-but-nonzero signal instead of nothing,
+stacking underneath the domain-verified guarantee rather than competing
+with it. Prototyped in `prototype/src/wrappers.js`'s `verifyCompanionId`
+(reusing `typeHint.js`'s `deriveHashId`, not a second hash
+implementation) and `prototype/test/app-route.test.js`: a hash-derived
+Companion ID verifies against its own Hint name, an unrelated name
+degrades to unverified, and a missing Hint name is not-applicable rather
+than an error — the same three-way degrade Type Hint's own verification
+already established (§3.1).
 
 ## A confession (Parkinson's Law of Triviality, self-reported)
 

@@ -697,6 +697,219 @@ no interest in Media Payload skips the whole Record cleanly by Type ID
 alone — the same "unaware decoder pays nothing" guarantee every other
 stdlib Record Type gets, not just an aspiration.
 
+### 4.4 App Route (optional)
+
+A plain stdlib Record Type — not a wrapper — for letting a generic
+QDEF-aware scanner offer to launch a specific handling application,
+comparable to NFC's Android Application Record (AAR) or platform
+Intent-filter dispatch, without the scanner needing any
+implementer-specific knowledge baked in ([GitHub issue
+#10](https://github.com/mofosyne/qdef/issues/10)):
+
+```
+Type 7: {                          // App Route (stdlib) — domain form
+  0: 7,
+  2: "example.com",                // CRITICAL: a domain the routing
+                                    //   target has verified control over
+  3: "com.example/tagdrop-paper",  // OPTIONAL: Hint name, same role as
+                                    //   Type Hint (§3.1) — not a label
+  5: 12271745624591856273          // OPTIONAL: Companion ID — a private-
+                                    //   use-random ID (same tier as the
+                                    //   decentralized form's key 2) that
+                                    //   sibling codes in this group will
+                                    //   carry standalone
+}
+
+Type 7: {                          // App Route (stdlib) — decentralized form
+  0: 7,
+  2: 12271745624591856273,         // CRITICAL: private-use-random ID
+                                    //   (§3.1, §9's `0x10000`+ tier)
+  3: "com.example/tagdrop-paper"   // OPTIONAL: Hint name, same role as
+                                    //   Type Hint (§3.1) — not a label
+}
+```
+
+**Key `2` may be a domain string or a private-use-random uint — two
+genuinely different trust models for two genuinely different purposes,
+not two encodings of the same thing.**
+
+*The domain form* is deliberately narrower than a bare package name or
+reverse-domain string could be. A plain string claim
+(`"com.example.official"`) has no protection against spoofing: anything
+can claim to be any string. A domain is verifiable using the mechanism
+Android App Links and iOS Universal Links already deploy (a
+`.well-known` file — `assetlinks.json` on Android, `apple-app-site-
+association` on iOS — hosted on the domain the claimant controls) — QDEF
+inherits that existing, proven trust machinery on both platforms instead
+of inventing a new one. Use this form for auto-launch dispatch, where
+getting it wrong means the wrong application opens.
+
+**Key `3` (Hint name, OPTIONAL) plays the same role in both forms — a
+recoverable name, exactly as Type Hint (§3.1) defines it, never a
+display label.** This is a deliberate unification, not independent
+choices per form: a decoder reading key `3` never needs to branch on
+which form of key `2` it's paired with. In the domain form specifically,
+key `3` mostly documents intent for a future reader rather than
+resolving ambiguity — the domain itself (key `2`) is already a stable,
+human-legible identity — but keeping the same field playing the same
+role everywhere is what lets it double as the hash-derivation input for
+Companion ID below. Nothing stops an encoder from choosing a
+human-presentable string here (`"Open in Example App"` is just as valid
+a Hint name as a reverse-domain string); the role is about what the
+field is *for*, not a constraint on how it reads.
+
+*The decentralized form* reuses Type Hint's exact pattern (§3.1): a
+private-use-random uint, with key `3` playing Hint's role — a recoverable
+name, optionally derived as `ID = truncate(hash(name), N)` so the binding
+is checkable rather than an unverifiable claim, exactly as described
+there. **This form has no anti-spoofing property, and that is not a
+detail to gloss over.** The hash-derivation proves *name-to-ID
+consistency* — that this specific ID was reproducibly derived from this
+specific name — never *authorization*. Anyone can compute
+`hash("Example App")` and claim that ID; nothing about this form proves
+the claimant is entitled to it, unlike the domain form's real ownership
+proof. Use this form only where getting it wrong costs *effort*, not
+*trust* — the intended case is a fast, per-code pre-filter a scanner uses
+to reject obviously-unrelated scans (a misread, an unrelated nearby QR
+code) before attempting the real work of reassembly, layered *ahead of*
+§4.1's `group_id` integrity check, never as a replacement for it. A false
+match here just means a decoder wastes effort before `group_id` catches
+the mismatch anyway — not a wrongly-launched application.
+
+**Key `5` (Companion ID, OPTIONAL) lets the domain form train a scanner
+on the decentralized form's ID, so verified trust — not just hash
+consistency — can back the cheap pre-filter on sibling codes.** A
+private-use-random uint, same shape and same tier as the decentralized
+form's key `2`, declared alongside a verified domain. A scanner that
+successfully verifies this Record's domain (via App Links / Universal
+Links) has, in the same step, learned a *real*, authorization-backed
+binding between that domain and the Companion ID — strictly stronger
+than the decentralized form's own hash-derivation, which only ever
+proves a self-claim is internally consistent, never that its claimant
+was entitled to make it. Sibling codes then only need to carry the
+lightweight decentralized form (key `2` alone, no domain, no per-code
+verification cost) for the scanner to recognize them as belonging to the
+same, now-verified, source.
+
+**Companion ID MAY also be checked the cheap way, independent of domain
+verification, because key `3` is now the same field either form uses:**
+`CompanionID = truncate(hash(name), N)` against key `3`'s Hint name,
+identical to the decentralized form's own optional strengthening above.
+This is strictly weaker than the domain-verified binding — it only
+proves self-consistency, the same limit hash-derivation always has — but
+it costs a scanner nothing beyond local computation, no network call and
+no platform dispatch API, so it's available even to a scanner that can't
+or won't perform domain verification at all. The two checks stack
+without conflict: a scanner capable of both gets the domain-verified
+guarantee; a scanner capable of only the hash check gets a weaker but
+nonzero one; a scanner capable of neither is exactly where the plain
+decentralized form already leaves it.
+
+**This binding is exactly as strong as the verification that produced
+it, and no stronger.** Two failure modes to keep straight:
+
+- **Verification never happened.** A scanner that only ever sees a
+  sibling code — the metadata code carrying key `5` was lost, scanned
+  out of order and not yet processed, or never present — gets no benefit
+  over the plain decentralized form: an unverified Companion ID is just
+  an unverified private-use-random ID, full stop.
+- **Verification was attempted and failed.** Presence of key `5` proves
+  nothing by itself; a forger can stamp any Companion ID next to a
+  domain claim that fails its `.well-known` check just as easily as next
+  to one that succeeds. The Companion ID inherits the domain form's
+  authority only when that verification step actually succeeds — never
+  from the field merely being present on the wire.
+
+Also **session-scoped, not durable.** The learned binding lives in
+whatever scanner state persists across the codes in one scan/session —
+it is not a registry entry, has no expiry semantics of its own, and
+carries no claim about a Companion ID seen again in an unrelated scan on
+a different occasion.
+
+Resolving a domain to an actual launch target is intentionally left to
+local, OS-level dispatch — no centralized QDEF-level registry or
+governance body is needed for it to function at all — but *how* that
+resolution is triggered is platform-specific, not a single uniform
+mechanism, and a scanner implementer needs to know which path they're
+using:
+
+- **Android** exposes an explicit query (`PackageManager` Intent-filter
+  resolution) a scanner can call to ask "which installed app claims
+  this domain" before deciding what to do — closer to how AAR dispatch
+  already works.
+- **iOS** exposes no equivalent query. A scanner instead constructs an
+  actual `https://` URL from the domain (e.g. `https://example.com/`)
+  and opens it (`openURL:`); iOS itself checks the domain's `apple-app-
+  site-association` registration as a side effect of opening that URL,
+  handing it to the registered app or falling through to Safari. The
+  dispatch decision happens *inside* opening the URL, not as a separate
+  lookup step.
+
+Both still satisfy "matched only against what's actually installed
+on-device, no QDEF-level registry" — the end-user outcome is the same on
+either platform — but a scanner implementation needs the platform-
+specific mechanism, not a shared cross-platform API, since none exists.
+
+Key `2` carries the bare domain, not a full URL — the iOS path above
+constructs `https://<domain>/` (root) from it when actually opening a
+URL; an App Route Record isn't the place for path-level routing, which
+belongs to the payload the application itself defines once launched.
+
+**Deliberately decoupled from payload-shape Type IDs, not folded into
+them.** An open, shared payload shape should be able to stay
+interoperable across multiple independent handling applications;
+routing identity is a separate concern layered alongside the payload
+via a sibling Record, not encoded into the payload's own Type ID. This
+also means adopting App Route never requires restructuring an
+application's existing Type IDs.
+
+**Not positionally special.** QDEF's dispatch already routes by Type ID
+at key `0` regardless of position (§3.1), so this Record doesn't need a
+fixed position in the Sequence — a decoder finds it the same way it
+finds any recognized Record Type.
+
+**Encoder etiquette — split by form, because the two forms serve
+different moments in a scan.** Both forms should always be small and
+plain — never Compress- or Split-wrapped — so a scanner can read one
+without reassembling anything else first. Where they diverge is
+repetition across a multi-code group:
+
+- *The domain form* (SHOULD, not required): repeat it verbatim on every
+  code if the adopter wants auto-launch to work from whichever code
+  happens to get scanned first. Putting it on a single designated code
+  only — e.g. a "metadata" code that's always scanned first by
+  convention — is also a valid choice; the cost is that auto-launch
+  dispatch only fires from that code, not a spec violation.
+- *The decentralized form* (SHOULD repeat on every code, more strongly
+  than the domain form): its entire value is letting a scanner reject an
+  obviously-unrelated scan *before* attempting reassembly. A copy on only
+  one code can't do that for scans of any other code in the group — the
+  pre-filter simply doesn't run for them, silently losing the only thing
+  this form is for. An encoder that places it on a single code should
+  treat that as accepting no pre-filtering on the rest of the group, not
+  as an oversight-free equivalent to repeating it.
+
+**Combining the two, recommended pattern:** put the domain form, with
+key `5` set, on the one metadata code (no need to repeat the domain form
+itself elsewhere); put the plain decentralized form, key `2` equal to
+that same Companion ID value, on every other code. This gets the
+strongest available property — verified-domain-backed trust — on every
+code, for the cost of one full domain form plus one small uint per code,
+rather than either paying the domain form's registration weight on every
+code or settling for hash-derivation-only trust everywhere.
+
+**Scope note.** App Route is QDEF's dedicated mechanism for
+cross-implementer routing — not a special case carved out of some
+narrower private-use tier scope. The private-use Type ID tier (§9) was
+never restricted to closed/internal use in the first place (DESIGN.md's
+"Registry governance" corrects an earlier note that implied otherwise);
+self-allocation means no registry gatekeeps *minting* an ID, not that
+the ID stays unpublished or unrecognized. What App Route adds on top is
+a *trust model* for routing specifically — domain verification for the
+form that drives auto-launch, Type Hint's existing name-binding pattern
+for the form that doesn't — decoupled entirely from payload Type IDs so
+routing identity and payload shape can evolve independently.
+
 ## 5. Record Type Registry (informative examples)
 
 ### Type `100`: Wi-Fi Provisioning

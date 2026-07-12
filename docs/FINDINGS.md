@@ -534,6 +534,165 @@ rewritten to describe the general rule rather than the tag-`24`-specific
 case. `clippy`, `fmt`, and the `thumbv6m-none-eabi` embedded build all
 still pass; 15 Rust tests (2 new) and 35 Node tests all green.
 
+### 17. App Route (Type 7) — the AAR-equivalent deferred earlier in this project, built once a real adopter actually needed it
+
+Building TagDrop's Paper port on QDEF surfaced three related questions
+about the private-use Type ID tier, filed as [GitHub issue
+#10](https://github.com/mofosyne/qdef/issues/10). One of them — should a
+generic scanner be able to route a scanned code to a specific handling
+application, the way NFC's Android Application Record does — had already
+come up once earlier in this project's history and was deliberately left
+unbuilt: "figure out later... as long as our QDEF system is flexible to
+assign a Type ID to it later." This is that later.
+
+Landed as spec §4.4, a plain stdlib Record (Type `7`, not a wrapper):
+
+- **Domain-verified, not a bare string claim.** A package name or
+  reverse-domain string can't prove anything — any app can claim to be
+  `com.example.official`. A domain, verified the way Android App Links
+  and iOS Universal Links already require (a `.well-known` file on a
+  domain the claimant controls), inherits proven, already-deployed
+  platform trust machinery instead of QDEF inventing a new one — the
+  same "borrow, don't invent" instinct behind the COSE and CoAP registry
+  choices elsewhere in this document.
+- **Decoupled from payload-shape Type IDs, not folded into them.**
+  TagDrop's own first draft of this idea (structuring a private-use Type
+  ID as an app-id prefix plus a self-allocated subtype) was reconsidered
+  and set aside in favor of this decoupled sibling-Record approach — it
+  keeps an open, shared payload shape interoperable across independent
+  handling applications, and needs no adopter to restructure their
+  existing Type IDs to get auto-launch support. The structured-Type-ID
+  idea wasn't wasted, though: kept as general private-use tier guidance
+  (DESIGN.md's "Registry governance" entry) for implementers who want to
+  reduce CSPRNG draws across their own several Record Types, independent
+  of routing.
+- **Dispatch stays local and OS-level**, matched only against what's
+  actually installed on-device — no QDEF-level or central registry
+  needed for routing to function at all, the same reasoning that already
+  keeps registry governance (still open, above) from blocking anyone
+  using the private-use tier today.
+
+Prototyped in `prototype/test/app-route.test.js`: round-trips with and
+without the optional label, isn't positionally special (routes
+identically whether first or last in the Sequence), skips cleanly for an
+application with no interest in it, and — since §4.4 recommends
+repeating it verbatim across every code in a multi-code group — proves
+two independent encodes of the same fields produce byte-identical
+output, exercising §3.4's canonical-encoding guarantee rather than
+assuming it holds for a new Record Type too.
+
+**Update:** the original spec text described OS-level dispatch as
+working "the same way Android already resolves AAR/Intent-filter
+matches" — asked directly whether that actually holds for iOS too, not
+just Android, and it doesn't uniformly. Checked directly against Apple's
+own Universal Links documentation: iOS has the same domain-verification
+*trust model* (`apple-app-site-association`, functionally equivalent to
+Android's `assetlinks.json`), but no equivalent *query* API — Android
+exposes an explicit "which installed app claims this" lookup, while iOS
+dispatch happens as a side effect of a scanner constructing and opening
+an actual `https://` URL from the domain, with no separate lookup step
+available. End-user outcome is the same either way; the mechanism a
+scanner implementation needs is not. Spec §4.4 corrected to describe both
+paths explicitly rather than implying one uniform cross-platform API.
+
+**Second update:** TagDrop's actual deployment plan surfaced a use for
+key `2` the domain form can't serve well — a fast, per-code check that a
+scanned code plausibly belongs to the group being reassembled, run
+*before* attempting reassembly, on codes that aren't the designated
+App-Route-carrying one. Chasing whether CBOR reference tags could cut
+cross-code repetition (see DESIGN.md's reference-tags entry) confirmed
+those can't reach across physically separate codes at all — no shared
+decode state exists between them — which ruled that out as a fix for
+this but clarified the actual shape of what would work: something
+cheap, present on every code, checkable with no shared state. §4.4 now
+documents App Route's key `2` as two forms: the domain string (auto-
+launch dispatch, real authorization) and a private-use-random uint
+reusing Type Hint's exact name-binding pattern (§3.1) for this pre-
+filter role — no anti-spoofing property, explicitly not a substitute for
+`group_id` (§4.1), which remains the actual integrity check. Prototyped
+in `prototype/test/app-route.test.js`: the uint form round-trips, and a
+decoder that only checks Type ID `7` presence skips it cleanly without
+needing to know key `2`'s shape in advance.
+
+**Third update:** the decentralized form's own weakness — hash-
+derivation proves self-consistency, not entitlement — turned out to
+have a fix hiding in the domain form, once asked directly whether the
+two forms could reinforce each other instead of staying fully separate.
+Added key `5` (Companion ID, odd/optional): a domain-form Record can
+declare the same private-use-random uint the decentralized form carries
+standalone elsewhere, so a scanner that verifies the domain has, for
+free, also verified that ID — a genuinely stronger binding than hash-
+derivation, since it rides on real App Links/Universal Links
+verification instead of a reproducible-but-unauthorized claim. Bounded
+carefully in §4.4 so it can't be mistaken for more than it is: the
+binding is exactly as strong as the verification that produced it (no
+verification, or a failed one, means it reverts to plain
+decentralized-form strength), and it's scoped to the scanning session
+that actually saw the metadata code, not a durable registry entry.
+Additive, not a new form — one new odd key, so a pre-existing decoder's
+behavior is unchanged (§3.2 doing exactly its job). Prototyped in
+`prototype/test/app-route.test.js`: the domain form with a Companion ID
+round-trips, a metadata code and a sibling code carrying the same ID
+produce comparable values, and a decoder built before this field existed
+ignores it without aborting.
+
+**Fourth update:** the domain form's key `3` had been documented as a
+separate "human-readable label" concept from the decentralized form's
+key `3` (Type Hint's recoverable-name role) — pointed out directly that
+this split was arbitrary, since nothing requires the same key number to
+mean different things depending on which form of key `2` it's paired
+with. Unified both to the Hint-name role; a human-presentable string is
+still perfectly valid content for it, only the documented *purpose*
+changed. This unification wasn't just tidying: because key `3` is now
+reliably the same field in both forms, the domain form's own Companion
+ID can be hash-checked against it exactly the way the decentralized
+form's Type ID already is — giving a scanner that can't perform domain
+verification at all (no network, no platform dispatch API) a cheap,
+weaker-but-nonzero signal for free, instead of nothing. Implemented as
+`verifyCompanionId` in `prototype/src/wrappers.js`, reusing
+`typeHint.js`'s `deriveHashId` rather than a second hash
+implementation. Prototyped in `prototype/test/app-route.test.js`: a
+hash-derived Companion ID verifies against its Hint name, an unrelated
+name degrades to unverified, and a missing Hint name is not-applicable —
+matching the three-way degrade Type Hint's own verification (§3.1)
+already established, not a new pattern invented for this.
+
+### 18. "Private-use" was being misread as "closed/internal" — the tier description was wrong, not just imprecise
+
+While drafting a reply to TagDrop about App Route's decentralized form,
+the spec text (DESIGN.md's "Registry governance" and both Scope notes
+this fed) described the `0x10000`+ private-use-random Type ID tier as
+"the correct answer for closed/internal Record Types that will never be
+published or need to interoperate with an unrelated implementer."
+Challenged directly: that's not what "decentralized" means. Distributing
+who's allowed to *mint* an ID (no registry gatekeeping) is a different
+axis from restricting who's allowed to *see or use* it — and the spec's
+own mechanisms already contradicted the description. Type Hint's whole
+purpose (§3.1) is letting an unrelated implementer recognize a
+self-allocated ID; App Route's decentralized form (finding #17's
+"Second update," above) is a second, freshly-built mechanism doing
+exactly that. The tier's own description was the outlier, not those
+mechanisms.
+
+The parallel offered — Bluetooth's private/random device addresses,
+self-assigned without any central authority but never meant to imply
+"nobody else will ever see or connect to this device" — is the same
+distinction Unicode's Private Use Areas already demonstrate (self-
+allocated codepoints that shipped in real, shared icon fonts and
+pre-standardization emoji long before any registry blessed them). Same
+shape of correction as findings #15/#16: the restriction was written for
+a narrower case than the one actually being served, caught by an outside
+challenge to specific wording rather than an accident of implementation.
+
+Corrected in DESIGN.md's "Registry governance" tier description and both
+Scope notes (DESIGN.md's private-use-tier one and spec §4.4's App Route
+one) — the tier is now described as decentralized-by-authority, not
+scoped-by-visibility, and the "genuine widening" framing both Scope notes
+built on top of the wrong premise is removed rather than patched, since
+there was no widening to warn about once the premise is fixed. Nothing
+about the wire format, the Node prototype, or any Rust code needed to
+change — this was a documentation-only error, never a shipped behavior.
+
 ## Confirmed working as designed (no fix needed)
 
 - **Magic + version + CBOR-Sequence-of-Records** round-trips exactly as
