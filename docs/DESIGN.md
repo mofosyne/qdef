@@ -173,10 +173,10 @@ name:
 ### Template
 
 ```
-Record Type ID:             <uint or byte string, or "none — namespace-only">
+Record Type ID:             <hex byte string, or "none — namespace-only">
 Record Type Name:           <reverse-domain name, e.g. com.example.tagdrop/route>
 
-Namespace ID:               <uint or byte string, or "none — global-only">
+Namespace ID:               <hex byte string, or "none — global-only">
 Namespace Name:             <reverse-domain name, or "none — global-only">
 
 Scoped Type ID:             <odd uint, or "none — global-only">
@@ -197,10 +197,23 @@ drawn at random with no recoverable name.
 ### Worked hypothetical example
 
 A project called "TagDrop" defines a `route` Record Type for directing
-payloads to a physical delivery target. It uses both a global private-use
+payloads to a physical delivery target. It uses both a global byte string
 Record Type ID (for standalone codes) and a Scoped Type ID (for codes
 within TagDrop's own namespace):
 
+```
+Record Type ID:             h'34e1e4af'
+Record Type Name:           com.example.tagdrop/route
+
+Namespace ID:               h'a7f9'
+Namespace Name:             com.example.tagdrop-paper
+
+Scoped Type ID:             1
+
+Data item:                  map { 2: bytes (destination), 4: uint (priority) }
+Semantics:                  Routes payload to a physical delivery target
+Point of contact:           tagdrop-maintainers@example.com
+Reference:                  https://github.com/mofosyne/tagdrop/blob/main/SPEC.md#route
 ```
 Record Type ID:             12271745624591856273
 Record Type Name:           com.example.tagdrop/route

@@ -6,6 +6,8 @@ Working examples of QDEF patterns, tools, and wire formats.
 
 - `registry-walkthrough.md` — Step-by-step guide to generating, validating,
   and using a hash-derived byte string Record Type ID
+- `registry-submission-template.md` — Fill-in template for submitting a
+  Type ID to the QDEF registry (paste into a GitHub Issue or PR)
 - `generate-examples.js` — Re-generates the example output shown in the
   walkthrough (run from `docs/examples/`)
 

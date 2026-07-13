@@ -189,3 +189,9 @@ Hash-derivation trades off between name qualification and ID width:
   exact hazard the naming guidance exists to prevent
 
 Always reverse-domain qualify your names. See spec §3.1.
+
+## Submitting to the Registry
+
+Once you have a working Type ID, use `registry-submission-template.md`
+in this directory to fill out a submission document. Submit it as a
+GitHub Issue or Pull Request to the QDEF repository.
