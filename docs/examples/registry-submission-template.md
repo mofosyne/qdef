@@ -14,19 +14,31 @@ in the Validation section.
 ```
 Record Type ID:             h'4b1f561b'
 Record Type Name:           com.example.smartlight/status
-Full SHA-256:               h'<paste full 32-byte hash from gen-type-id output>'
+Variable Name:              Smart Light Status
+Full SHA-256:               h'4b1f561b8df976781a3d74c35eafbfb6483d4f511bae5573ab35ebba8f0e0333'
 
 Namespace ID:               h'c103'
 Namespace Name:             com.example.smartlight
-Full SHA-256:               h'<paste full 32-byte hash from gen-type-id output>'
+Variable Name:              Smart Light
+Full SHA-256:               h'c103df40c55c77a3bb6a9342dbc81389bb3a7315f20a92c73a7f8cfc226a1bf0'
 
 Scoped Type ID:             1
 
 Data item:                  map { 2: uint (on/off), 4: uint (brightness 0-100) }
 Semantics:                  Reports current state of a smart light fixture
 Point of contact:           <your email or URL>
-Reference:                  <link to your spec/README defining this Type>
+Reference:                  <link to spec/README defining this Type>
 ```
+
+**Variable Name** is a space-separated word sequence for generating
+identifiers in any language:
+
+| Convention | From "Smart Light Status" |
+|------------|--------------------------|
+| snake_case | `smart_light_status` |
+| CamelCase | `SmartLightStatus` |
+| UPPER_CASE | `SMART_LIGHT_STATUS` |
+| camelCase | `smartLightStatus` |
 
 ## Validation
 
@@ -94,6 +106,8 @@ a2                              # map(2)
 
 - [ ] Record Type ID is a valid hex byte string (4+ bytes for global use)
 - [ ] Record Type Name is reverse-domain qualified (e.g. `com.example.myapp/route`)
+- [ ] Variable Name is a space-separated word sequence
+- [ ] Full SHA-256 is pasted from gen-type-id output
 - [ ] `validate-type-id.js` passes for Record Type ID
 - [ ] `validate-type-id.js --namespace` passes for Namespace ID (if applicable)
 - [ ] Data item shape is described (map keys and value types)

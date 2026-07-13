@@ -175,9 +175,11 @@ name:
 ```
 Record Type ID:             <hex byte string, or "none — namespace-only">
 Record Type Name:           <reverse-domain name, e.g. com.example.tagdrop/route>
+Variable Name:              <space-separated words, e.g. "Tag Drop Route">
 
 Namespace ID:               <hex byte string, or "none — global-only">
 Namespace Name:             <reverse-domain name, or "none — global-only">
+Variable Name:              <space-separated words, e.g. "Tag Drop">
 
 Scoped Type ID:             <odd uint, or "none — global-only">
 
@@ -186,6 +188,11 @@ Semantics:                  <one-line functional description>
 Point of contact:           <email or URL>
 Reference:                  <link to spec/README defining this Type>
 ```
+
+**Variable Name** is a space-separated word sequence for generating
+identifiers in any language — snake_case, CamelCase, UPPER_CASE, etc.
+Tools can derive `tag_drop_route`, `TagDropRoute`, `TAG_DROP_ROUTE`
+from the same source field.
 
 Every ID/Name field is optional — a Type that's only ever used
 namespace-scoped has no Record Type ID row to fill in, and vice versa.
@@ -204,24 +211,13 @@ within TagDrop's own namespace):
 ```
 Record Type ID:             h'34e1e4af'
 Record Type Name:           com.example.tagdrop/route
+Variable Name:              Tag Drop Route
 
 Namespace ID:               h'a7f9'
 Namespace Name:             com.example.tagdrop-paper
+Variable Name:              Tag Drop
 
 Scoped Type ID:             1
-
-Data item:                  map { 2: bytes (destination), 4: uint (priority) }
-Semantics:                  Routes payload to a physical delivery target
-Point of contact:           tagdrop-maintainers@example.com
-Reference:                  https://github.com/mofosyne/tagdrop/blob/main/SPEC.md#route
-```
-Record Type ID:             12271745624591856273
-Record Type Name:           com.example.tagdrop/route
-
-Namespace ID:               12271745624591856273
-Namespace Name:             com.example/tagdrop-paper
-
-Scoped Type ID:             32768
 
 Data item:                  map { 2: bytes (destination), 4: uint (priority) }
 Semantics:                  Routes payload to a physical delivery target

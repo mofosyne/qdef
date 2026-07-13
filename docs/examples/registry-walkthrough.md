@@ -93,6 +93,20 @@ Validating: Record Type ID for "com.example.myapp/route"
 Validation passed.
 ```
 
+### Step 3.5: Choose a Variable Name
+
+Pick a word sequence that tools can transform into identifiers in any
+language. This goes into the registry submission as `Variable Name`:
+
+| Convention | From "My App Route" |
+|------------|---------------------|
+| snake_case | `my_app_route` |
+| CamelCase | `MyAppRoute` |
+| UPPER_CASE | `MY_APP_ROUTE` |
+| camelCase | `myAppRoute` |
+
+See `registry-submission-template.md` for the full submission format.
+
 ### Step 4: Use in a Type 0 Container Header
 
 The first Record in a QDEF Sequence is the Type 0 header. When you use
