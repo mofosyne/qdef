@@ -16,7 +16,7 @@ fn wifi_record_routes_and_fields_extract() {
     let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
     assert_eq!(records.len(), 1);
     let rec = &records[0];
-    assert_eq!(rec.type_id, Some(100));
+    assert_eq!(rec.type_id, Some(Key::Uint(100)));
     assert!(!rec.aborted);
 
     let outcome = check_criticality(rec.map_bytes, WIFI_KNOWN_KEYS, |_| {
@@ -33,17 +33,16 @@ fn wifi_record_routes_and_fields_extract() {
 
 #[test]
 fn a_64_bit_class_private_use_type_id_decodes_correctly() {
-    // §3.1's `0x10000`+ private-use-random tier needs the full uint64
-    // range (§9 recommends 32- or 64-bit random values) — this crate's
-    // `type_id: Option<u64>` already supports it, but proving it against
-    // a fixture the Node encoder actually produced (not just an assumed
-    // capability) is what caught a real bug in the *Node* prototype's
+    // §3.1's even-uint standard tier supports the full uint64 range — this
+    // crate's `type_id: Option<Key>` already supports it, but proving it
+    // against a fixture the Node encoder actually produced (not just an
+    // assumed capability) is what caught a real bug in the *Node* prototype's
     // plain `cbor.encode()` path (docs/FINDINGS.md #14). The fixture here
-    // uses u64::MAX specifically, the top of the range.
+    // uses u64::MAX, the top of the range.
     let container = Container::parse(LARGE_TYPE_ID_CONTAINER).expect("valid container");
     let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
     assert_eq!(records.len(), 1);
-    assert_eq!(records[0].type_id, Some(u64::MAX));
+    assert_eq!(records[0].type_id, Some(Key::Uint(u64::MAX)));
     assert!(!records[0].aborted);
 }
 
@@ -107,7 +106,7 @@ fn one_aborted_record_does_not_affect_its_sibling() {
     let first = check_criticality(records[0].map_bytes, WIFI_KNOWN_KEYS, |_| {}).unwrap();
     assert_eq!(first, CriticalityOutcome::Aborted(8));
 
-    assert_eq!(records[1].type_id, Some(900));
+    assert_eq!(records[1].type_id, Some(Key::Uint(900)));
     assert!(!records[1].aborted);
     let payload = find_value(records[1].map_bytes, 2).unwrap().unwrap();
     assert_eq!(read_definite_string(payload).unwrap(), b"sibling record");
@@ -126,7 +125,7 @@ fn ndef_path_bare_sequence_with_no_magic_still_routes() {
     let records: Vec<_> = records_from_sequence(bare_seq)
         .collect::<Result<_, _>>()
         .unwrap();
-    assert_eq!(records[0].type_id, Some(100));
+    assert_eq!(records[0].type_id, Some(Key::Uint(100)));
 }
 
 #[test]
@@ -268,13 +267,40 @@ fn record_type_0_needs_no_special_handling_from_this_crate() {
     let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
     assert_eq!(records.len(), 2);
 
-    assert_eq!(records[0].type_id, Some(0));
+    assert_eq!(records[0].type_id, Some(Key::Uint(0)));
     assert!(!records[0].aborted);
     let namespace = find_value(records[0].map_bytes, 3).unwrap().unwrap();
     assert_eq!(read_uint(namespace).unwrap(), 12271745624591856273u64);
 
-    assert_eq!(records[1].type_id, Some(100));
+    assert_eq!(records[1].type_id, Some(Key::Uint(100)));
     assert!(!records[1].aborted);
     let ssid = find_value(records[1].map_bytes, 2).unwrap().unwrap();
     assert_eq!(read_definite_string(ssid).unwrap(), b"SSID");
+}
+
+#[test]
+fn byte_string_type_id_routes_correctly() {
+    // §3.1's three-type classification: byte string value at key 0 is a
+    // decentralized/global Type ID. The Node prototype encodes it as
+    // {0: <byte_string>, ...} — key 0 is always uint 0, the value is the
+    // Type ID (which can be uint or byte string). The core routes it
+    // without interpreting the bytes — the caller resolves scope via their
+    // own namespace logic.
+    let container = Container::parse(BYTE_STRING_TYPE_ID_CONTAINER).expect("valid container");
+    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
+    assert_eq!(records.len(), 1);
+    let rec = &records[0];
+    assert!(!rec.aborted);
+    match &rec.type_id {
+        Some(Key::ByteString(bytes)) => {
+            assert_eq!(bytes, &[0xa7, 0xf9, 0x0b, 0x3c]);
+        }
+        other => panic!("expected ByteString type_id, got {:?}", other),
+    }
+
+    let payload = find_value(rec.map_bytes, 2).unwrap().unwrap();
+    assert_eq!(
+        read_definite_string(payload).unwrap(),
+        b"decentralized payload"
+    );
 }

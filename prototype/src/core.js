@@ -71,6 +71,8 @@ function decodeRecordItem(map) {
     // cannot be routed. Treat as an immediate abort of this record.
     return { typeId: null, map, aborted: true, abortReason: 'missing key 0' };
   }
+  // Key 0 can be a uint (even=standard, odd=scoped) or a byte string
+  // (decentralized/random) — see spec §3.1 for the three-type classification.
   return { typeId: map.get(0), map, aborted: false };
 }
 

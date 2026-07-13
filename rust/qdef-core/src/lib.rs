@@ -36,6 +36,9 @@ pub enum Error {
 pub enum AbortReason {
     /// §3.1: a Record with no key 0 cannot be routed by any parser.
     MissingKeyZero,
+    /// §3.1: an odd uint Type ID (key 0) without a declared namespace.
+    /// Odd uints are namespace-scoped; using one without a namespace is an error.
+    OddKeyWithoutNamespace,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -124,7 +127,7 @@ impl<'a> Iterator for Records<'a> {
 /// mechanism), and its raw map bytes for a Record-Type-specific handler
 /// (e.g. `check_criticality`, `find_value`) to inspect further.
 pub struct Record<'a> {
-    pub type_id: Option<u64>,
+    pub type_id: Option<cbor::Key<'a>>,
     pub aborted: bool,
     pub abort_reason: Option<AbortReason>,
     pub map_bytes: &'a [u8],
@@ -136,7 +139,7 @@ fn parse_record(buf: &[u8]) -> Result<(Record<'_>, usize), Error> {
 
     let (type_id, aborted, abort_reason) = match key0 {
         None => (None, true, Some(AbortReason::MissingKeyZero)),
-        Some(id) => (Some(id), false, None),
+        Some(key) => (Some(key), false, None),
     };
 
     Ok((
@@ -150,12 +153,41 @@ fn parse_record(buf: &[u8]) -> Result<(Record<'_>, usize), Error> {
     ))
 }
 
-fn parse_map_key0(buf: &[u8]) -> Result<(Option<u64>, usize), cbor::Error> {
-    let mut key0: Option<u64> = None;
+fn parse_map_key0<'a>(buf: &'a [u8]) -> Result<(Option<cbor::Key<'a>>, usize), cbor::Error> {
+    let mut key0: Option<cbor::Key<'a>> = None;
+    let mut first = true;
     let consumed = walk_map_pairs(buf, |k, v| {
-        if k == 0 && key0.is_none() {
-            let (val, _) = cbor::read_uint(v)?;
-            key0 = Some(val);
+        if first {
+            first = false;
+            match k {
+                cbor::Key::Uint(0) => {
+                    // Key 0's value is the Type ID — a uint (even=standard,
+                    // odd=scoped) or a byte string (decentralized). Parse
+                    // the value to determine which.
+                    let head = cbor::read_head(v)?;
+                    match head.major {
+                        0 => {
+                            key0 = Some(cbor::Key::Uint(head.arg));
+                        }
+                        2 => {
+                            let len = head.arg as usize;
+                            let total = head.head_len + len;
+                            if v.len() < total {
+                                return Err(cbor::Error::UnexpectedEof);
+                            }
+                            key0 = Some(cbor::Key::ByteString(&v[head.head_len..total]));
+                        }
+                        _ => {
+                            key0 = Some(cbor::Key::Uint(0));
+                        } // malformed, caller will handle
+                    }
+                }
+                cbor::Key::ByteString(_) => {
+                    // Byte string as key itself (not key 0 with a byte string value)
+                    key0 = Some(k);
+                }
+                _ => {} // first key is not 0; key 0 absent
+            }
         }
         Ok(ControlFlow::Continue)
     })?;
@@ -176,12 +208,16 @@ pub fn check_criticality(
 ) -> Result<CriticalityOutcome, Error> {
     let mut aborted_on: Option<u64> = None;
     walk_map_pairs(map_bytes, |k, _v| {
-        if k != 0 && !known_keys.contains(&k) {
-            if k % 2 == 0 {
-                aborted_on = Some(k);
-                return Ok(ControlFlow::Stop);
+        // Key 0 is always skipped (it's the Type ID, not a field key).
+        // All non-zero keys in QDEF are uints (§3).
+        if let cbor::Key::Uint(key) = k {
+            if key != 0 && !known_keys.contains(&key) {
+                if key % 2 == 0 {
+                    aborted_on = Some(key);
+                    return Ok(ControlFlow::Stop);
+                }
+                on_ignored(key);
             }
-            on_ignored(k);
         }
         Ok(ControlFlow::Continue)
     })
@@ -200,9 +236,11 @@ pub fn check_criticality(
 pub fn find_value<'a>(map_bytes: &'a [u8], key: u64) -> Result<Option<&'a [u8]>, Error> {
     let mut found: Option<&'a [u8]> = None;
     walk_map_pairs(map_bytes, |k, v| {
-        if k == key {
-            found = Some(v);
-            return Ok(ControlFlow::Stop);
+        if let cbor::Key::Uint(k) = k {
+            if k == key {
+                found = Some(v);
+                return Ok(ControlFlow::Stop);
+            }
         }
         Ok(ControlFlow::Continue)
     })
@@ -213,10 +251,12 @@ pub fn find_value<'a>(map_bytes: &'a [u8], key: u64) -> Result<Option<&'a [u8]>,
 /// Shared pair-walker used by key-0 routing, criticality checking, and
 /// field lookup alike — one generic "walk a CBOR map's key/value pairs"
 /// implementation instead of three near-duplicates. QDEF Record keys are
-/// always uints (§3); a non-uint key is treated as malformed.
+/// always uints (§3), except key 0 which may also be a byte string (§3.1's
+/// three-type classification). A non-uint, non-byte-string key is treated
+/// as malformed.
 fn walk_map_pairs<'a>(
     map_bytes: &'a [u8],
-    mut visit: impl FnMut(u64, &'a [u8]) -> Result<ControlFlow, cbor::Error>,
+    mut visit: impl FnMut(cbor::Key<'a>, &'a [u8]) -> Result<ControlFlow, cbor::Error>,
 ) -> Result<usize, cbor::Error> {
     let head = cbor::read_head(map_bytes)?;
     if head.major != 5 {
@@ -239,7 +279,7 @@ fn walk_map_pairs<'a>(
             break;
         }
 
-        let (key, klen) = cbor::read_uint(&map_bytes[pos..])?;
+        let (key, klen) = cbor::read_key(&map_bytes[pos..])?;
         pos += klen;
         let vstart = pos;
         let vlen = cbor::skip_value(&map_bytes[pos..])?;
@@ -267,6 +307,9 @@ pub fn read_uint(value_bytes: &[u8]) -> Result<u64, Error> {
     let (v, _) = cbor::read_uint(value_bytes).map_err(Error::Cbor)?;
     Ok(v)
 }
+
+/// Re-export the Key enum so callers can pattern-match on key 0's type.
+pub use cbor::Key;
 
 #[cfg(test)]
 mod fixtures;

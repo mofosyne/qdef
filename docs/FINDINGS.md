@@ -971,3 +971,61 @@ a hosted CBOR library or an OS to hide the hard parts." It did — with two
 concrete hardening gaps (#9, #10) that only became visible once the
 CBOR-walking and Sequence-iteration logic had to be written by hand instead
 of delegated to a library call.
+
+## 23. Multi-type Key 0: replacing the three-tier integer system with a three-type classification
+
+The original design used three tiers of integer Type IDs in key 0
+(`1`–`99` stdlib, `100`–`32767` common vocabulary, `32768`+ private-use),
+all encoded as CBOR uints. Namespace scoping was determined by a magnitude
+check against a magic ceiling (`32768`). This worked but had structural
+limitations:
+
+- **Truncation was invisible on the wire.** A 64-bit private-use ID
+  truncated to 32 bits was indistinguishable from a naturally-32-bit
+  registered ID. The spec explicitly forbade this (old §3.5), but the
+  prohibition was enforced by convention, not by the wire format.
+
+- **The ceiling was a magic number.** `32768` carried semantic meaning
+  (the boundary between "always global" and "namespace-scoped if declared")
+  that wasn't visible in the CBOR encoding itself — a parser had to know
+  the threshold.
+
+- **Three tiers of the same type.** All three categories (standard,
+  scoped, decentralized) were encoded as CBOR uints. A parser couldn't
+  determine which category an ID belonged to without comparing against
+  external thresholds.
+
+The new design replaces tiers with three distinct CBOR types in key 0:
+
+| CBOR type | Class | Scope |
+|---|---|---|
+| uint, even | Standard record type | Always global |
+| uint, odd | Scoped record type | Requires namespace |
+| byte string | Decentralized/random | Always global |
+
+This change was adopted after research into analogous protocols (CBOR,
+XML, NDEF, Protocol Buffers, HTTP/2+3, Bluetooth, ZIP) confirmed that
+infrastructure mechanisms are universally kept globally interpretable —
+matching the even-uint-always-global rule.
+
+Key benefits:
+- **Self-describing.** The CBOR major type and parity carry all the
+  semantic meaning. No magic constants, no threshold comparisons.
+- **Explicit truncation.** Byte string length visible on wire. A 2-byte
+  ID visibly declares its collision tolerance.
+- **Clean namespace scoping.** Odd uints require a namespace; even uints
+  and byte strings are always global. No ceiling check needed.
+- **Hash-derivation simplified.** Output is now a byte string (truncated
+  SHA-256 digest), eliminating the old Number/BigInt comparison hazard
+  (Finding #21) entirely.
+
+Costs:
+- **Breaking wire format change.** All existing fixtures must be
+  regenerated. Containers using old odd-numbered types (3, 5, 7, 105)
+  without a Type 0 header will be rejected.
+- **Stdlib renumbering.** Types 3→8 (Compress), 5→10 (Fallback Hint),
+  7→12 (App Route), 105→106 (Event Ticket) to ensure all standard record
+  type IDs are even.
+- **Multi-type key 0.** Parsers must now check the CBOR major type of
+  key 0's value (uint vs. byte string), adding a branch to the routing
+  path. This is a single major-type check — trivial cost, but present.
