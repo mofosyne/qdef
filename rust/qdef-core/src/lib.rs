@@ -166,7 +166,9 @@ fn parse_map_key0<'a>(buf: &'a [u8]) -> Result<(Option<cbor::Key<'a>>, usize), c
                     // the value to determine which.
                     let head = cbor::read_head(v)?;
                     match head.major {
-                        0 => { key0 = Some(cbor::Key::Uint(head.arg)); }
+                        0 => {
+                            key0 = Some(cbor::Key::Uint(head.arg));
+                        }
                         2 => {
                             let len = head.arg as usize;
                             let total = head.head_len + len;
@@ -175,7 +177,9 @@ fn parse_map_key0<'a>(buf: &'a [u8]) -> Result<(Option<cbor::Key<'a>>, usize), c
                             }
                             key0 = Some(cbor::Key::ByteString(&v[head.head_len..total]));
                         }
-                        _ => { key0 = Some(cbor::Key::Uint(0)); } // malformed, caller will handle
+                        _ => {
+                            key0 = Some(cbor::Key::Uint(0));
+                        } // malformed, caller will handle
                     }
                 }
                 cbor::Key::ByteString(_) => {

@@ -299,5 +299,8 @@ fn byte_string_type_id_routes_correctly() {
     }
 
     let payload = find_value(rec.map_bytes, 2).unwrap().unwrap();
-    assert_eq!(read_definite_string(payload).unwrap(), b"decentralized payload");
+    assert_eq!(
+        read_definite_string(payload).unwrap(),
+        b"decentralized payload"
+    );
 }
