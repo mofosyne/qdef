@@ -128,18 +128,6 @@ a time without ever needing to know the total count up front. A count/size
 field would sit unused by that parser and be one more thing a fuzzer or a
 malformed input could make lie.
 
-**Deliberately no record count or total payload size in the header** —
-suggested more than once as a natural addition to a binary header, and
-deliberately left out. Either field would require an encoder to know its
-final size before writing the header, and a decoder to trust a value that
-duplicates information already recoverable by walking the Sequence, adding
-a way for the two to disagree with no benefit: the entire point of a CBOR
-*Sequence* over a wrapping array (above) is that a Record's presence is
-self-delimiting and a constrained parser can stream through Records one at
-a time without ever needing to know the total count up front. A count/size
-field would sit unused by that parser and be one more thing a fuzzer or a
-malformed input could make lie.
-
 ## 3. The Record Architecture
 
 Every Record is a CBOR Map, one level deep, no more — a flat set of
@@ -400,7 +388,7 @@ convention on a separate axis.
   silently ignored; the rest of the record still processes normally.
 
 This gives per-field forward compatibility: a future critical field doesn't
-require bumping the container `Version` byte, only choosing an even key
+require any version-bump mechanism, only choosing an even key
 number the current Record Type doesn't yet define.
 
 **Field values MUST be skip-safe.** A Record field's value — for *any* key,
@@ -606,9 +594,9 @@ Type 0: {                            // Container Header (standard record type)
   0: 0,                              // CRITICAL: fixed, this is what
                                       //   makes it the header
   3: 12271745624591856273,           // OPTIONAL: format namespace, a
-                                      //   private-use-random uint or byte
-                                      //   string (same convention as
-                                      //   §3.1's Type IDs — see below)
+                                      //   uint or byte string (same
+                                      //   convention as §3.1's Type IDs
+                                      //   — see below)
   5: "com.example/tagdrop-paper"     // OPTIONAL: recoverable name for
                                       //   the namespace, Type Hint's
                                       //   exact pattern (§3.1)
@@ -637,7 +625,7 @@ Record's "unaware party pays nothing" property (§4).
 **Format namespace values follow the same convention as Record Type IDs
 (§3.1): a uint or a byte string.** A uint namespace follows the same
 tiering convention as §3.1's uint Type IDs — a small span for
-reviewed/common formats, and an open private-use-random span with no
+reviewed/common formats, and an open span of even uints with no
 allocation authority needed. A byte string namespace follows §3.1's
 decentralized convention — collision safety from the byte length the
 developer chose. Key `5`'s Hint name plays Type Hint's exact role (§3.1),
