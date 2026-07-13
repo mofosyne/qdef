@@ -593,7 +593,7 @@ rule below, not a distinct structure the format defines.
 Type 0: {                            // Container Header (standard record type)
   0: 0,                              // CRITICAL: fixed, this is what
                                       //   makes it the header
-  3: 12271745624591856273,           // OPTIONAL: format namespace, a
+  3: h'a7f9',                        // OPTIONAL: format namespace, a
                                       //   uint or byte string (same
                                       //   convention as §3.1's Type IDs
                                       //   — see below)

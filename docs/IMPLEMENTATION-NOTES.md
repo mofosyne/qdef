@@ -118,5 +118,5 @@ it.
 
 None of these needed a new wrapper, a new field-value shape, or a spec
 change — they're all just applications of §3.2's field-value-shape rule,
-§1's repeated-Records model, and §4.1/§4.3's existing stdlib, combined
+§1's repeated-Records model, and §4.1/§4.3's existing standard record types, combined
 differently depending on what the data actually needs.
