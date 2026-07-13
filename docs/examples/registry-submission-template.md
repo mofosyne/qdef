@@ -17,7 +17,7 @@ Record Type Name:           com.example.smartlight/status
 Variable Name:              Smart Light Status
 Full SHA-256:               h'4b1f561b8df976781a3d74c35eafbfb6483d4f511bae5573ab35ebba8f0e0333'
 
-Namespace ID:               h'c103'
+Namespace ID:               h'c103df40'
 Namespace Name:             com.example.smartlight
 Variable Name:              Smart Light
 Full SHA-256:               h'c103df40c55c77a3bb6a9342dbc81389bb3a7315f20a92c73a7f8cfc226a1bf0'
@@ -49,7 +49,7 @@ Paste the output of these commands:
 node scripts/validate-type-id.js com.example.smartlight/status "h'4b1f561b'"
 
 # Validate Namespace ID
-node scripts/validate-type-id.js --namespace com.example.smartlight "h'c103'"
+node scripts/validate-type-id.js --namespace com.example.smartlight "h'c103df40'"
 ```
 
 Expected output:
@@ -67,13 +67,13 @@ Validating: Record Type ID for "com.example.smartlight/status"
 Validation passed.
 
 Validating: Namespace ID for "com.example.smartlight"
-  Candidate ID:  h'c103' (2 bytes)
-  Expected hash: h'c103' (2 bytes)
+  Candidate ID:  h'c103df40' (4 bytes)
+  Expected hash: h'c103df40' (4 bytes)
 
   ✓ Hash derivation matches.
   ✓ Name is reverse-domain qualified.
   ✓ Name avoids known collision-prone patterns.
-  ℹ Byte length 2 is suitable for namespace-scoped use.
+  ✓ Byte length 4 is adequate for global use.
 
 Validation passed.
 ```
@@ -104,7 +104,7 @@ a2                              # map(2)
 
 ## Checklist
 
-- [ ] Record Type ID is a valid hex byte string (4+ bytes for global use)
+- [ ] Record Type ID is a valid hex byte string (4+ bytes for global use, 2 bytes acceptable within a declared namespace)
 - [ ] Record Type Name is reverse-domain qualified (e.g. `com.example.myapp/route`)
 - [ ] Variable Name is a space-separated word sequence
 - [ ] Full SHA-256 is pasted from gen-type-id output

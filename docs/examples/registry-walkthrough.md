@@ -62,8 +62,8 @@ key `0` as a byte string.
 
 | Width | Use case |
 |-------|----------|
-| 2 bytes | Namespace-scoped only (must appear under Type 0's key 3) |
-| 4 bytes | Global use — recommended minimum (spec §3.1) |
+| 2 bytes | Record Type ID within a declared namespace only |
+| 4 bytes | Record Type ID global use (minimum); namespace IDs (minimum) |
 | 8 bytes | Maximum collision safety |
 
 You can force a width:
@@ -116,7 +116,7 @@ a byte string Type ID, the container declares a namespace:
 Type 0: {                            // Container Header (standard record type)
   0: 0,                              // CRITICAL: key 0 is always 0,
                                       //   value 0 means "this is the header"
-  3: h'3cf2',                        // OPTIONAL: namespace ID (byte string)
+  3: h'3cf2360e',                    // OPTIONAL: namespace ID (byte string, 4+ bytes)
   5: "com.example/myapp-paper"       // OPTIONAL: human-readable name
 }
 ```
@@ -125,10 +125,11 @@ Type 0: {                            // Container Header (standard record type)
 
 - Key `0` is always the uint `0` — it identifies the record as Type 0
 - Key `3` (namespace) is a byte string — this scopes all other Records
-  in the Sequence to that namespace
+  in the Sequence to that namespace. Namespace IDs MUST be at least 4
+  bytes because they are the global root of trust for all scoped IDs
 - Key `5` (hint) is a human-readable recovery name for the namespace
 
-A decoder seeing `key 3 = h'3cf2'` knows that odd-numbered Type IDs in
+A decoder seeing `key 3 = h'3cf2360e'` knows that odd-numbered Type IDs in
 this container are namespace-local, not globally registered.
 
 ### Step 5: Use in a Regular Record
@@ -139,7 +140,7 @@ Type ID directly in key `0`:
 ```
 Type 0: {                            // Container Header
   0: 0,                              //   CRITICAL: fixed
-  3: h'3cf2',                        //   OPTIONAL: namespace
+  3: h'3cf2360e',                    //   OPTIONAL: namespace (4+ bytes)
   5: "com.example/myapp-paper"       //   OPTIONAL: name
 }
 
@@ -169,30 +170,35 @@ distinguishes a byte string Type ID from a uint Type ID on the wire.
 
 ## Namespace ID (same algorithm, different use)
 
-For the Type 0 header's key `3` (namespace ID), use `--namespace`:
+For the Type 0 header's key `3` (namespace ID), use `--namespace` with
+`--width 4` (minimum for namespace IDs — they are the global root of
+trust for all scoped IDs within a container):
 
 ```bash
-node scripts/gen-type-id.js --namespace --width 2 com.example/myapp-paper
+node scripts/gen-type-id.js --namespace --width 4 com.example/myapp-paper
 ```
 
 Output:
 
 ```
 Name:        com.example/myapp-paper
-Derivation:  SHA-256(UTF-8("com.example/myapp-paper")) → first 2 bytes
-Value (hex): h'3cf2'
-CBOR wire:   423cf2
+Derivation:  SHA-256(UTF-8("com.example/myapp-paper")) → first 4 bytes
+Value (hex): h'3cf2360e'
+CBOR wire:   443cf2360e
 
-Note: 2-byte IDs are recommended for namespace-scoped use only.
-  Use 4+ bytes for global (unnamespaced) use.
+Note: 4-byte minimum for namespace IDs (global root of trust).
+  Use 8 bytes for maximum safety.
 
 Usage in wire format: first Record in Sequence is Type 0, with
-  key 3 (Namespace ID) = h'3cf2' (byte string)
+  key 3 (Namespace ID) = h'3cf2360e' (byte string)
   key 5 (name)         = "com.example/myapp-paper"
 ```
 
-2 bytes is fine for a namespace ID because it only needs to be unique
-within the container — it's scoped by the Type 0 header.
+Namespace IDs MUST be at least 4 bytes because they are the global root
+of trust: two unrelated namespaces with the same ID would cause all their
+scoped Type IDs to collide. This is unlike Record Type IDs within a
+namespace, where 2 bytes is acceptable because the namespace itself
+provides collision safety.
 
 ## Collision Safety
 

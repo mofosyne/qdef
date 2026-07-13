@@ -213,7 +213,7 @@ Record Type ID:             h'34e1e4af'
 Record Type Name:           com.example.tagdrop/route
 Variable Name:              Tag Drop Route
 
-Namespace ID:               h'a7f9'
+Namespace ID:               h'663c1cf2'
 Namespace Name:             com.example.tagdrop-paper
 Variable Name:              Tag Drop
 

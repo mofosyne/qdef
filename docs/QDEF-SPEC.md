@@ -315,11 +315,20 @@ Recommended truncation lengths:
 +-------------+------------------+---------------------------------------+
 | Byte length | Collision space  | Recommended context                  |
 +-------------+------------------+---------------------------------------+
-| 2           | ~65K             | Namespace-scoped (small namespaces)   |
-| 4           | ~4 billion       | Any context (minimum for global use)  |
-| 8           | ~1.8×10¹⁹       | Global (no namespace), maximum safety |
+| 2           | ~65K             | Record Type ID within a declared      |
+|             |                  | namespace only (§3.5)                 |
+| 4           | ~4 billion       | Any Record Type ID (minimum for       |
+|             |                  | global use); minimum for namespace IDs|
+| 8           | ~1.8×10¹⁹       | Record Type ID (no namespace),        |
+|             |                  | maximum safety                        |
 +-------------+------------------+---------------------------------------+
 ```
+
+**Note:** These recommendations apply to Record Type IDs (key `0`).
+Namespace IDs (Type `0`, key `3`) are the global root of trust for all
+scoped IDs within a container — two unrelated namespaces with the same
+ID would cause all their scoped Type IDs to collide. Namespace IDs MUST
+therefore use at least 4 bytes; 8 bytes is recommended for maximum safety.
 
 **Pinning the algorithm only solves half the problem — the input `name`
 still has to be collision-resistant itself, or the derived ID inherits
@@ -593,10 +602,13 @@ rule below, not a distinct structure the format defines.
 Type 0: {                            // Container Header (standard record type)
   0: 0,                              // CRITICAL: fixed, this is what
                                       //   makes it the header
-  3: h'a7f9',                        // OPTIONAL: format namespace, a
+  3: h'663c1cf2',                    // OPTIONAL: format namespace, a
                                       //   uint or byte string (same
                                       //   convention as §3.1's Type IDs
-                                      //   — see below)
+                                      //   — see below). Byte string
+                                      //   namespace IDs MUST be 4+ bytes
+                                      //   (they are the global root of
+                                      //   trust for all scoped IDs)
   5: "com.example/tagdrop-paper"     // OPTIONAL: recoverable name for
                                       //   the namespace, Type Hint's
                                       //   exact pattern (§3.1)
@@ -628,7 +640,11 @@ tiering convention as §3.1's uint Type IDs — a small span for
 reviewed/common formats, and an open span of even uints with no
 allocation authority needed. A byte string namespace follows §3.1's
 decentralized convention — collision safety from the byte length the
-developer chose. Key `5`'s Hint name plays Type Hint's exact role (§3.1),
+developer chose. However, namespace IDs are the global root of trust:
+two unrelated namespaces with the same byte string ID would cause all
+their scoped Type IDs to collide. Byte string namespace IDs MUST
+therefore be at least 4 bytes; 8 bytes is recommended for maximum
+safety. Key `5`'s Hint name plays Type Hint's exact role (§3.1),
 including the same optional, opportunistic self-certifying strengthening
 and the same pinned algorithm (§3.1's SHA-256/UTF-8/truncated-byte-string
 definition — reused exactly, not a second hash convention that happens to
