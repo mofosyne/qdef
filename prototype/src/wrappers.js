@@ -1,5 +1,5 @@
 'use strict';
-// QDEF standard-library Wrapper Records (§4.1): Split (2), Compress (3),
+// QDEF standard record type Wrapper Records (§4.1): Split (2), Compress (8),
 // Encrypt (4). Each is a generic byte-in/byte-out resolver — none of them
 // know or care what the wrapped inner bytes mean.
 
@@ -9,11 +9,11 @@ const cbor = require('cbor');
 const core = require('./core');
 
 const SPLIT_TYPE = 2;
-const COMPRESS_TYPE = 3;
+const COMPRESS_TYPE = 8;
 const ENCRYPT_TYPE = 4;
-const FALLBACK_HINT_TYPE = 5;
+const FALLBACK_HINT_TYPE = 10;
 const MEDIA_PAYLOAD_TYPE = 6;
-const APP_ROUTE_TYPE = 7;
+const APP_ROUTE_TYPE = 12;
 
 const SPLIT_KNOWN_KEYS = new Set([0, 2, 4, 6, 8, 9, 11]);
 const COMPRESS_KNOWN_KEYS = new Set([0, 2]);
@@ -42,7 +42,7 @@ const COAP_CONTENT_FORMAT_IMAGE_JPEG = 22;
 const COAP_CONTENT_FORMAT_IMAGE_PNG = 23;
 const COAP_CONTENT_FORMAT_APPLICATION_CBOR = 60;
 
-// ---- Compress (Type 3) -----------------------------------------------
+// ---- Compress (Type 8) -----------------------------------------------
 
 function compressEncode(innerBytes) {
   return new Map([

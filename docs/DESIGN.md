@@ -28,7 +28,7 @@ on:
 - **Tiered ranges (recommended):** three tiers, not two, each with a
   different reason to exist:
   - `1`–`99`: mechanism/plumbing (already spec'd, §4) — Wrapper Records
-    and other stdlib infrastructure, not application content.
+    and other standard record type infrastructure, not application content.
   - `100`–`32767`: **common vocabulary** — reviewed, widely-recognized
     content types (Wi-Fi, a URL/URI record, the kind of thing NDEF calls
     a "Well Known Type"). This is the tier for a Record Type enough
@@ -42,24 +42,20 @@ on:
     for the full rationale — since that's conceptually the same
     distinction: this tier IS the "Specification Required" one,
     reviewed before allocation.
-  - `32768`+: **decentralized — self-allocated via a large random
-    value, not a registry** (once a namespace is declared, §3.5, small
-    numbers in this range become cheap *and* collision-free without any
-    self-allocated width at all — see "Namespace-scoped Type IDs,"
-    below). Outside a namespace, an implementer who picks a
-    sufficiently large (e.g. 32- or 64-bit) *random* number, conventionally
-    `0x10000`+, gets collision avoidance from the sheer size of the
-    number space, the same way a UUID does — not from anyone checking a
-    list. Call it "private-use" if the CBOR/IANA-registry parallel this
-    name draws on is useful (RFC 8949 §9.2's own private-use ranges), but
-    don't read "private" as "closed." Self-allocation is about who has to
-    grant permission to mint an ID — nobody — not about whether the ID
-    stays undisclosed or single-party: Unicode's Private Use Areas and
+  - `32768`+: **decentralized — self-allocated via a byte string ID, not
+    a registry** (once a namespace is declared, §3.5, odd uints become
+    cheap *and* collision-free without any self-allocated width at all —
+    see "Namespace-scoped Type IDs," below). Outside a namespace, an
+    implementer who picks a byte string ID with sufficient length (e.g.
+    4 or 8 bytes) gets collision avoidance from the sheer size of the
+    byte space, the same way a UUID does — not from anyone checking a
+    list. Call it "decentralized" if that's useful, but don't assume the
+    ID stays undisclosed or single-party: Unicode's Private Use Areas and
     Bluetooth's private/random device addresses are both self-assigned
     the same way, and neither implies the result is never published or
     never recognized by an unrelated party. What actually distinguishes
-    this tier from `100`–`32767` isn't visibility, it's *authority*: no
-    registry vouches for what a self-allocated ID means, so any
+    this tier from registered types isn't visibility, it's *authority*:
+    no registry vouches for what a self-allocated ID means, so any
     cross-implementer recognition has to come from somewhere else — Type
     Hint's hash-derivation (§3.1), a declared namespace (§3.5), or App
     Route (§4.4), not a lookup table. It's only viable at all because the
@@ -79,34 +75,33 @@ on:
   viable governance model to begin with (the paragraph above already
   says "no registry authority exists yet," and even the spec's own §6
   worked example steers real adopters away from it and toward
-  private-use-random instead, in practice). Anyone who wants a cheap
+  decentralized byte string IDs instead, in practice). Anyone who wants a cheap
   small ID with zero coordination can get one today by declaring their
   own namespace — itself decentralized, since the namespace value can be
-  private-use-random — and using small sequential IDs inside it. That
+  a byte string — and using small sequential odd uint IDs inside it. That
   covers the first-come tier's entire use case with a mechanism that
   already has a real governance story, so keeping a second, weaker
   path to the same outcome added a distinction without a difference.
-- **Even/odd for governance tier (considered, rejected):** reuse the
-  even/odd convention itself to mean "pre-registered vs. free-for-all,"
-  the same way it already means critical-vs-optional for keys (spec
-  §3.2). Rejected for two reasons: it collides semantically with a
-  convention that already carries a specific, different, load-bearing
-  meaning elsewhere in the spec — a reader would have to track two
-  unrelated meanings of "even/odd" depending on whether they're looking
-  at a key or a Type ID — and it halves the usable ID space for no
-  benefit a tiered range doesn't already provide more cheaply.
+- **Even/odd for governance tier — adopted.** The even/odd convention on
+  key `0`'s *value* now determines governance scope: even uint = always-
+  global standard record type, odd uint = namespace-scoped. This reuses
+  the same even/odd vocabulary already load-bearing for map key criticality
+  (spec §3.2) but applies it to a different axis (ID classification, not
+  key criticality). The two uses never overlap — one applies to map keys,
+  the other to key `0`'s value — and both follow the same mnemonic
+  (even = safe/default, odd = conditional/special). The ID space is not
+  halved in practice because byte strings provide a second, orthogonal
+  path for decentralized allocation that doesn't compete for uint numbers
+  at all. See spec §3.1's note on even/odd vocabulary reuse for the full
+  rationale.
 
 **Guidance, not a requirement: structured composition within the
-private-use tier.** [GitHub issue #10](https://github.com/mofosyne/qdef/issues/10)
-raised this after building against the tier as recommended: an
-implementer defining several related Record Types MAY compose a
-private-use Type ID as a random prefix plus a locally self-assigned
-suffix (`TypeID = (prefix << suffix_bits) | suffix`), rather than
-drawing an independent CSPRNG value for each one. Costs zero additional
-wire bytes either way — the field is the same width regardless of how
-its bits were chosen — and reduces the number of independent random
-draws a single implementer needs to make from one per Record Type to
-one per implementer.
+decentralized byte string space.** [GitHub issue #10](https://github.com/mofosyne/qdef/issues/10)
+raised this after building against the tier as recommended: an implementer
+defining several related Record Types MAY compose a decentralized byte
+string ID using a fixed prefix plus a locally self-assigned suffix, rather
+than drawing an independent hash or random value for each one. The prefix
+bytes are shared across all related Types; only the suffix varies.
 
 Two things worth stating plainly if this gets used, not left implied:
 
@@ -129,7 +124,7 @@ Two things worth stating plainly if this gets used, not left implied:
   ecosystem scale.
 
 **Scope note, corrected.** An earlier version of this note warned that
-using a private-use Type ID for cross-implementer coordination was a
+using a decentralized Type ID for cross-implementer coordination was a
 "widening" beyond the tier's scope, on the premise that the tier meant
 closed/internal-only use. That premise was wrong (corrected above) —
 self-allocation was never a promise to stay undiscovered, and Type
@@ -138,7 +133,7 @@ recognize a self-allocated ID. So there's no widening to guard against
 there.
 
 The caution actually worth keeping is narrower and still real: if a
-structured private-use ID's prefix starts getting treated as an
+structured decentralized ID's prefix starts getting treated as an
 *implicit* cross-implementer routing signal — "anything sharing my
 prefix is safe to auto-launch for" — that's quietly reinventing App
 Route (§4.4) without App Route's domain-verified trust model behind it.
@@ -159,7 +154,7 @@ Adapted from IANA's own per-tag registration template for the CBOR tag
 registry (RFC 8949 §9.2), which is surprisingly lean — four fields
 total. QDEF needs more, because a single logical Record Type can have
 *two independent, unlinked identifiers*: a Record Type ID (global —
-common-vocabulary or private-use-random, works with no namespace
+common-vocabulary or decentralized byte string, works with no namespace
 declared) and a Scoped Type ID (cheap, only means anything paired with
 a specific declared namespace). Since nothing connects them by formula —
 a scoped ID is freshly chosen, not derived from the global one
@@ -178,13 +173,13 @@ name:
 ### Template
 
 ```
-Record Type ID:             <uint, or "none — namespace-only">
+Record Type ID:             <uint or byte string, or "none — namespace-only">
 Record Type Name:           <reverse-domain name, e.g. com.example.tagdrop/route>
 
-Namespace ID:               <uint, or "none — global-only">
+Namespace ID:               <uint or byte string, or "none — global-only">
 Namespace Name:             <reverse-domain name, or "none — global-only">
 
-Scoped Type ID:             <uint, or "none — global-only">
+Scoped Type ID:             <odd uint, or "none — global-only">
 
 Data item:                  <CBOR shape description — e.g. "map { 2: bytes, 4: uint }">
 Semantics:                  <one-line functional description>
@@ -244,7 +239,7 @@ its Type ID (the "Smart Route"), alongside the mandatory key `0`. Found
 broken on two independent grounds, not one:
 
 - **Empirical.** CBOR tag numbers are a shared IANA registry (RFC 8949
-  §3.4), and the low numbers QDEF's stdlib picked are already assigned:
+   §3.4), and the low numbers QDEF's standard record types picked are already assigned:
   tag `2`/`3` are bignums, tag `4` is a decimal fraction, tag `5` is a
   bigfloat — exactly Types 2 (Split), 3 (Compress), 4 (Encrypt), 5
   (Fallback Hint). Type `100` (Wi-Fi) collides with RFC 8943's
@@ -331,18 +326,17 @@ narrower rule was guarding against:
 
 An alternative to reserving key `1` globally was considered: fold the hint
 into key `0` itself (making it sometimes a compound value instead of a
-bare uint) so key `1` stays free for each Record Type's own use. Rejected:
+bare value) so key `1` stays free for each Record Type's own use. Rejected:
 key `0` is the one field read unconditionally for *every* Record,
 including ones about to be skipped, so complicating its shape reintroduces
 exactly the recursion-adjacent cost the field-value-shape rule (spec §3.2)
 eliminated, on the single least-skippable code path in the format. It also
-isn't additive — every existing implementation (including this repo's own
-Rust prototype) hard-codes "key `0` is a uint," so redefining it would
-break every parser written against the spec today. Reserving key `1`
-instead costs only one non-critical, per-Type-unbounded integer — every
-parser already implements "skip an unrecognized odd key" as baseline
-behavior, so the tax is paid once, in the spec text, not repeatedly at
-runtime by implementations that don't care about it.
+isn't additive — every existing implementation hard-codes the expected types
+for key `0`, so redefining it would break every parser written against the
+spec today. Reserving key `1` instead costs only one non-critical, per-Type-
+unbounded value — every parser already implements "skip an unrecognized odd
+key" as baseline behavior, so the tax is paid once, in the spec text, not
+repeatedly at runtime by implementations that don't care about it.
 
 ## Media Payload (Type 6): why it does *not* reuse Type Hint's decentralized-ID pattern
 
@@ -354,7 +348,7 @@ without checking whether the problem it solves was even present at this
 layer.
 
 **Type ID and Media Type are not the same shape of problem.** A
-private-use-random Type ID has *no* identity besides the number — that's
+decentralized Type ID has *no* identity besides the bytes — that's
 exactly why Type Hint has to exist (to attach a name) and why the hash
 check has to exist (to prove that name wasn't tampered with). A media
 type isn't like that: `"text/vcard"` is already a stable, globally
@@ -392,7 +386,7 @@ maintenance prospect ever turns out to be wrong.
 
 Related but narrower (spec §4): who maintains the reserved `1`–`99` range
 itself — additions like §4.1/§4.2/§4.3 need some process for becoming
-part of "the stdlib" rather than just another vendor's Record Type
+part of "the standard record types" rather than just another vendor's Record Type
 squatting on a low number.
 
 ## Magic-header overhead for QR
@@ -764,7 +758,7 @@ security-relevant — get it wrong and a decoder wastes a little effort
 before `group_id` catches the mismatch anyway, exactly the same outcome
 as not pre-filtering at all. That gap in stakes is *why* the
 decentralized form is allowed to reuse Type Hint's cheaper,
-unauthenticated pattern (a private-use-random uint at key `2`, an
+unauthenticated pattern (a decentralized byte string at key `2`, an
 optional recoverable name at key `3`) instead of requiring domain
 verification for both — it would be a mistake to make the pre-filter pay
 the domain form's registration cost for a property it doesn't need, and
@@ -799,11 +793,11 @@ inconsistency if it had shipped:
   then up to 13 bytes, always paid). Landing it as a plain odd/optional
   key on Type `0` means a container using only known Type IDs pays
   *nothing* — not even one byte — the same "unaware party pays nothing"
-  property every other stdlib mechanism already has.
+   property every other standard record type mechanism already has.
 - **"Different Type ID = different header version" was a real mistake,
   caught directly, not just a style preference.** It wasted low Type ID
   space on hypothetical future header revisions and was inconsistent
-  with how every other stdlib Record actually evolves here (Encrypt and
+   with how every other standard record type Record actually evolves here (Encrypt and
   App Route both gained fields on their *existing* Type IDs, never new
   Types, when real needs showed up later). Corrected: Type `0` is the
   one, permanent header Record; a genuinely incompatible future change
@@ -812,7 +806,7 @@ inconsistency if it had shipped:
   dedicated field required.
 - **Key `1` was briefly considered for a "version code" field and
   rejected once the collision was spotted.** Key `1` is already,
-  globally, Type Hint (§3.1) — for a Type ID below `0x10000` (which `0`
+   globally, Type Hint (§3.1) — for a standard record type ID (even uint, which `0`
   is), it specifically means "the legacy ID this Type was promoted
   from." A generic Type-Hint-aware decoder would have actively
   misread a version integer sitting there as a bogus legacy-ID claim,
@@ -855,7 +849,7 @@ better: structurally guaranteed first (Companion ID lived on App Route,
 which is explicitly *not* positionally special, so a scanner had to
 find it), and genuinely zero-cost when unused (Companion ID required a
 whole separate decentralized-form App Route record on every sibling
-code). Keeping both would have meant two private-use-random-plus-Hint
+code). Keeping both would have meant two decentralized-plus-Hint
 mechanisms answering the same question from two different Record Types
 — exactly the kind of duplication this project avoids elsewhere (see
 "Registry governance," above, on not inventing a second governance
@@ -926,15 +920,14 @@ so a decoder hardcoding against one specific registration there was
 both a rarer thing to do and a lower-stakes thing to get wrong.
 
 Resolved by extending the always-global floor from `100` to `1000` —
-`1`–`999` (stdlib mechanisms *and* common-vocabulary) stayed
+`1`–`999` (standard record types *and* common-vocabulary) stayed
 unconditionally global; only the first-come tier was namespace-scopable.
 Verified the real cost of this choice rather than asserting it was
 cheap: the cheapest possible namespace-scoped Type ID moved from 4
 bytes (`100`) to 5 bytes (`1000`) — one extra byte, traded for closing
 off the specific failure mode most likely to occur in practice rather
 than the theoretically cheapest design. A third, stricter option
-(require namespace-scoped IDs to be 32-bit-class, `≥ 0x10000`, matching
-the private-use-random floor exactly) was considered and set aside: it
+(require namespace-scoped IDs to be odd uints) was considered and set aside: it
 closes the first-come tier's sharp edge too, at 7 bytes minimum — a
 real, defensible choice, but one paying for safety margin against a
 risk already judged low-stakes, for a proportionally much larger
@@ -959,7 +952,7 @@ common-vocabulary tier's ceiling moved with it, `999` → `32767`,
 deliberately mapped onto IANA's "Specification Required" span — which
 is conceptually the right label for it, since that tier already *is* a
 review-gated allocation, just one QDEF governs itself rather than IANA.
-`1`–`99` (stdlib) was deliberately left unaligned with IANA's `0`–`23`:
+`1`–`99` (standard record types) was deliberately left unaligned with IANA's `0`–`23`:
 renumbering seven already-shipped-in-examples mechanism IDs to fit a
 foreign registry's unrelated tier (Standards Action is about who can
 change the *CBOR* spec, not "generic tools must unwrap this regardless
@@ -981,7 +974,7 @@ implemented "first-come" as a distinct mechanism to begin with, so
 removing the tier is purely a governance/vocabulary simplification —
 `GLOBAL_TIER_CEILING`'s value and the paragraphs above already describe
 the result (everything at or above the ceiling is either namespace-
-scoped or expected to be private-use-random, never an ungoverned flat
+scoped or expected to be decentralized byte string, never an ungoverned flat
 number) without needing a separate tier concept to explain it.
 
 **Fourth follow-on, same day: is a namespace-local Type ID actually a
@@ -1004,11 +997,11 @@ clean miss" failure mode named above, just triggered at ID-selection
 time instead of decode time. Made explicit in spec prose (§3.5) rather
 than left to be inferred from the "shrinking" framing, and demonstrated
 rather than just asserted: `prototype/test/header.test.js` constructs
-exactly this case (a value equal to a real 64-bit private-use-random ID
+exactly this case (a value equal to a real 64-bit decentralized byte string ID
 truncated to its low 15 bits) and confirms it resolves globally, not
 namespace-scoped, despite a namespace being declared.
 
-**Fully additive.** An app's existing global private-use-random Type
+**Fully additive.** An app's existing global decentralized Type
 IDs keep working forever; adopting namespace-scoped small IDs for new
 content is an independent, opt-in choice that never invalidates or
 collides with the old ones, since an unnamespaced old ID was never
@@ -1017,7 +1010,7 @@ namespace-scoped to begin with.
 Prototyped in `prototype/src/header.js`'s `resolveLookupKey` and
 `prototype/test/header.test.js`: the same Type ID resolving to different
 compound keys under different namespaces, `1`–`32767` staying global
-regardless (both the stdlib range and, deliberately, the full
+   regardless (both the standard record type range and, deliberately, the full
 IANA-aligned common-vocabulary range up to `32767`), a namespace-aware
 dispatcher correctly *not* falling back to a recognized global meaning
 for an unrecognized namespace-scoped Record above the ceiling (the
@@ -1034,41 +1027,40 @@ would have cost at the old `1000` floor.
 
 Three separate mechanisms (Type Hint, §3.1; App Route's decentralized
 form, §4.4; the format namespace, §3.5) all describe an optional
-strengthening: derive a private-use-random ID from a hash of its own
-name, so the binding is independently checkable. The spec text always
-wrote this as `ID = truncate(hash(name), N)` — which sounds precise but
-isn't: it never said which hash function, how the string gets encoded,
-how truncation/byte-order works, or what `N` actually is. §3.1 called
-`N` "an open parameter" outright.
+strengthening: derive a decentralized ID from a hash of its own name, so
+the binding is independently checkable. The spec text always wrote this
+as `ID = truncate(hash(name), N)` — which sounds precise but isn't: it
+never said which hash function, how the string gets encoded, how
+truncation/byte-order works, or what `N` actually is. §3.1 called `N`
+"an open parameter" outright.
 
 Asked directly whether this had actually been pinned down, the honest
 answer was no — and checking the real prototype rather than just the
 prose surfaced a live bug matching the gap exactly: `verifyTypeHint`
 called `deriveHashId` with no width argument, so it always truncated to
 4 bytes regardless of the candidate ID's actual magnitude. A genuinely
-64-bit-class ID — exactly what §9 recommends and what TagDrop's own
-existing Type IDs actually are — could never verify, silently, no
-matter how it was derived. "Anyone can independently check" (the whole
-point of building this) was false in practice for the width this
-project's own real adopter uses.
+wide ID — exactly what §9 recommends and what TagDrop's own existing
+Type IDs actually are — could never verify, silently, no matter how it
+was derived. "Anyone can independently check" (the whole point of
+building this) was false in practice for the width this project's own
+real adopter uses.
 
-**Fixed by making `N` derived, not negotiated.** `N` isn't a value two
-parties need to agree on out of band — it's simply the byte-width the
-candidate ID already needs to represent itself (4 bytes if it fits in
-32 bits, 8 otherwise), so a verifier reads it off the ID being checked.
-Pinned the rest too: SHA-256 over the name's raw UTF-8 bytes (not any
-CBOR encoding of the string), first `N` bytes of the digest read as a
-big-endian uint. No new primitives — SHA-256 is the same "borrow an
-already-ubiquitous primitive" instinct behind `group_id` and the
-COSE/CoAP registry reuse elsewhere in this spec.
+**Fixed by making `N` a developer choice, outputting a byte string.**
+With the multi-type key 0 design (spec §3.1), decentralized IDs are now
+CBOR byte strings (major type 2), not uints. The developer chooses `N`
+directly — wider means more collision-safe. The derivation algorithm
+produces the first `N` bytes of the SHA-256 digest as a definite-length
+byte string. SHA-256 over the name's raw UTF-8 bytes (not any CBOR
+encoding of the string). No new primitives — SHA-256 is the same "borrow
+an already-ubiquitous primitive" instinct behind `group_id` and the
+COSE/CoAP registry reuse elsewhere in this spec. The full 32-byte
+digest lives in documentation for verification; only the truncated form
+appears on the wire.
 
 **A second, related bug caught while fixing the first:** comparing the
-derived value against the candidate ID with `===` is unsafe once both
-narrow (plain Number) and wide (BigInt, since `Buffer.readUIntBE` tops
-out at 6 bytes) derivations exist in the same function — `5 === 5n` is
-`false` in JS, a real trap this codebase's own Number/BigInt mixing
-(FINDINGS.md #14) makes concrete rather than theoretical. Fixed by
-normalizing both sides through `BigInt(...)` before comparing.
+derived byte string against the candidate ID needed to use `Buffer.equals()`
+rather than `===`, since byte string comparison by reference is unsafe.
+Fixed by normalizing both sides through Buffer comparison.
 
 **The namespace mechanism's own hash-check went from claimed to real.**
 §3.5 described `namespace = truncate(hash(name), N)` in prose from the

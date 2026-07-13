@@ -22,6 +22,10 @@ pub enum Error {
     NotAUint,
     NotAMap,
     NotAString,
+    /// A Record map key was neither a uint (major type 0) nor a byte
+    /// string (major type 2) — only key 0 may be a byte string; all other
+    /// keys are uints.
+    NotAKey,
     /// §3.2: a Record field's value was a bare array or map (major type 4
     /// or 5), an indefinite-length string, or a tag (major type 6) wrapping
     /// anything other than a definite-length string directly (including
@@ -158,6 +162,38 @@ pub(crate) fn skip_value(buf: &[u8]) -> Result<usize, Error> {
             Ok(total)
         }
         _ => Err(Error::DisallowedFieldValueShape),
+    }
+}
+
+/// A Record map key: always a uint for all keys except key 0, which may
+/// also be a byte string (§3.1's three-type classification: even uint =
+/// standard/global, odd uint = scoped, byte string = decentralized).
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum Key<'a> {
+    Uint(u64),
+    ByteString(&'a [u8]),
+}
+
+/// Reads a Record map key at `buf[0]`: a uint (major type 0) or a byte
+/// string (major type 2). Only key 0 may be a byte string; all other keys
+/// are uints.
+pub fn read_key<'a>(buf: &'a [u8]) -> Result<(Key<'a>, usize), Error> {
+    let head = read_head(buf)?;
+    match head.major {
+        0 => Ok((Key::Uint(head.arg), head.head_len)),
+        2 => {
+            let len = head.arg as usize;
+            let total = head
+                .head_len
+                .checked_add(len)
+                .ok_or(Error::LengthOverflow)?;
+            if buf.len() < total {
+                return Err(Error::UnexpectedEof);
+            }
+            let payload = &buf[head.head_len..total];
+            Ok((Key::ByteString(payload), total))
+        }
+        _ => Err(Error::NotAKey),
     }
 }
 
