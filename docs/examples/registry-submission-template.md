@@ -14,9 +14,11 @@ in the Validation section.
 ```
 Record Type ID:             h'4b1f561b'
 Record Type Name:           com.example.smartlight/status
+Full SHA-256:               h'<paste full 32-byte hash from gen-type-id output>'
 
 Namespace ID:               h'c103'
 Namespace Name:             com.example.smartlight
+Full SHA-256:               h'<paste full 32-byte hash from gen-type-id output>'
 
 Scoped Type ID:             1
 

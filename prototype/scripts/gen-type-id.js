@@ -104,20 +104,27 @@ if (!name.includes('.') && !name.includes('/')) {
 }
 
 if (forcedWidth) {
+  const full = formatResult(deriveHashId(name, 32));
   const result = formatResult(deriveHashId(name, forcedWidth));
   console.log(`Name:        ${name}`);
-  console.log(`Derivation:  SHA-256(UTF-8("${name}")) → first ${forcedWidth} bytes`);
-  console.log(`Value (hex): h'${result.hex}'`);
-  console.log(`CBOR wire:   ${(Buffer.from([0x40 + forcedWidth]).toString('hex') + result.hex)}`);
+  console.log(`Derivation:  SHA-256(UTF-8("${name}")) → first ${forcedWidth} bytes\n`);
+  console.log(`  Full SHA-256:`);
+  console.log(`    h'${full.hex}'`);
+  console.log(`\n  Truncated to ${forcedWidth} bytes:`);
+  console.log(`    Value (hex): h'${result.hex}'`);
+  console.log(`    CBOR wire:   ${(Buffer.from([0x40 + forcedWidth]).toString('hex') + result.hex)}`);
   if (forcedWidth < 4) {
     console.log(`\nNote: ${forcedWidth}-byte IDs are recommended for namespace-scoped use only.`);
     console.log('  Use 4+ bytes for global (unnamespaced) use.');
   }
 } else {
+  const full = formatResult(deriveHashId(name, 32));
   const narrow = formatResult(deriveHashId(name, 4));
   const wide = formatResult(deriveHashId(name, 8));
   console.log(`Name:        ${name}`);
   console.log(`Derivation:  SHA-256(UTF-8("${name}"))\n`);
+  console.log(`  Full SHA-256:`);
+  console.log(`    h'${full.hex}'\n`);
   console.log(`  4-byte (recommended minimum for global use):`);
   console.log(`    Value (hex): h'${narrow.hex}'`);
   console.log(`\n  8-byte (maximum safety):`);

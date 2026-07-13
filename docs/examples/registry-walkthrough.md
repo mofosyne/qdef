@@ -45,6 +45,9 @@ Output:
 Name:        com.example.myapp/route
 Derivation:  SHA-256(UTF-8("com.example.myapp/route"))
 
+  Full SHA-256:
+    h'216e6add561001272c502d133abc9e71444d0be1ed75a80c24f705a94de5e76d'
+
   4-byte (recommended minimum for global use):
     Value (hex): h'216e6add'
 
