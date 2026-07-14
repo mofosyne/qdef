@@ -7,12 +7,12 @@
 //! us whether that claim is actually true.
 //!
 //! Scope is deliberately narrow: read a head byte + argument, read a small
-//! uint or a definite-length string, and skip one *field value* — which,
-//! per docs/QDEF-SPEC.md §3.2's field-value-shape rule, is never a bare
-//! array or map, and never a tag wrapping anything other than a
-//! definite-length string directly (any tag number is allowed, but not
-//! nested). That rule is what keeps this module free of recursion
-//! entirely, not just bounded — see `skip_value` below and ../FINDINGS.md.
+//! uint or a definite-length string, skip one *field value* (which, per
+//! docs/QDEF-SPEC.md §3.2's field-value-shape rule, is never a bare
+//! array/map/tag — keeping this O(1) without recursion), and skip an
+//! *arbitrary* CBOR item (for walking unknown items in a Record's typeID
+//! prefix). The field-value skip is recursion-free by construction; the
+//! arbitrary-item skip uses a bounded explicit stack.
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Error {
@@ -23,8 +23,7 @@ pub enum Error {
     NotAMap,
     NotAString,
     /// A Record map key was neither a uint (major type 0) nor a byte
-    /// string (major type 2) — only key 0 may be a byte string; all other
-    /// keys are uints.
+    /// string (major type 2) — all map keys in QDEF are uints.
     NotAKey,
     /// §3.2: a Record field's value was a bare array or map (major type 4
     /// or 5), an indefinite-length string, or a tag (major type 6) wrapping
@@ -33,6 +32,11 @@ pub enum Error {
     /// content must be pre-encoded as CBOR and carried inside a
     /// definite-length byte string instead.
     DisallowedFieldValueShape,
+    /// `skip_any_item` encountered a break byte outside any indefinite-
+    /// length container.
+    UnexpectedBreak,
+    /// `skip_any_item` ran out of nesting depth (stack overflow guard).
+    DepthOverflow,
 }
 
 pub(crate) struct Head {
@@ -165,9 +169,126 @@ pub(crate) fn skip_value(buf: &[u8]) -> Result<usize, Error> {
     }
 }
 
-/// A Record map key: always a uint for all keys except key 0, which may
-/// also be a byte string (§3.1's three-type classification: even uint =
-/// standard/global, odd uint = scoped, byte string = decentralized).
+/// Skip any well-formed CBOR item, including containers (arrays, maps,
+/// tags) and indefinite-length items. Uses a bounded explicit stack
+/// instead of recursion — `no_std` safe, bounded at compile time.
+///
+/// This is used by the record-parsing loop to skip unknown items in a
+/// Record's typeID prefix (forward-compat padding for future QDEF
+/// evolution). The field-value shape rule (§3.2) does NOT apply here —
+/// prefix items can be any valid CBOR.
+pub(crate) fn skip_any_item(buf: &[u8]) -> Result<usize, Error> {
+    const MAX_DEPTH: usize = 16;
+
+    let mut pos = 0usize;
+    // Stack: remaining items to process at each nesting depth.
+    // u64::MAX is a sentinel for "inside an indefinite container".
+    let mut stack = [0u64; MAX_DEPTH];
+    let mut depth: usize = 0;
+    stack[0] = 1; // start with 1 top-level item to process
+
+    loop {
+        if depth == 0 && stack[0] == 0 {
+            break;
+        }
+
+        let head = read_head(&buf[pos..])?;
+        pos += head.head_len;
+
+        // Decrement: we just consumed one item at the current depth.
+        // Must happen BEFORE any push so the new depth isn't affected.
+        if stack[depth] != u64::MAX {
+            stack[depth] -= 1;
+        }
+
+        match head.major {
+            // uint or negint: head only
+            0 | 1 => {}
+            // simple or float (non-break): head only
+            7 if head.info != 31 => {}
+            // break: closes an indefinite container
+            7 => {
+                if depth == 0 {
+                    return Err(Error::UnexpectedBreak);
+                }
+                stack[depth] = 0;
+                // Pop completed levels — no decrement needed; parent was
+                // already decremented when its head was read.
+                while depth > 0 && stack[depth] == 0 {
+                    depth -= 1;
+                }
+                continue;
+            }
+            // byte or text string: skip payload
+            2 | 3 => {
+                if head.is_indefinite() {
+                    return Err(Error::UnexpectedEof); // no indefinite strings in QDEF prefix
+                }
+                let len = head.arg as usize;
+                let total = head
+                    .head_len
+                    .checked_add(len)
+                    .ok_or(Error::LengthOverflow)?;
+                if buf.len() < total {
+                    return Err(Error::UnexpectedEof);
+                }
+                pos += len;
+            }
+            // array
+            4 => {
+                if head.is_indefinite() {
+                    if depth + 1 >= MAX_DEPTH {
+                        return Err(Error::DepthOverflow);
+                    }
+                    depth += 1;
+                    stack[depth] = u64::MAX; // sentinel: process until break
+                } else if head.arg > 0 {
+                    if depth + 1 >= MAX_DEPTH {
+                        return Err(Error::DepthOverflow);
+                    }
+                    depth += 1;
+                    stack[depth] = head.arg;
+                }
+                // arg == 0: empty array, nothing further to process
+            }
+            // map: 2× entries (key + value)
+            5 => {
+                if head.is_indefinite() {
+                    if depth + 1 >= MAX_DEPTH {
+                        return Err(Error::DepthOverflow);
+                    }
+                    depth += 1;
+                    stack[depth] = u64::MAX;
+                } else if head.arg > 0 {
+                    if depth + 1 >= MAX_DEPTH {
+                        return Err(Error::DepthOverflow);
+                    }
+                    depth += 1;
+                    stack[depth] = head.arg.checked_mul(2).ok_or(Error::LengthOverflow)?;
+                }
+            }
+            // tag: 1 inner item
+            6 => {
+                if depth + 1 >= MAX_DEPTH {
+                    return Err(Error::DepthOverflow);
+                }
+                depth += 1;
+                stack[depth] = 1;
+            }
+            _ => return Err(Error::ReservedAdditionalInfo),
+        }
+
+        // Pop completed levels — no decrement here; the parent was already
+        // decremented when its head byte was read (lines 200-202).
+        while depth > 0 && stack[depth] == 0 {
+            depth -= 1;
+        }
+    }
+
+    Ok(pos)
+}
+
+/// A Record map key: always a uint for all map keys (§3).
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Key<'a> {
     Uint(u64),
@@ -175,8 +296,7 @@ pub enum Key<'a> {
 }
 
 /// Reads a Record map key at `buf[0]`: a uint (major type 0) or a byte
-/// string (major type 2). Only key 0 may be a byte string; all other keys
-/// are uints.
+/// string (major type 2).
 pub fn read_key<'a>(buf: &'a [u8]) -> Result<(Key<'a>, usize), Error> {
     let head = read_head(buf)?;
     match head.major {

@@ -19,204 +19,211 @@ function rustBytes(name, buf) {
   return `pub const ${name}: &[u8] = &[\n${lines.join('\n')}\n];`;
 }
 
+// --- Basic round-trip: a valid Wi-Fi record in a container ---
+
 const wifiContainer = core.encodeContainer([
   {
-    typeId: rt.WIFI_TYPE,
+    typeIds: [rt.WIFI_TYPE],
     fields: new Map([
-      [2, 'My Coffee Shop'],
-      [4, 'guest123'],
-      [6, 2],
-      [3, true],
+      [0, 'My Coffee Shop'],
+      [2, 'guest123'],
+      [4, 2],
+      [1, true],
     ]),
   },
 ]);
 
+// --- Even/odd criticality: unknown even key aborts the record ---
+
 const wifiUnknownEvenKeyContainer = core.encodeContainer([
   {
-    typeId: rt.WIFI_TYPE,
-    fields: new Map([[2, 'SSID'], [4, 'pass'], [6, 2], [8, 'unknown critical field']]),
+    typeIds: [rt.WIFI_TYPE],
+    fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2], [6, 'unknown critical field']]),
   },
 ]);
+
+// --- Even/odd criticality: unknown odd key is silently ignored ---
 
 const wifiUnknownOddKeyContainer = core.encodeContainer([
   {
-    typeId: rt.WIFI_TYPE,
-    fields: new Map([[2, 'SSID'], [4, 'pass'], [6, 2], [9, 'unknown optional field']]),
+    typeIds: [rt.WIFI_TYPE],
+    fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2], [7, 'unknown optional field']]),
   },
 ]);
 
-// A CBOR-tagged item is no longer valid Record syntax at all: key 0 is the
-// sole routing mechanism (§3.1; the tag route was removed, see
-// docs/FINDINGS.md #11-#12). A tag wrapping a Record is just malformed
-// input now, not an alternate route to unwrap.
-const taggedMap = new Map([[0, 100], [2, 'SSID'], [4, 'pass'], [6, 2]]);
-const taggedBytes = cbor.encode(new cbor.Tagged(100, taggedMap));
-const taggedItemIsMalformedContainer = Buffer.concat([core.MAGIC, taggedBytes]);
+// --- Record with no typeID prefix: ignored (not routed) ---
 
-// Missing key 0 entirely.
-const noKey0Map = new Map([[2, 'SSID']]);
-const noKey0Bytes = cbor.encode(noKey0Map);
-const noKey0Container = Buffer.concat([core.MAGIC, noKey0Bytes]);
+const noTypeidMap = new Map([[0, 'SSID']]);
+const noTypeidBytes = cbor.encode(noTypeidMap);
+const noTypeidContainer = Buffer.concat([core.MAGIC, noTypeidBytes]);
 
-// Two records in one sequence: first aborts (unknown even key), second is fine.
+// --- Two records in one sequence: first aborts (unknown even key), second is fine ---
+
 const twoRecordContainer = core.encodeContainer([
-  { typeId: rt.WIFI_TYPE, fields: new Map([[2, 'SSID'], [4, 'pass'], [6, 2], [8, 'unknown critical']]) },
-  { typeId: rt.TAGDROP_REGISTRATION_TYPE, fields: new Map([[2, Buffer.from('sibling record')]]) },
+  { typeIds: [rt.WIFI_TYPE], fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2], [6, 'unknown critical']]) },
+  { typeIds: [rt.TAGDROP_REGISTRATION_TYPE], fields: new Map([[0, Buffer.from('sibling record')]]) },
 ]);
 
-// §3.2's field-value-shape rule: a field value that's a bare CBOR array
+// --- §3.2's field-value-shape rule: a field value that's a bare CBOR array ---
 // (major type 4) instead of a scalar or definite-length string. Key 11 is
 // odd/optional — if the shape rule didn't exist, an unaware decoder would
 // just ignore it as an unrecognized optional key. It must instead be
 // rejected outright, because the decoder can't even determine this
 // Record's byte length without walking into the array's structure.
-const disallowedArrayValueMap = new Map([[0, 100], [2, 'SSID'], [4, 'pass'], [6, 2], [11, [1, 2, 3]]]);
-const disallowedArrayValueContainer = Buffer.concat([
-  core.MAGIC,
-  cbor.encode(disallowedArrayValueMap),
+
+const disallowedArrayValueContainer = core.encodeContainer([
+  {
+    typeIds: [rt.WIFI_TYPE],
+    fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2], [9, [1, 2, 3]]]),
+  },
 ]);
 
-// The *correct* way to carry structured content under the field-value-shape
+// --- The *correct* way to carry structured content under the field-value-shape ---
 // rule: pre-encode it as CBOR and wrap the encoded bytes in a definite-
 // length byte string. The outer decoder skips it as opaque bytes at O(1)
 // cost, never recursing into it; a Record-Type-specific handler that wants
 // the structure back decodes the byte string's contents itself.
+
 const nestedAuthMethods = cbor.encode(['WPA2', 'WPA3']);
-const byteStringWrappedValueMap = new Map([
-  [0, 100],
-  [2, 'SSID'],
-  [4, 'pass'],
-  [6, 2],
-  [11, nestedAuthMethods], // odd/optional key, opaque nested CBOR payload
-]);
-const byteStringWrappedValueContainer = Buffer.concat([
-  core.MAGIC,
-  cbor.encode(byteStringWrappedValueMap),
+const byteStringWrappedValueContainer = core.encodeContainer([
+  {
+    typeIds: [rt.WIFI_TYPE],
+    fields: new Map([
+      [0, 'SSID'],
+      [2, 'pass'],
+      [4, 2],
+      [9, nestedAuthMethods], // odd/optional key, opaque nested CBOR payload
+    ]),
+  },
 ]);
 
-// §3.2's field-value-shape rule, revised per GitHub issue #8: a field
+// --- §3.2's field-value-shape rule, revised per GitHub issue #8: a field ---
 // value MAY be CBOR tag 24 ("encoded CBOR data item", RFC 8949 §3.4.5.1)
 // wrapping a definite-length byte string directly — skip-safe in exactly
 // two fixed header reads, no recursion — rather than requiring the extra
 // indirection of a bare byte string with no outer marker that it happens
-// to contain further CBOR. This is the more standard, more discoverable
-// form: generic CBOR tooling (not just QDEF-aware decoders) can tell from
-// the tag alone that this field's bytes are re-parseable, without needing
-// out-of-band schema knowledge.
-const tag24WrappedValueMap = new Map([
-  [0, 100],
-  [2, 'SSID'],
-  [4, 'pass'],
-  [6, 2],
-  [11, new cbor.Tagged(24, nestedAuthMethods)], // odd/optional key
-]);
-const tag24WrappedValueContainer = Buffer.concat([
-  core.MAGIC,
-  cbor.encode(tag24WrappedValueMap),
+// to contain further CBOR.
+
+const tag24WrappedValueContainer = core.encodeContainer([
+  {
+    typeIds: [rt.WIFI_TYPE],
+    fields: new Map([
+      [0, 'SSID'],
+      [2, 'pass'],
+      [4, 2],
+      [9, new cbor.Tagged(24, nestedAuthMethods)],
+    ]),
+  },
 ]);
 
-// The bound that keeps the tag-24 case from reopening unbounded recursion:
+// --- The bound that keeps the tag-24 case from reopening unbounded recursion: ---
 // tag 24 MUST wrap a definite-length string *directly*, never another tag.
 // Nesting it — tag 24 wrapping tag 24 wrapping the real bytes — is exactly
 // as disallowed as a bare array; the decoder checks the inner shape once,
 // inline, rather than calling back into itself, so this MUST be rejected
 // outright rather than silently accepted at unbounded depth.
-const nestedTag24Map = new Map([
-  [0, 100],
-  [2, 'SSID'],
-  [4, 'pass'],
-  [6, 2],
-  // Genuine tag-directly-wraps-tag nesting (tag 24's immediately-following
-  // item is itself a tag, not a byte string) — not to be confused with a
-  // byte string whose own re-decoded *contents* happen to be tag-24'd,
-  // which is a different, still-allowed shape (opaque bytes, contents
-  // never inspected by the outer skip).
-  [11, new cbor.Tagged(24, new cbor.Tagged(24, nestedAuthMethods))],
-]);
-const nestedTag24Container = Buffer.concat([
-  core.MAGIC,
-  cbor.encode(nestedTag24Map),
+
+const nestedTag24Container = core.encodeContainer([
+  {
+    typeIds: [rt.WIFI_TYPE],
+    fields: new Map([
+      [0, 'SSID'],
+      [2, 'pass'],
+      [4, 2],
+      [9, new cbor.Tagged(24, new cbor.Tagged(24, nestedAuthMethods))],
+    ]),
+  },
 ]);
 
-// Widened per FINDINGS.md #16: any tag number is allowed, not just 24 —
+// --- Widened per FINDINGS.md #16: any tag number is allowed, not just 24 ---
 // the content-shape check (definite-length string, directly) is what
 // makes a tag skip-safe, and that holds regardless of which tag number is
 // on the wire. Tag 0 ("standard date/time string") wrapping a definite-
 // length text string is a real, IANA-registered tag, genuinely
-// scalar-shaped by its own RFC 8949 definition — now accepted, same as
-// tag 24 was.
-const otherTagWrappedValueMap = new Map([
-  [0, 100],
-  [2, 'SSID'],
-  [4, 'pass'],
-  [6, 2],
-  [11, new cbor.Tagged(0, '2026-07-10T12:00:00Z')],
-]);
-const otherTagWrappedValueContainer = Buffer.concat([
-  core.MAGIC,
-  cbor.encode(otherTagWrappedValueMap),
+// scalar-shaped by its own RFC 8949 definition — now accepted.
+
+const otherTagWrappedValueContainer = core.encodeContainer([
+  {
+    typeIds: [rt.WIFI_TYPE],
+    fields: new Map([
+      [0, 'SSID'],
+      [2, 'pass'],
+      [4, 2],
+      [9, new cbor.Tagged(0, '2026-07-10T12:00:00Z')],
+    ]),
+  },
 ]);
 
-// The other half of the bound: it's the *content shape*, not the tag
+// --- The other half of the bound: it's the *content shape*, not the tag ---
 // number, that's checked — a real, IANA-registered tag whose own RFC 8949
 // definition genuinely requires array content stays rejected regardless.
 // Tag 4 ("decimal fraction") wraps a 2-element array [exponent, mantissa]
-// by definition; here [-2, 27315] means 273.15 — a real, plausible value,
-// not a contrived one, still MUST be rejected, since its content isn't a
-// string at all.
-const structuredTagWrappedValueMap = new Map([
-  [0, 100],
-  [2, 'SSID'],
-  [4, 'pass'],
-  [6, 2],
-  [11, new cbor.Tagged(4, [-2, 27315])],
-]);
-const structuredTagWrappedValueContainer = Buffer.concat([
-  core.MAGIC,
-  cbor.encode(structuredTagWrappedValueMap),
+// by definition; here [-2, 27315] means 273.15 — still MUST be rejected.
+
+const structuredTagWrappedValueContainer = core.encodeContainer([
+  {
+    typeIds: [rt.WIFI_TYPE],
+    fields: new Map([
+      [0, 'SSID'],
+      [2, 'pass'],
+      [4, 2],
+      [9, new cbor.Tagged(4, [-2, 27315])],
+    ]),
+  },
 ]);
 
-// A 64-bit-class private-use Type ID (§3.1, §9's `0x10000`+ tier) — needs
-// BigInt in JS, since it exceeds Number.MAX_SAFE_INTEGER. Found checking
-// against a real adopter (TagDrop, using the tier exactly as recommended):
-// the `cbor` package's plain encode() wraps every BigInt in CBOR tag 2
-// (bignum) regardless of magnitude, which would violate §3.1/§3.2 for
-// key 0 specifically. core.encodeRecordBytes (via encodeCanonical) does
-// not have this bug — verified — but this fixture exists so the Rust
-// decoder is proven against a real large Type ID, not just assumed to
-// handle the full uint64 range correctly. See docs/FINDINGS.md #14.
+// --- A 64-bit-class private-use Type ID (§3.1, §9's 0x10000+ tier) ---
+// needs BigInt in JS, since it exceeds Number.MAX_SAFE_INTEGER.
+// core.encodeRecordBytes (via encodeCanonical) encodes BigInts as native
+// CBOR uints, not tag-2 bignums. This fixture proves the Rust decoder
+// handles the full uint64 range correctly. See docs/FINDINGS.md #14.
+
 const largeTypeIdContainer = core.encodeContainer([
-  { typeId: 2n ** 64n - 1n, fields: new Map([[2, 'private-use content']]) },
+  { typeIds: [2n ** 64n - 1n], fields: new Map([[0, 'private-use content']]) },
 ]);
 
-// Record Type 0 (container-level header): the mandatory core needs zero
-// special knowledge of this Type ID at all -- it's just an ordinary
-// Record, routed and walked via the exact same key-0/even-odd machinery
-// as any other Type. This fixture proves that directly: a Type 0 record
-// (namespace at key 3, Hint name at key 5, both odd/optional) followed
-// by a plain Wi-Fi record, decoded by the same generic Rust decoder with
-// no Type-0-specific code path.
+// --- Record Type 0 (container-level header) ---
+// The mandatory core needs zero special knowledge of this Type ID at all
+// — it's just an ordinary Record. This fixture proves that directly: a
+// Type 0 record (namespace at key 3, Hint name at key 5, both
+// odd/optional) followed by a plain Wi-Fi record, decoded by the same
+// generic Rust decoder with no Type-0-specific code path.
+
 const header = require('../src/header');
 const headerContainer = core.encodeContainer([
   {
-    typeId: header.HEADER_TYPE,
-    fields: new Map([[3, 12271745624591856273n], [5, 'com.example/tagdrop-paper']]),
+    typeIds: [header.HEADER_TYPE],
+    fields: new Map([[1, 12271745624591856273n], [3, 'com.example/tagdrop-paper']]),
   },
-  { typeId: rt.WIFI_TYPE, fields: new Map([[2, 'SSID'], [4, 'pass'], [6, 2]]) },
+  { typeIds: [rt.WIFI_TYPE], fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) },
 ]);
 
-// §3.1's three-type classification: byte string key 0 is a
-// decentralized/global Type ID. The core routes it without interpreting
-// the bytes — the caller resolves scope via their own namespace logic.
-// This fixture carries a 4-byte string ID as key 0, proving the Rust
-// decoder can walk and skip a map whose key 0 is a byte string rather
-// than a uint.
+// --- §3.1's byte-string Type ID ---
+// A byte string Type ID is a decentralized/global Type ID. The core routes
+// it without interpreting the bytes — the caller resolves scope via their
+// own namespace logic. This fixture carries a 4-byte string ID in the
+// prefix, proving the Rust decoder can handle byte-string typeIDs.
+
 const byteStringTypeIdContainer = core.encodeContainer([
   {
-    typeId: Buffer.from('A7F90B3C', 'hex'),
-    fields: new Map([[2, 'decentralized payload']]),
+    typeIds: [Buffer.from('A7F90B3C', 'hex')],
+    fields: new Map([[0, 'decentralized payload']]),
   },
 ]);
+
+// --- Backup typeIDs: promoted byte-string ID carried alongside new uint ---
+// When a byte-string typeID is promoted to a registered uint, the old ID
+// is carried as a backup prefix item. The decoder accumulates all typeIDs
+// and exposes them via the typeIds array.
+
+const backupTypeIdContainer = core.encodeContainer([
+  {
+    typeIds: [rt.WIFI_TYPE, Buffer.from('A7F90B3C', 'hex')],
+    fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]),
+  },
+]);
+
+// --- Output ---
 
 console.log('//! Generated by `node prototype/scripts/gen-rust-fixtures.js` — do not');
 console.log('//! hand-edit. Regenerate with:');
@@ -235,9 +242,7 @@ console.log(rustBytes('WIFI_UNKNOWN_EVEN_KEY_CONTAINER', wifiUnknownEvenKeyConta
 console.log();
 console.log(rustBytes('WIFI_UNKNOWN_ODD_KEY_CONTAINER', wifiUnknownOddKeyContainer));
 console.log();
-console.log(rustBytes('TAGGED_ITEM_IS_MALFORMED_CONTAINER', taggedItemIsMalformedContainer));
-console.log();
-console.log(rustBytes('MISSING_KEY0_CONTAINER', noKey0Container));
+console.log(rustBytes('NO_TYPEID_CONTAINER', noTypeidContainer));
 console.log();
 console.log(rustBytes('TWO_RECORD_CONTAINER', twoRecordContainer));
 console.log();
@@ -260,3 +265,5 @@ console.log();
 console.log(rustBytes('HEADER_CONTAINER', headerContainer));
 console.log();
 console.log(rustBytes('BYTE_STRING_TYPE_ID_CONTAINER', byteStringTypeIdContainer));
+console.log();
+console.log(rustBytes('BACKUP_TYPE_ID_CONTAINER', backupTypeIdContainer));

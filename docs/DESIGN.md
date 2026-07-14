@@ -83,12 +83,12 @@ on:
   already has a real governance story, so keeping a second, weaker
   path to the same outcome added a distinction without a difference.
 - **Even/odd for governance tier — adopted.** The even/odd convention on
-  key `0`'s *value* now determines governance scope: even uint = always-
+  prefix typeIDs now determines governance scope: even uint = always-
   global standard record type, odd uint = namespace-scoped. This reuses
   the same even/odd vocabulary already load-bearing for map key criticality
   (spec §3.2) but applies it to a different axis (ID classification, not
   key criticality). The two uses never overlap — one applies to map keys,
-  the other to key `0`'s value — and both follow the same mnemonic
+  the other to prefix typeIDs — and both follow the same mnemonic
   (even = safe/default, odd = conditional/special). The ID space is not
   halved in practice because byte strings provide a second, orthogonal
   path for decentralized allocation that doesn't compete for uint numbers
@@ -165,9 +165,9 @@ encounters the *other* form recognize it as the same thing.
 Two parallel identity pairs, each an ID plus an optional recoverable
 name:
 
-- **Record Type ID + Record Type Name** — the identity at key `0` /
-  key `1` on the Record itself (spec §3.1).
-- **Namespace ID + Namespace Name** — the identity at key `3` / key `5`
+- **Record Type ID + Record Type Name** — the identity carried in the
+  prefix typeIDs before the Record map (spec §3.1).
+- **Namespace ID + Namespace Name** — the identity at key `1` / key `3`
   on the Type `0` header Record (spec §3.5).
 
 ### Template
@@ -183,7 +183,7 @@ Variable Name:              <space-separated words, e.g. "Tag Drop">
 
 Scoped Type ID:             <odd uint, or "none — global-only">
 
-Data item:                  <CBOR shape description — e.g. "map { 2: bytes, 4: uint }">
+Data item:                  <CBOR shape description — e.g. "map { 0: bytes, 2: uint }">
 Semantics:                  <one-line functional description>
 Point of contact:           <email or URL>
 Reference:                  <link to spec/README defining this Type>
@@ -219,7 +219,7 @@ Variable Name:              Tag Drop
 
 Scoped Type ID:             1
 
-Data item:                  map { 2: bytes (destination), 4: uint (priority) }
+Data item:                  map { 0: bytes (destination), 2: uint (priority) }
 Semantics:                  Routes payload to a physical delivery target
 Point of contact:           tagdrop-maintainers@example.com
 Reference:                  https://github.com/mofosyne/tagdrop/blob/main/SPEC.md#route
@@ -244,8 +244,8 @@ incomplete for any reader who encounters the scoped form.
 ## CBOR tag-number collision (resolved — the tag route was removed)
 
 An earlier draft wrapped every Record Map in a CBOR semantic tag equal to
-its Type ID (the "Smart Route"), alongside the mandatory key `0`. Found
-broken on two independent grounds, not one:
+its Type ID (the "Smart Route"), alongside the mandatory key `0` on the
+map. Found broken on two independent grounds, not one:
 
 - **Empirical.** CBOR tag numbers are a shared IANA registry (RFC 8949
    §3.4), and the low numbers QDEF's standard record types picked are already assigned:
@@ -272,9 +272,9 @@ for map keys, only for tags, so a bare Record Map has no built-in semantic
 layer for a generic decoder to misinterpret — verified directly
 (FINDINGS.md #11): the identical Record Map round-trips cleanly when
 untagged, and decodes to `Invalid Date` only when wrapped in a tag.
-**Decision: the tag route is removed. Key `0` is the sole routing
+**Decision: the tag route is removed. The prefix typeIDs are the sole routing
 mechanism** (spec §3.1) — simpler, and every prototype test already routed
-through it alone, tag or no tag. The place a CBOR tag still legitimately
+through them alone, tag or no tag. The place a CBOR tag still legitimately
 appears in QDEF is unrelated to routing: spec §3.2 allows any tag number
 to wrap a field's own definite-length string value directly, a
 Record-Type author's own opt-in choice about one field's content, which
@@ -285,7 +285,8 @@ single shared
 "this map is a QDEF Record" tag (the way
 tag `55799` means "self-describe CBOR") was considered as a middle ground
 and set aside for the same reason: one more optional mechanism to document
-and implement, for a benefit key `0` already provides unconditionally.
+and implement, for a benefit the prefix typeIDs already provide
+unconditionally.
 
 ## Field values may carry any CBOR tag, not just tag 24 — widened per FINDINGS.md #15/#16
 
@@ -331,21 +332,15 @@ narrower rule was guarding against:
   That's the correct use of CBOR tags per RFC 8949's own design
   philosophy, not a reopening of the mechanism that was removed.
 
-## Type Hint (Key 1): folding into key 0 instead — considered, rejected
+## Type Hint (Key 1): dropped from the map entirely
 
-An alternative to reserving key `1` globally was considered: fold the hint
-into key `0` itself (making it sometimes a compound value instead of a
-bare value) so key `1` stays free for each Record Type's own use. Rejected:
-key `0` is the one field read unconditionally for *every* Record,
-including ones about to be skipped, so complicating its shape reintroduces
-exactly the recursion-adjacent cost the field-value-shape rule (spec §3.2)
-eliminated, on the single least-skippable code path in the format. It also
-isn't additive — every existing implementation hard-codes the expected types
-for key `0`, so redefining it would break every parser written against the
-spec today. Reserving key `1` instead costs only one non-critical, per-Type-
-unbounded value — every parser already implements "skip an unrecognized odd
-key" as baseline behavior, so the tax is paid once, in the spec text, not
-repeatedly at runtime by implementations that don't care about it.
+Key `1` was originally reserved globally for Type Hint — an optional
+recoverable name for a decentralized Type ID (spec §3.1). With the
+introduction of the prefix typeIDs format, Type Hint moved out of the
+map and into the prefix alongside the Type ID itself. Key `1` is now
+dropped from the map entirely, freeing it for each Record Type's own
+use. No folding-into-key-`0` alternative was needed: the prefix format
+removed the constraint that created the tension in the first place.
 
 ## Media Payload (Type 6): why it does *not* reuse Type Hint's decentralized-ID pattern
 
@@ -407,7 +402,7 @@ mirroring the NFC case in spec §2)? A real data point from an adopter
 comparison (verified directly against `mofosyne/tagdrop`'s SPEC.md):
 TagDrop's native envelope costs 2 bytes total (`version`+`type`, both
 small CBOR uints, SPEC.md §2), against roughly 10–15 bytes for QDEF's
-magic+version+map-framing overhead (key `0` plus key `2`'s length header)
+magic+version+map-framing overhead (prefix typeIDs plus map headers)
 on the same small payload — a large proportional cost for TagDrop's
 smallest codes (a short text snippet can be under 50 bytes total).
 Doesn't change the conclusion elsewhere in the spec that QDEF wrapping
@@ -485,7 +480,7 @@ content-encryption algorithm and the key-agreement/wrap/derivation
 algorithm, is CBOR-native (COSE structures are CBOR), and is actively
 governed with the same tiered structure QDEF's own Type ID space uses.
 
-Spec §4.1 adds two optional fields to Type 4 (key `5` Algorithm, key `7`
+Spec §4.1 adds two optional fields to Type 4 (key `3` Algorithm, key `5`
 Key Algorithm — a COSE Algorithm ID or a plain string, encoder's choice)
 and keeps both odd/optional rather than critical, deliberately matching
 `parity_scheme`'s precedent over nonce/ciphertext's: two apps that already
@@ -673,17 +668,17 @@ toward" language.
 ## Type ID inheritance within a Sequence — backlog, needs a version bump
 
 Raised alongside [GitHub issue #10](https://github.com/mofosyne/qdef/issues/10):
-allow a Record's Type ID (key `0`) to be omitted, meaning "same Type ID
-as the immediately preceding Record in this CBOR Sequence" — a wire-
-efficiency optimization for adjacent same-type Records with a wide
-private-use Type ID (the repeated calendar-event case in
+allow a Record's primary typeID in the prefix to be omitted, meaning
+"same Type ID as the immediately preceding Record in this CBOR Sequence"
+— a wire-efficiency optimization for adjacent same-type Records with a
+wide private-use Type ID (the repeated calendar-event case in
 `IMPLEMENTATION-NOTES.md` is exactly this shape).
 
 Not something this draft can add as a plain additive extension the way
 everything else in this document was. Spec §3.1 already defines a
-missing key `0` as a MUST-abort condition — redefining that meaning is a
-behavior change to already-shipped semantics, not an addition, so two
-decoder versions would interpret identical bytes differently depending
+missing prefix typeID as a MUST-abort condition — redefining that meaning
+is a behavior change to already-shipped semantics, not an addition, so
+two decoder versions would interpret identical bytes differently depending
 on which one they implement. That's exactly the class of change spec §2
 reserves the Version byte for ("a future version is free to change...
 the routing rules... themselves"), not something to introduce via the
@@ -751,7 +746,7 @@ discipline as everything else deferred in this document.
 The domain-verified form of App Route (§4.4, FINDINGS.md #17) was built
 to answer one question: which installed application should this scanned
 code auto-launch. Working through GitHub issue #10 with TagDrop surfaced
-a second, genuinely different question that key `2` also turns out to
+a second, genuinely different question that key `0` also turns out to
 answer well: *before* attempting reassembly at all, is this scanned code
 even plausibly part of the group the scanner thinks it's building —
 cheap, per-code triage against a misread or an unrelated nearby code,
@@ -767,8 +762,8 @@ security-relevant — get it wrong and a decoder wastes a little effort
 before `group_id` catches the mismatch anyway, exactly the same outcome
 as not pre-filtering at all. That gap in stakes is *why* the
 decentralized form is allowed to reuse Type Hint's cheaper,
-unauthenticated pattern (a decentralized byte string at key `2`, an
-optional recoverable name at key `3`) instead of requiring domain
+unauthenticated pattern (a decentralized byte string at key `0`, an
+optional recoverable name at key `1`) instead of requiring domain
 verification for both — it would be a mistake to make the pre-filter pay
 the domain form's registration cost for a property it doesn't need, and
 an even bigger mistake to let the pre-filter's weaker guarantee quietly
@@ -787,10 +782,12 @@ etiquette guidance around repetition differ (§4.4).
 What started as "can the header carry an optional format namespace for
 fast identification" ended somewhere more radical: there is no longer a
 distinct header structure at all. The container is `QDEF` (4 bytes) plus
-a CBOR Sequence of Records — nothing else, ever. Record Type `0` is
-reserved for what used to be header-level metadata (spec §3.5), but it's
-an ordinary Record, decoded by the exact same code path as any other
-Type, not a second wire structure living alongside the Sequence.
+a CBOR Sequence of Records — nothing else, ever. Each Record in the
+Sequence carries its type identity in a prefix typeIDs array before its
+map (spec §3.1), and Record Type `0` is reserved for what used to be
+header-level metadata (spec §3.5), but it's an ordinary Record, decoded
+by the exact same code path as any other Type, not a second wire
+structure living alongside the Sequence.
 
 Getting there took several real corrections along the way, worth naming
 because each one fixed something that would have been a genuine
@@ -814,17 +811,18 @@ inconsistency if it had shipped:
   even/odd extensibility already *is* the version mechanism, no
   dedicated field required.
 - **Key `1` was briefly considered for a "version code" field and
-  rejected once the collision was spotted.** Key `1` is already,
-   globally, Type Hint (§3.1) — for a standard record type ID (even uint, which `0`
-  is), it specifically means "the legacy ID this Type was promoted
-  from." A generic Type-Hint-aware decoder would have actively
-  misread a version integer sitting there as a bogus legacy-ID claim,
-  not just ignored it. No field ended up needed there at all, so the
-  question resolved itself, but the near-miss is worth recording: reusing
-  an already-load-bearing key for a second, unrelated purpose is exactly
-  the mistake this project already rejected once before, for even/odd
-  itself (see "Registry governance," above) — worth catching a second
-  time rather than assuming it wouldn't recur.
+  rejected once the collision was spotted.** Key `1` was previously,
+  globally, Type Hint (§3.1) — now in the prefix typeIDs. For a standard
+  record type ID (even uint, which `0` is), a Type Hint at key `1` would
+  have meant "the legacy ID this Type was promoted from." A generic
+  Type-Hint-aware decoder would have actively misread a version integer
+  sitting there as a bogus legacy-ID claim, not just ignored it. No
+  field ended up needed there at all, so the question resolved itself,
+  but the near-miss is worth recording: reusing an already-load-bearing
+  key for a second, unrelated purpose is exactly the mistake this
+  project already rejected once before, for even/odd itself (see
+  "Registry governance," above) — worth catching a second time rather
+  than assuming it wouldn't recur.
 
 **Why the version byte itself is gone, not just smaller.** The old
 container-level version byte existed to gate *any* future change to the
@@ -865,7 +863,7 @@ mechanisms answering the same question from two different Record Types
 scheme where one already fits). Nothing shipped yet, so this was a
 clean removal rather than a deprecation: §4.4's domain form and plain
 decentralized form are back to their pre-Companion-ID shape, and the
-domain form's key `3` is a label again, not unified with the
+domain form's key `1` is a label again, not unified with the
 decentralized form's Hint-name role — that unification's only real
 justification (letting Companion ID be hash-checked) is gone with it.
 
@@ -884,9 +882,10 @@ later, its own removal.
 
 **The resolution reuses the existing flat numbering space; it doesn't
 carve out a new one.** Once Type `0` declares namespace `N`, a
-subsequent Record's Type ID `T` above the always-global floor is looked
-up as the compound key `(N, T)`, not `T` alone — the same relationship a
-Bluetooth short UUID has to whichever Base UUID it's declared against.
+subsequent Record's primary typeID `T` in the prefix above the always-global
+floor is looked up as the compound key `(N, T)`, not `T` alone — the same
+relationship a Bluetooth short UUID has to whichever Base UUID it's
+declared against.
 This was the crux design question, and the reason it took real thought
 rather than a quick answer: the obvious alternative (reserve a new
 numeric sub-range exclusively for namespace-local IDs) risks collision
@@ -905,9 +904,9 @@ is a worse failure mode than anything else in this spec produces.
 Nothing forces this check today (nothing has shipped), so it's being
 written into the correct definition of that tier's routing from the
 start rather than patched in later. Framed the same way Type Hint's
-dual-mode key `1` already is: Record-Type-interpretation-specific
+dual-mode prefix role already is: Record-Type-interpretation-specific
 handling (spec §3.3's optional tier), never a mandatory-core concern —
-the mandatory core still just reads `map[0]`, unchanged, with zero
+the mandatory core still just reads prefix typeIDs, unchanged, with zero
 namespace awareness.
 
 **Follow-on, asked directly right after the first resolution landed:
@@ -1055,7 +1054,7 @@ building this) was false in practice for the width this project's own
 real adopter uses.
 
 **Fixed by making `N` a developer choice, outputting a byte string.**
-With the multi-type key 0 design (spec §3.1), decentralized IDs are now
+With the prefix typeIDs design (spec §3.1), decentralized IDs are now
 CBOR byte strings (major type 2), not uints. The developer chooses `N`
 directly — wider means more collision-safe. The derivation algorithm
 produces the first `N` bytes of the SHA-256 digest as a definite-length
@@ -1144,7 +1143,7 @@ forty-five debating the design of the bike shed. This repo is not immune.
 Removing the entire CBOR-tag routing mechanism — a genuine architectural
 reversal, half the core's routing model gone — took exactly one finding
 (FINDINGS.md #11) and one commit. Deciding whether a single reserved map
-key's decentralized-ID hint belonged on key `1` or key `3` took a
+key's decentralized-ID hint belonged on the old key `1` or key `3` took a
 multi-message negotiation, a rejected alternative design, and its own
 section above. Draw your own conclusions about which of those two
 decisions actually mattered more, and which one got more words spent on

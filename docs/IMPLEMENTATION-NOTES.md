@@ -17,7 +17,7 @@ definite-length byte string, optionally marked with tag `24` so generic
 CBOR tooling can tell it's re-parseable:
 
 ```
-9: 24(h'8301060b')   // tag 24 + a 4-byte string, whose own bytes decode to [1, 6, 11]
+7: 24(h'8301060b')   // tag 24 + a 4-byte string, whose own bytes decode to [1, 6, 11]
 ```
 
 The rest of this doc is that same pattern applied to something with real
@@ -33,10 +33,9 @@ pick depends on how the events relate to each other, not on the format.
 ### Option A — one field, an array of events, opaque to the core
 
 ```
-Type <N>: {                          // Calendar (application-registered)
-  0: <N>,
-  2: h'<CBOR-encoded array of [title, start, end] tuples>'   // CRITICAL
-}
+Type <N>: [                          // Calendar (application-registered)
+  0: h'<CBOR-encoded array of [title, start, end] tuples>'   // CRITICAL
+]
 ```
 
 The byte string's own contents, once independently decoded by an
@@ -58,8 +57,8 @@ application has no use for "3 of my 5 events survived, 2 didn't."
 ### Option B — one Record per event, same Type ID, repeated in the Sequence
 
 ```
-Type <N>: { 0: <N>, 2: "Standup", 4: 1735689600, 6: 1735691400 }
-Type <N>: { 0: <N>, 2: "Lunch",   4: 1735693200, 6: 1735696800 }
+Type <N>: [ 0: "Standup", 2: 1735689600, 4: 1735691400 ]
+Type <N>: [ 0: "Lunch",   2: 1735693200, 4: 1735696800 ]
 ```
 
 Two ordinary, flat Records, both Type `<N>`, both appearing in the same
@@ -84,7 +83,7 @@ If "calendar" here really means iCalendar (RFC 5545), §4.3's Media
 Payload Record can carry it directly:
 
 ```
-Type 6: { 0: 6, 2: "text/calendar", 4: h'<raw .ics bytes>' }   // Media Payload
+Type 6: [ 0: "text/calendar", 2: h'<raw .ics bytes>' ]   // Media Payload
 ```
 
 Checked directly against the registry: `text/calendar` is **not** in

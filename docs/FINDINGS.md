@@ -17,30 +17,32 @@ surface either kind of gap.
 
 ## Fixes folded back into the spec
 
-### 1. Hardware Parity: what happens when the tag and key 0 disagree?
+### 1. Hardware Parity: what happens when the tag and key 0 disagree? (historical)
 
-§3.1 says a Record's CBOR tag and its `map[0]` carry "the *same* ID" but
-never says what a decoder should do if they don't — e.g. a Record tagged
-`105` whose `map[0]` says `100`. Left unspecified, a tag-aware decoder and a
-constrained (key-0-only) decoder could each read a *different* Type ID out
-of the identical bytes, silently disagreeing about what the Record even is.
+§3.1 originally said a Record's CBOR tag and its `map[0]` carry "the *same*
+ID" but never said what a decoder should do if they don't — e.g. a Record
+tagged `105` whose `map[0]` says `100`. Left unspecified, a tag-aware
+decoder and a constrained (key-0-only) decoder could each read a *different*
+Type ID out of the identical bytes, silently disagreeing about what the
+Record even is.
 
-**Fix:** a tag/key-0 mismatch is now a hard abort of that Record (same
-class of failure as an unrecognized critical key) — verified in
+**Fix (historical):** a tag/key-0 mismatch was a hard abort of that Record
+(same class of failure as an unrecognized critical key) — verified in
 `prototype/test/core.test.js`.
 
-**Later superseded:** the tag route this finding is about no longer
-exists — see finding #12. Kept here as an accurate record of what shipped
-at the time; the mismatch case it fixed is moot once there's only one
-route.
+**Later superseded:** the tag route and key-0 routing this finding is about
+no longer exist — see finding #12. Routing is now via prefix typeIDs. Kept
+here as an accurate record of what shipped at the time; the mismatch case
+it fixed is moot once both routes were removed.
 
-### 2. A Record with no key 0 at all
+### 2. A Record with no prefix typeIDs at all (historical)
 
-Not addressed anywhere. Key 0 is how *every* parser (tag-aware or not)
-routes a Record, so a Record missing it can't be routed by anyone.
+Not addressed anywhere when key 0 was the routing mechanism. Prefix typeIDs
+are now how *every* parser routes a Record, so a Record missing its prefix
+can't be routed by anyone.
 
-**Fix:** treat a missing key 0 the same as an unrecognized-critical-key
-abort of that Record.
+**Fix (historical):** treat a missing prefix typeID the same as an
+unrecognized-critical-key abort of that Record.
 
 ### 3. Split's fragment-chunking algorithm doesn't exist in the spec
 
@@ -180,8 +182,8 @@ finding a second time.
 
 Built in release mode for `thumbv6m-none-eabi` (Cortex-M0 — one of the most
 constrained ARM targets in common use, no atomics beyond the basics), the
-entire mandatory core — magic/version framing, full CBOR-Sequence walking,
-key-0 routing, Hardware Parity mismatch detection, plus the even/odd
+entire mandatory core — magic framing, full CBOR-Sequence walking,
+prefix-typeID routing, Hardware Parity mismatch detection, plus the even/odd
 criticality helper and a field-lookup helper — compiles to **~3.7 KB of
 code** (see #9 below for why that number moved), with **zero `unsafe`** and
 **zero heap allocation**. §3.3's claim that a minimal implementer's surface
@@ -261,8 +263,8 @@ Node prototype, where `cbor.decodeAllSync` either decodes the whole
 sequence or throws for all of it — there was never a point where "resume
 after this specific byte-level failure" was an explicit decision to make.
 Writing the Rust `Records` iterator by hand forced the decision: it now
-distinguishes "Record aborted but Sequence continues" (missing key 0, tag
-mismatch — see findings #1–#2) from "Sequence itself is unrecoverable"
+distinguishes "Record aborted but Sequence continues" (missing prefix
+typeIDs — see findings #1–#2) from "Sequence itself is unrecoverable"
 (malformed CBOR, or a field-value-shape violation), and only the former
 lets iteration continue.
 
@@ -335,10 +337,10 @@ any given moment; "offset into unassigned tag space" (one of finding #11's
 three candidate fixes) would have preserved the exact category error on
 numbers that merely hadn't collided *yet*.
 
-**Fix:** the tag route (the "Smart Route") is removed outright. Key `0` is
-now the sole Record Type ID routing mechanism — §3.1 no longer describes
-two routes, only one. This is a genuine simplification of the mandatory
-core, not just a safer version of the old design: `rust/qdef-core`'s
+**Fix:** the tag route (the "Smart Route") is removed outright. Prefix
+typeIDs are now the sole Record Type ID routing mechanism — §3.1 no longer
+describes two routes, only one. This is a genuine simplification of the
+mandatory core, not just a safer version of the old design: `rust/qdef-core`'s
 `parse_record` no longer needs to branch on CBOR major type 6 to detect an
 optional tag, the `Record` struct no longer carries a `tag` field, and
 `AbortReason::HardwareParityMismatch` (finding #1's fix) is dead code once
@@ -402,10 +404,9 @@ native uint) up through `2n**64n - 1n`. Not a magnitude threshold, purely
 
 Why this would matter: any Type ID wide enough to need a JS BigInt (which
 is exactly what §9 recommends for this tier, and exactly what routes
-through `map.set(0, typeId)` in `core.encodeRecordBytes`) would violate
-both §3.1 (key `0` MUST be a plain uint) and §3.2's field-value-shape rule
-(a value MUST NOT be a CBOR tag) — for the one field the entire
-minimal-core-parser design depends on being trivially readable. It's the
+through `typeIds: [typeId]` in the record prefix) would violate §3.1's
+requirement that prefix typeIDs be plain uints — for the one field the
+entire minimal-core-parser design depends on being trivially readable. It's the
 same underlying hazard findings #11/#12 already found and thought was
 closed by removing the old Smart-Route tag-wrapping mechanism, resurfacing
 through a completely different path: not QDEF's own wire-format design
@@ -596,7 +597,7 @@ scanner implementation needs is not. Spec §4.4 corrected to describe both
 paths explicitly rather than implying one uniform cross-platform API.
 
 **Second update:** A scenario raised during design discussion surfaced a
-use for key `2` the domain form can't serve well — a fast, per-code
+use for key `0` the domain form can't serve well — a fast, per-code
 check that a scanned code plausibly belongs to the group being
 reassembled, run *before* attempting reassembly, independent of which
 code(s) in the group happen to carry a full domain-form Record. Chasing
@@ -606,17 +607,17 @@ those can't reach across physically separate codes at all — no shared
 decode state exists between them — which ruled that out as a fix for
 this but clarified the actual shape of what would work: something
 cheap, present on every code, checkable with no shared state. §4.4 now
-documents App Route's key `2` as two forms: the domain string (auto-
+documents App Route's key `0` as two forms: the domain string (auto-
 launch dispatch, real authorization) and a private-use-random uint
 reusing Type Hint's exact name-binding pattern (§3.1) for this pre-
 filter role — no anti-spoofing property, explicitly not a substitute for
 `group_id` (§4.1), which remains the actual integrity check. Prototyped
 in `prototype/test/app-route.test.js`: the uint form round-trips, and a
 decoder that only checks Type ID `7` presence skips it cleanly without
-needing to know key `2`'s shape in advance.
+needing to know key `0`'s shape in advance.
 
 **Third update:** briefly added, then removed, a Companion ID field
-(key `5`) letting the domain form vouch for the decentralized form's
+(key `3`) letting the domain form vouch for the decentralized form's
 per-code pre-filter with real, App-Links-verified trust instead of just
 hash-derivation self-consistency — TagDrop independently confirmed its
 session-scoping bound was correctly shaped for their own (session-
@@ -630,12 +631,12 @@ the same question from different Record Types would have been exactly
 the duplication this project avoids elsewhere — see FINDINGS #19 and
 DESIGN.md's "container header collapsed" entry for the full reasoning.
 Nothing had shipped, so this was a clean removal: §4.4 is back to its
-pre-Companion-ID shape, including the domain form's key `3` reverting to
+pre-Companion-ID shape, including the domain form's key `1` reverting to
 a plain label (the unification with the decentralized form's Hint-name
 role existed only to make Companion ID hash-checkable).
 
 **Fourth update:** TagDrop checked the decentralized form's 41-byte
-figure independently (map head + `{0:7}` + `{2:<uint64>}` + `{3:"..."}`,
+figure independently (prefix typeIDs + map head + `{0:<uint64>}` + `{1:"..."}`,
 byte for byte) and it matched, but flagged something the spec text
 hadn't said explicitly: mandatory per-code repetition means "cheap"
 describes one code's cost, not a multi-code group's total — a 7-code
@@ -690,7 +691,7 @@ as a wire-format simplification: the container is now `QDEF` (4 bytes)
 plus a CBOR Sequence of Records, nothing else. The version byte is gone.
 Container-level metadata (a format namespace, an optional recoverable
 name for it) lives inside the Sequence as Record Type `0` — an ordinary
-Record, not a second wire structure, decoded by the exact same key-0/
+Record, not a second wire structure, decoded by the exact same prefix-typeID/
 even-odd machinery as everything else (spec §3.5).
 
 Landed after several rounds that each corrected a real, specific
@@ -914,19 +915,19 @@ domain they each control do not collide.
 
 ## Confirmed working as designed (no fix needed)
 
-- **Magic + version + CBOR-Sequence-of-Records** round-trips exactly as
-  drawn in §2's diagram, including rejecting bad magic / wrong version.
-- **Key-0-only routing (§3.1):** a Record encoded with no CBOR tag at all
-  still routes correctly off `map[0]` alone — verified with a `tagged:
-  false` encoder path in the prototype, back when a tagged path also
-  existed to compare against. The tag path was later removed entirely
-  (finding #12); this bullet just confirms key `0` alone was always
-  sufficient, which is exactly why removing the other route cost nothing.
+- **Magic + CBOR-Sequence-of-Records** round-trips exactly as
+  drawn in §2's diagram, including rejecting bad magic.
+- **Prefix-typeID routing (§3.1):** a Record encoded with no CBOR tag at
+  all still routes correctly off prefix typeIDs alone — verified with a
+  tag-free encoder path in the prototype. The tag path was later removed
+  entirely (finding #12); this bullet just confirms prefix typeIDs alone
+  were always sufficient, which is exactly why removing the other route
+  cost nothing.
 - **Even/odd criticality (§3.2):** an unrecognized even key aborts only
   that Record; an unrecognized odd key is silently ignored and the rest of
   the Record still processes; one aborted Record in a Sequence doesn't
   affect its siblings.
-- **NDEF path (§2):** a bare CBOR Sequence with no magic/version prefix
+- **NDEF path (§2):** a bare CBOR Sequence with no magic prefix
   (simulating the `application/vnd.qdef` MIME-typed NDEF case) decodes via
   the same record-routing logic, confirming the magic header really is
   QR-path-only, not load-bearing for the container's actual structure.
@@ -972,7 +973,7 @@ concrete hardening gaps (#9, #10) that only became visible once the
 CBOR-walking and Sequence-iteration logic had to be written by hand instead
 of delegated to a library call.
 
-## 23. Multi-type Key 0: replacing the three-tier integer system with a three-type classification
+## 23. Prefix typeIDs: replacing the three-tier integer system with a three-type classification
 
 The original design used three tiers of integer Type IDs in key 0
 (`1`–`99` standard record types, `100`–`32767` common vocabulary, `32768`+ private-use),
@@ -995,7 +996,8 @@ limitations:
   determine which category an ID belonged to without comparing against
   external thresholds.
 
-The new design replaces tiers with three distinct CBOR types in key 0:
+The new design replaces tiers with three distinct CBOR types as prefix
+typeIDs:
 
 | CBOR type | Class | Scope |
 |---|---|---|
@@ -1026,6 +1028,7 @@ Costs:
 - **Standard record type renumbering.** Types 3→8 (Compress), 5→10 (Fallback Hint),
   7→12 (App Route), 105→106 (Event Ticket) to ensure all standard record
   type IDs are even.
-- **Multi-type key 0.** Parsers must now check the CBOR major type of
-  key 0's value (uint vs. byte string), adding a branch to the routing
-  path. This is a single major-type check — trivial cost, but present.
+- **Prefix-typeID routing.** Parsers must now read the prefix typeID
+  before entering the map, adding a step to the routing path. The
+  prefix is a straightforward CBOR major-type check — trivial cost,
+  but present.

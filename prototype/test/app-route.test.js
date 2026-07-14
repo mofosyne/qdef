@@ -6,21 +6,16 @@ const core = require('../src/core');
 const wrappers = require('../src/wrappers');
 
 // ---------------------------------------------------------------------
-// §4.4's App Route (Type 7): a plain standard record type, not a wrapper, for
-// letting a generic scanner offer to launch a specific handling
-// application (GitHub issue #10) — comparable to NFC's Android
-// Application Record. Key 2 is a domain, verified the way Android App
-// Links / iOS Universal Links already are; QDEF never touches how that
-// verification or dispatch actually happens, only carries the identifier.
+// §4.4's App Route (Type 12): a plain standard record type, not a wrapper.
 // ---------------------------------------------------------------------
 
 test('App Route with a domain and a human-readable label round-trips', () => {
   const container = core.encodeContainer([
     {
-      typeId: wrappers.APP_ROUTE_TYPE,
+      typeIds: [wrappers.APP_ROUTE_TYPE],
       fields: new Map([
-        [2, 'example.com'],
-        [3, 'Open in Example App'],
+        [0, 'example.com'],
+        [1, 'Open in Example App'],
       ]),
     },
   ]);
@@ -29,31 +24,31 @@ test('App Route with a domain and a human-readable label round-trips', () => {
   const rec = core.applyCriticality(records[0], wrappers.APP_ROUTE_KNOWN_KEYS);
 
   assert.equal(rec.aborted, false);
-  assert.equal(rec.map.get(2), 'example.com');
-  assert.equal(rec.map.get(3), 'Open in Example App');
+  assert.equal(rec.map.get(0), 'example.com');
+  assert.equal(rec.map.get(1), 'Open in Example App');
 });
 
 test('the label is optional — a domain alone is a complete App Route Record', () => {
   const container = core.encodeContainer([
-    { typeId: wrappers.APP_ROUTE_TYPE, fields: new Map([[2, 'example.com']]) },
+    { typeIds: [wrappers.APP_ROUTE_TYPE], fields: new Map([[0, 'example.com']]) },
   ]);
 
   const { records } = core.decodeContainer(container);
   const rec = core.applyCriticality(records[0], wrappers.APP_ROUTE_KNOWN_KEYS);
 
   assert.equal(rec.aborted, false);
-  assert.equal(rec.map.get(2), 'example.com');
-  assert.equal(rec.map.has(3), false);
+  assert.equal(rec.map.get(0), 'example.com');
+  assert.equal(rec.map.has(1), false);
 });
 
 test('App Route is not positionally special — routes the same whether first or last in the Sequence', () => {
   const routeFirst = core.encodeContainer([
-    { typeId: wrappers.APP_ROUTE_TYPE, fields: new Map([[2, 'example.com']]) },
-    { typeId: 100, fields: new Map([[2, 'SSID'], [4, 'pass'], [6, 2]]) },
+    { typeIds: [wrappers.APP_ROUTE_TYPE], fields: new Map([[0, 'example.com']]) },
+    { typeIds: [100], fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) },
   ]);
   const routeLast = core.encodeContainer([
-    { typeId: 100, fields: new Map([[2, 'SSID'], [4, 'pass'], [6, 2]]) },
-    { typeId: wrappers.APP_ROUTE_TYPE, fields: new Map([[2, 'example.com']]) },
+    { typeIds: [100], fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) },
+    { typeIds: [wrappers.APP_ROUTE_TYPE], fields: new Map([[0, 'example.com']]) },
   ]);
 
   for (const container of [routeFirst, routeLast]) {
@@ -61,20 +56,20 @@ test('App Route is not positionally special — routes the same whether first or
     const route = records.find((r) => r.typeId === wrappers.APP_ROUTE_TYPE);
     const checked = core.applyCriticality(route, wrappers.APP_ROUTE_KNOWN_KEYS);
     assert.equal(checked.aborted, false);
-    assert.equal(checked.map.get(2), 'example.com');
+    assert.equal(checked.map.get(0), 'example.com');
   }
 });
 
 test('an application with no interest in App Route skips the whole Record cleanly by Type ID alone', () => {
   const container = core.encodeContainer([
-    { typeId: wrappers.APP_ROUTE_TYPE, fields: new Map([[2, 'example.com']]) },
-    { typeId: 100, fields: new Map([[2, 'SSID'], [4, 'pass'], [6, 2]]) },
+    { typeIds: [wrappers.APP_ROUTE_TYPE], fields: new Map([[0, 'example.com']]) },
+    { typeIds: [100], fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) },
   ]);
 
   const { records } = core.decodeContainer(container);
-  const KNOWN_TYPES = new Map([[100, new Set([0, 2, 3, 4, 6])]]);
+  const KNOWN_TYPES = new Map([[100, new Set([0, 1, 2, 4])]]);
   const handled = records
-    .filter((r) => !r.aborted && KNOWN_TYPES.has(r.typeId))
+    .filter((r) => !r.ignored && KNOWN_TYPES.has(r.typeId))
     .map((r) => core.applyCriticality(r, KNOWN_TYPES.get(r.typeId)));
 
   assert.equal(records.length, 2);
@@ -82,25 +77,13 @@ test('an application with no interest in App Route skips the whole Record cleanl
   assert.equal(handled[0].typeId, 100);
 });
 
-// ---------------------------------------------------------------------
-// The decentralized form (spec update, GitHub issue #10 follow-up): key
-// 2 as a private-use-random uint instead of a domain string, with key 3
-// playing Type Hint's "Hint" role rather than a human-readable label.
-// Same Record Type, same known-keys set — the shape rule (§3.2) already
-// allows a uint at key 2, so this is a usage pattern, not a format
-// change. Unlike the domain form, this carries no anti-spoofing property
-// and exists only as a fast, per-code misread pre-filter ahead of
-// §4.1's group_id check — never a substitute for the domain form's real
-// auto-launch dispatch.
-// ---------------------------------------------------------------------
-
 test('App Route decentralized form (private-use uint + Hint name) round-trips', () => {
   const container = core.encodeContainer([
     {
-      typeId: wrappers.APP_ROUTE_TYPE,
+      typeIds: [wrappers.APP_ROUTE_TYPE],
       fields: new Map([
-        [2, 12271745624591856273n],
-        [3, 'com.example/tagdrop-paper'],
+        [0, 12271745624591856273n],
+        [1, 'com.example/tagdrop-paper'],
       ]),
     },
   ]);
@@ -109,36 +92,27 @@ test('App Route decentralized form (private-use uint + Hint name) round-trips', 
   const rec = core.applyCriticality(records[0], wrappers.APP_ROUTE_KNOWN_KEYS);
 
   assert.equal(rec.aborted, false);
-  assert.equal(rec.map.get(2), 12271745624591856273n);
-  assert.equal(rec.map.get(3), 'com.example/tagdrop-paper');
+  assert.equal(rec.map.get(0), 12271745624591856273n);
+  assert.equal(rec.map.get(1), 'com.example/tagdrop-paper');
 });
 
-test('a scanner that only understands the domain form still skips a decentralized-form Record cleanly by Type ID alone (no crash on a uint where it might expect a string)', () => {
+test('a scanner that only understands the domain form still skips a decentralized-form Record cleanly by Type ID alone', () => {
   const container = core.encodeContainer([
     {
-      typeId: wrappers.APP_ROUTE_TYPE,
-      fields: new Map([[2, 12271745624591856273n], [3, 'com.example/tagdrop-paper']]),
+      typeIds: [wrappers.APP_ROUTE_TYPE],
+      fields: new Map([[0, 12271745624591856273n], [1, 'com.example/tagdrop-paper']]),
     },
   ]);
 
   const { records } = core.decodeContainer(container);
   const rec = core.applyCriticality(records[0], wrappers.APP_ROUTE_KNOWN_KEYS);
 
-  // Nothing in §4.4 requires key 2 to be a particular CBOR type at the
-  // routing layer — a decoder that only cares about Type ID 7 existing
-  // (e.g. "is *any* App Route present") never needs to inspect key 2's
-  // shape at all to skip cleanly.
   assert.equal(rec.aborted, false);
 });
 
-test('encoding the same App Route fields twice (simulating repetition across a multi-code group) produces identical bytes', () => {
-  // §4.4's etiquette: repeat verbatim on every code in a multi-code group,
-  // so a scanner can decide from any single scanned code. That guarantee
-  // depends on §3.4's canonical encoding — two independent encode calls
-  // for the same logical fields must agree byte-for-byte, not just
-  // "look the same" when inspected.
-  const fields = new Map([[2, 'example.com'], [3, 'Open in Example App']]);
-  const a = core.encodeRecordBytes({ typeId: wrappers.APP_ROUTE_TYPE, fields });
-  const b = core.encodeRecordBytes({ typeId: wrappers.APP_ROUTE_TYPE, fields: new Map(fields) });
+test('encoding the same App Route fields twice produces identical bytes', () => {
+  const fields = new Map([[0, 'example.com'], [1, 'Open in Example App']]);
+  const a = core.encodeRecordBytes({ typeIds: [wrappers.APP_ROUTE_TYPE], fields });
+  const b = core.encodeRecordBytes({ typeIds: [wrappers.APP_ROUTE_TYPE], fields: new Map(fields) });
   assert.deepEqual(a, b);
 });

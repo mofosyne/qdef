@@ -18,7 +18,8 @@
 //   4. ID meets minimum byte length (>= 2 bytes)
 
 const crypto = require('crypto');
-const { MIN_BYTE_LENGTH, verifyTypeHint } = require('../src/typeHint');
+
+const MIN_BYTE_LENGTH = 2;
 
 function deriveHashId(name, byteWidth) {
   if (byteWidth < MIN_BYTE_LENGTH) {

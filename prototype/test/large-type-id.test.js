@@ -13,54 +13,43 @@ const core = require('../src/core');
 // the tier as recommended: the `cbor` npm package's plain `encode()`
 // wraps *every* BigInt input in CBOR tag 2 (bignum), regardless of
 // magnitude — even one that trivially fits as a native single-byte uint —
-// which would violate both §3.1 (key 0 MUST be a plain uint) and §3.2's
-// field-value-shape rule (a value MUST NOT be a CBOR tag) for exactly the
-// field the minimal-core-parser design cares about most. See FINDINGS.md
+// which would violate §3.1 (typeID MUST be a plain uint). See FINDINGS.md
 // #14. `core.encodeRecordBytes` uses `cbor.encodeCanonical`, not
-// `cbor.encode` — verified separately not to have this bug — but these
-// tests exist so that fact is locked in by a regression test, not just an
-// observed side effect of an unrelated change (§3.4's canonical-encoding
-// switch) that happened to also fix it.
+// `cbor.encode` — verified separately not to have this bug.
 // ---------------------------------------------------------------------
 
 test('cbor.encode (plain, NOT what this prototype uses) always tag-2-wraps a BigInt, confirming the reported bug', () => {
-  // This test documents the bug in the dependency, not in this codebase —
-  // it exists so a future reader doesn't have to take the report on
-  // faith, and so a regression in the *other* direction (accidentally
-  // switching core.js back to plain cbor.encode) would be caught by the
-  // tests below, not just by this one passing.
   assert.equal(cbor.encode(100n)[0], 0xc2); // tag 2 (bignum) marker
   assert.equal(cbor.encode(2n ** 64n - 1n)[0], 0xc2);
 });
 
 test('a large (BigInt-class) Type ID encodes as a native uint, never a CBOR tag', () => {
-  const bigTypeId = 11040522420225562824n; // > Number.MAX_SAFE_INTEGER, needs BigInt in JS
-  const bytes = core.encodeRecordBytes({ typeId: bigTypeId, fields: new Map([[2, 'x']]) });
+  const bigTypeId = 11040522420225562824n;
+  const bytes = core.encodeRecordBytes({ typeIds: [bigTypeId], fields: new Map([[0, 'x']]) });
 
-  // Byte 0 is the map header (0xa2); byte 1 is key 0 (0x00); byte 2 is
-  // where key 0's *value* starts — must be a native major-type-0 uint
-  // (0x00-0x1b range for the head byte), never 0xc2 (tag 2, bignum).
-  assert.notEqual(bytes[2], 0xc2);
-  assert.equal(bytes[2], 0x1b); // major type 0, 8-byte argument follows
+  // First bytes are the typeID encoding: major type 0, 8-byte argument
+  // (0x1b), never 0xc2 (tag 2, bignum).
+  assert.equal(bytes[0], 0x1b); // major type 0, 8-byte argument follows
 
   const rec = core.decodeRecordBytes(bytes);
   assert.equal(rec.typeId, bigTypeId);
   assert.equal(typeof rec.typeId, 'bigint');
 });
 
-test('a small BigInt Type ID (the 100n case from the report) also encodes as a native uint, not tag-2', () => {
-  const bytes = core.encodeRecordBytes({ typeId: 100n, fields: new Map() });
-  assert.deepEqual(bytes, Buffer.from([0xa1, 0x00, 0x18, 0x64])); // map(1), key 0, uint 100 — no tag byte anywhere
+test('a small BigInt Type ID also encodes as a native uint, not tag-2', () => {
+  const bytes = core.encodeRecordBytes({ typeIds: [100n], fields: new Map() });
+  // typeID 100 as CBOR uint: 0x18 0x64, then empty map: 0xa0
+  assert.deepEqual(bytes, Buffer.from([0x18, 0x64, 0xa0]));
 });
 
 test('a full container carrying a 64-bit-class private-use Type ID round-trips through decodeContainer', () => {
-  const bigTypeId = 2n ** 64n - 1n; // the top of the range §9 recommends for this tier
+  const bigTypeId = 2n ** 64n - 1n;
   const container = core.encodeContainer([
-    { typeId: bigTypeId, fields: new Map([[2, 'private-use content']]) },
+    { typeIds: [bigTypeId], fields: new Map([[0, 'private-use content']]) },
   ]);
 
   const { records } = core.decodeContainer(container);
   assert.equal(records.length, 1);
   assert.equal(records[0].typeId, bigTypeId);
-  assert.equal(records[0].map.get(2), 'private-use content');
+  assert.equal(records[0].map.get(0), 'private-use content');
 });
