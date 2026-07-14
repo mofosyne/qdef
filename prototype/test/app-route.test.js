@@ -6,7 +6,7 @@ const core = require('../src/core');
 const wrappers = require('../src/wrappers');
 
 // ---------------------------------------------------------------------
-// §4.4's App Route (Type 7): a plain stdlib Record, not a wrapper, for
+// §4.4's App Route (Type 7): a plain standard record type, not a wrapper, for
 // letting a generic scanner offer to launch a specific handling
 // application (GitHub issue #10) — comparable to NFC's Android
 // Application Record. Key 2 is a domain, verified the way Android App

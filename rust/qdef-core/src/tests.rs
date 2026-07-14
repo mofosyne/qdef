@@ -261,7 +261,7 @@ fn record_type_0_needs_no_special_handling_from_this_crate() {
     // walked by the exact same key-0/even-odd machinery as any other
     // Type, proven here rather than just claimed. Field-level
     // interpretation (namespace at key 3, Hint name at key 5) is a
-    // stdlib-layer concern, out of scope for this crate -- this test only
+    // standard-record-type-layer concern, out of scope for this crate -- this test only
     // proves the mandatory core doesn't choke on or need to recognize it.
     let container = Container::parse(HEADER_CONTAINER).expect("valid container");
     let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();

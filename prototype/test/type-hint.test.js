@@ -37,7 +37,7 @@ test('a string Type Hint on a byte string Type ID is silently ignored by a decod
 });
 
 test('a byte string Type Hint on an even uint Type ID (standard record type) round-trips the legacy pointer', () => {
-  const typeId = 150; // even? No, 150 is even. Let me use an even stdlib.
+  const typeId = 150; // even? No, 150 is even. Let me use an even standard record type.
   // Actually, standard record types are even: 8 (Compress), 10 (Fallback), 12 (App Route).
   // But let's use a generic even uint representing a registered type.
   const evenTypeId = 200; // even, so it's a standard/global type
