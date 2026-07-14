@@ -159,8 +159,8 @@ never structure to walk into. That fixed shape is what §3.3 means by "a
 conformant core parser never needs recursion at all."
 
 The parser uses a two-phase loop to find each Record's boundaries:
-Phase 1 accumulates contiguous typeID items (uint or byte string) at the
-start of the Record. Phase 2 skips any non-map items (forward-compat
+Phase 1 accumulates contiguous typeID items (uint, byte string, or text
+string) at the start of the Record. Phase 2 skips any non-map items (forward-compat
 padding) until it reaches the first Map, which serves as the record
 delimiter.
 
@@ -714,11 +714,10 @@ Type IDs always stay globally, absolutely interpreted regardless of any
 declared namespace — standard record type mechanisms (§4: a generic tool
 must still be able to unwrap Split/Compress/Encrypt and recognize App
 Route inside a namespaced file) *and* registered content types (§8's
-Registry governance). This is deliberate and matches the universal
-pattern across CBOR, XML, NDEF, Protocol Buffers, and HTTP where
-infrastructure mechanisms stay globally interpretable — see
-DESIGN.md's "Research: namespace scoping best practices" for the full
-cross-protocol analysis.
+Registry governance). This is deliberate: a generic tool that only
+implements the standard record types must keep working unconditionally
+inside any namespaced container, without needing to know a namespace
+mechanism exists at all.
 
 **Odd uint Type IDs become namespace-scoped once a namespace is declared,
 reusing the existing flat numbering space rather than carving out a new
@@ -986,7 +985,7 @@ required and a decoder cannot detect or reject a different order**: the
 generic resolver described above has no notion of "correct" order, it just
 keeps unwrapping whatever Wrapper Type ID it finds next — confirmed
 against a prototype run of both the documented order and a deliberately
-reversed one (see FINDINGS.md §7 and
+reversed one (see FINDINGS.md #7 and
 [DESIGN.md's "Nesting order enforcement"](DESIGN.md#nesting-order-enforcement--now-answered-not-open)).
 
 **Why a wrapper, not a reserved key range on the inner record itself:**
@@ -1171,7 +1170,7 @@ on-device, no QDEF-level registry" — the end-user outcome is the same on
 either platform — but a scanner implementation needs the platform-
 specific mechanism, not a shared cross-platform API, since none exists.
 
-Key `2` carries the bare domain, not a full URL — the iOS path above
+Key `0` carries the bare domain, not a full URL — the iOS path above
 constructs `https://<domain>/` (root) from it when actually opening a
 URL; an App Route Record isn't the place for path-level routing, which
 belongs to the payload the application itself defines once launched.
@@ -1372,7 +1371,7 @@ in `prototype/test/roundtrip.test.js`.
 Moved to [`DESIGN.md`](DESIGN.md): why mechanisms were removed (the CBOR
 tag route), alternatives weighed and
 rejected, comparisons against NDEF/BBQr/MCAP and `mofosyne/tagdrop`, and
-what this draft still hasn't resolved (registry governance, canonical
-encoding, the Sign wrapper, Encrypt key provisioning, Split's per-code
-capacity limits). None of it is required reading to implement a
-conformant parser — everything normative is above this line.
+what this draft still hasn't resolved (registry governance, the Sign
+wrapper, Split's per-code capacity limits). None of it is required
+reading to implement a conformant parser — everything normative is
+above this line.
