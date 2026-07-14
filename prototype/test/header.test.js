@@ -140,7 +140,7 @@ test('the container is exactly magic + CBOR Sequence, no version byte', () => {
 // ---------------------------------------------------------------------
 
 test('even uint Type IDs always resolve globally, regardless of namespace', () => {
-  // Even stdlib types (0, 2, 4, 8) and even common-vocabulary types (100)
+  // Even standard record types (0, 2, 4, 8) and even common-vocabulary types (100)
   // all resolve globally — the whole point of even=standard/global.
   for (const typeId of [0, 2, 4, 8, 100, 998, 32768]) {
     const withNamespace = header.resolveLookupKey({ namespace: 111n }, typeId);

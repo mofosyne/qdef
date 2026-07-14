@@ -170,7 +170,7 @@ streaming) for it. That left one of the spec's own claims (§3.3: a "deeply
 constrained embedded scanner with no semantic-tag-aware CBOR library" can
 implement the mandatory core) completely unverified — Node can't tell you
 whether that's true. [`rust/qdef-core`](../rust/qdef-core) is a second,
-independent implementation of the mandatory core only (not the stdlib
+independent implementation of the mandatory core only (not the standard record type
 Wrapper layer), written `#![no_std]`, with zero dependencies and zero heap
 allocation — including hand-rolling the CBOR primitives instead of using a
 crate for them, since using one would just re-test the Node prototype's
@@ -287,7 +287,7 @@ Tagged(0, "2026-...")     ->  decodes to a Date      (tag 0 = date/time string)
 Tagged(0, <a Record map>) ->  decodes to Invalid Date
 ```
 
-Types 2/3/4/5 (the entire Wrapper stdlib) and Type 100 (the flagship Wi-Fi
+Types 2/3/4/5 (the entire Wrapper standard record types) and Type 100 (the flagship Wi-Fi
 example) all reuse tag numbers IANA has already assigned real, live meaning
 to. QDEF's own worked examples aren't hypothetically at risk — they're
 already using colliding numbers today. A permissive decoder happens to fall
@@ -545,7 +545,7 @@ come up once earlier in this project's history and was deliberately left
 unbuilt: "figure out later... as long as our QDEF system is flexible to
 assign a Type ID to it later." This is that later.
 
-Landed as spec §4.4, a plain stdlib Record (Type `7`, not a wrapper):
+Landed as spec §4.4, a plain standard record type (Type `7`, not a wrapper):
 
 - **Domain-verified, not a bare string claim.** A package name or
   reverse-domain string can't prove anything — any app can claim to be
@@ -698,7 +698,7 @@ overreach rather than converging in one pass — three worth naming since
 each would have shipped a genuine inconsistency otherwise: a fixed-width
 header field taxing every container regardless of use, "different Type
 ID = different header version" wasting Type ID space and breaking with
-how every other stdlib Record actually evolves, and a near-miss reusing
+how every other standard record type actually evolves, and a near-miss reusing
 key `1` for a version field despite it already being globally reserved
 as Type Hint. See DESIGN.md's "The container header collapsed" entry for
 the full reasoning on each.
@@ -757,7 +757,7 @@ or `rust/qdef-core` were needed or made.
 — a decoder hardcoding against the *reviewed, well-known*
 common-vocabulary tier (`100`–`999`) has no reason to ever read §3.5,
 meaning it wasn't accepting the sharp edge, it just never knew the edge
-existed. Extended the floor to `1000`: `1`–`999` (stdlib *and*
+existed. Extended the floor to `1000`: `1`–`999` (standard record types *and*
 common-vocabulary) now stays unconditionally global; only the
 less-curated first-come tier (`1000`+) is actually namespace-scopable.
 Cost verified, not assumed: cheapest namespace-scoped Type ID moved from
@@ -777,7 +777,7 @@ discipline as every other boundary decision here: `1000` and `32768`
 both fall inside CBOR's `256`–`65535` uint class, so both cost 5 bytes
 minimum — moving the floor to `32768` was a free upgrade (more
 common-vocabulary headroom, an externally-citable boundary), not a
-tradeoff. `1`–`99` (stdlib) was deliberately left un-aligned with
+tradeoff. `1`–`99` (standard record types) was deliberately left un-aligned with
 IANA's `0`–`23` — that tier answers a different question (what a
 generic tool must unwrap regardless of namespace) than IANA's Standards
 Action band (who can change the CBOR spec itself), and renumbering
@@ -821,7 +821,7 @@ namespace being declared.
 
 Prototyped in `prototype/src/header.js`'s `resolveLookupKey` and
 `prototype/test/header.test.js`: compound-key resolution differs by
-namespace, `1`–`32767` stays global unconditionally (both stdlib and
+namespace, `1`–`32767` stays global unconditionally (both standard record types and
 the full IANA-aligned common-vocabulary range, tested explicitly), a
 namespace-aware dispatcher correctly refuses to fall back to a
 recognized global meaning for an unrecognized namespace-scoped pairing
@@ -950,7 +950,7 @@ domain they each control do not collide.
 ## Net effect on the spec
 
 None of this changes three of the four load-bearing design decisions
-called out as settled (two-layer core/stdlib split, even/odd criticality,
+called out as settled (two-layer core/standard-record-type split, even/odd criticality,
 Wrapper Records over a sibling key range, fixed nesting order as encoder
 convention). What changed for those is precision: several places that read
 as complete prose turned out to be underspecified the moment two
@@ -975,7 +975,7 @@ of delegated to a library call.
 ## 23. Multi-type Key 0: replacing the three-tier integer system with a three-type classification
 
 The original design used three tiers of integer Type IDs in key 0
-(`1`–`99` stdlib, `100`–`32767` common vocabulary, `32768`+ private-use),
+(`1`–`99` standard record types, `100`–`32767` common vocabulary, `32768`+ private-use),
 all encoded as CBOR uints. Namespace scoping was determined by a magnitude
 check against a magic ceiling (`32768`). This worked but had structural
 limitations:
@@ -1023,7 +1023,7 @@ Costs:
 - **Breaking wire format change.** All existing fixtures must be
   regenerated. Containers using old odd-numbered types (3, 5, 7, 105)
   without a Type 0 header will be rejected.
-- **Stdlib renumbering.** Types 3→8 (Compress), 5→10 (Fallback Hint),
+- **Standard record type renumbering.** Types 3→8 (Compress), 5→10 (Fallback Hint),
   7→12 (App Route), 105→106 (Event Ticket) to ensure all standard record
   type IDs are even.
 - **Multi-type key 0.** Parsers must now check the CBOR major type of

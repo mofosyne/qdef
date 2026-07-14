@@ -6,7 +6,7 @@ const core = require('../src/core');
 const wrappers = require('../src/wrappers');
 
 // ---------------------------------------------------------------------
-// §4.3's Media Payload (Type 6): a plain stdlib Record, not a wrapper.
+// §4.3's Media Payload (Type 6): a plain standard record type, not a wrapper.
 // Key 2 (Media Type) is a uint or a text string, encoder's choice — a
 // CoAP Content-Format ID when one's registered, the plain MIME string
 // otherwise. Unlike Type ID/Type Hint, there's deliberately no

@@ -1,7 +1,7 @@
 //! QDEF mandatory core: magic framing, CBOR-Sequence-of-Records walking,
 //! key-0 routing, the even/odd criticality rule (docs/QDEF-SPEC.md
 //! §2–§3.3). No knowledge of any specific Record Type, no compression,
-//! no reassembly — those live in a separate stdlib layer, not here, by
+//! no reassembly — those live in a separate standard-record-type layer, not here, by
 //! design.
 //!
 //! No version byte: the container is magic + a CBOR Sequence of Records,
