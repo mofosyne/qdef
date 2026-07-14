@@ -15,12 +15,12 @@ const FALLBACK_HINT_TYPE = 10;
 const MEDIA_PAYLOAD_TYPE = 6;
 const APP_ROUTE_TYPE = 12;
 
-const SPLIT_KNOWN_KEYS = new Set([0, 2, 4, 6, 8, 9, 11]);
-const COMPRESS_KNOWN_KEYS = new Set([0, 2]);
-const ENCRYPT_KNOWN_KEYS = new Set([0, 2, 4, 5, 7]);
-const FALLBACK_HINT_KNOWN_KEYS = new Set([0, 1, 2]);
-const MEDIA_PAYLOAD_KNOWN_KEYS = new Set([0, 2, 4]);
-const APP_ROUTE_KNOWN_KEYS = new Set([0, 2, 3]);
+const SPLIT_KNOWN_KEYS = new Set([0, 2, 4, 6, 7, 9]);
+const COMPRESS_KNOWN_KEYS = new Set([0]);
+const ENCRYPT_KNOWN_KEYS = new Set([0, 2, 3, 5]);
+const FALLBACK_HINT_KNOWN_KEYS = new Set([0]);
+const MEDIA_PAYLOAD_KNOWN_KEYS = new Set([0, 2]);
+const APP_ROUTE_KNOWN_KEYS = new Set([0, 1]);
 
 const PARITY_SCHEME_NONE = 0;
 const PARITY_SCHEME_XOR = 1; // prototype-only single-parity-fragment scheme
@@ -45,41 +45,38 @@ const COAP_CONTENT_FORMAT_APPLICATION_CBOR = 60;
 // ---- Compress (Type 8) -----------------------------------------------
 
 function compressEncode(innerBytes) {
-  return new Map([
-    [0, COMPRESS_TYPE],
-    [2, zlib.deflateRawSync(innerBytes)],
-  ]);
+  return {
+    typeIds: [COMPRESS_TYPE],
+    fields: new Map([[0, zlib.deflateRawSync(innerBytes)]]),
+  };
 }
 
 function compressDecode(map) {
-  return zlib.inflateRawSync(map.get(2));
+  return zlib.inflateRawSync(map.get(0));
 }
 
 // ---- Encrypt (Type 4) --------------------------------------------------
-// Spec gap found by the prototype: the draft names "AES-GCM" but never says
-// how the key is derived (passphrase KDF? pre-shared key? recipient pubkey?).
-// That's out of scope for the *container* format (same reasoning as §7's
-// compression/split split), but it's a real open question call-out
-// (see docs/FINDINGS.md) since "Encrypt" wrapper is meaningless without it.
-// The prototype takes a raw 32-byte key as given.
 
 function encryptEncode(innerBytes, key, { algorithm, keyAlgorithm } = {}) {
   const nonce = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv('aes-256-gcm', key, nonce);
   const ciphertext = Buffer.concat([cipher.update(innerBytes), cipher.final()]);
   const authTag = cipher.getAuthTag();
-  return new Map([
-    [0, ENCRYPT_TYPE],
-    [2, nonce],
-    [4, Buffer.concat([ciphertext, authTag])], // "ciphertext+tag" per spec
-    ...(algorithm !== undefined ? [[5, algorithm]] : []),
-    ...(keyAlgorithm !== undefined ? [[7, keyAlgorithm]] : []),
+  const fields = new Map([
+    [0, nonce],
+    [2, Buffer.concat([ciphertext, authTag])], // "ciphertext+tag" per spec
   ]);
+  if (algorithm !== undefined) fields.set(3, algorithm);
+  if (keyAlgorithm !== undefined) fields.set(5, keyAlgorithm);
+  return {
+    typeIds: [ENCRYPT_TYPE],
+    fields,
+  };
 }
 
 function encryptDecode(map, key) {
-  const nonce = map.get(2);
-  const combined = map.get(4);
+  const nonce = map.get(0);
+  const combined = map.get(2);
   const authTag = combined.subarray(combined.length - 16);
   const ciphertext = combined.subarray(0, combined.length - 16);
   const decipher = crypto.createDecipheriv('aes-256-gcm', key, nonce);
@@ -88,22 +85,6 @@ function encryptDecode(map, key) {
 }
 
 // ---- Split (Type 2) -----------------------------------------------------
-//
-// Spec gap found by the prototype: the draft never specifies *how* bytes are
-// sliced into fragments (fixed chunk size? explicit per-fragment length?),
-// which matters the moment `parity_scheme` is used, because XOR parity needs
-// every fragment zero-padded to a common length. We fix a deterministic
-// chunking rule here so any two independent implementations of Split agree
-// without out-of-band coordination:
-//
-//   chunkLen = ceil(total_bytes / count)
-//   fragment[i] = bytes[i*chunkLen .. min((i+1)*chunkLen, total_bytes)]
-//
-// This also surfaces why `total_bytes` (key 9, documented as OPTIONAL) is
-// not really optional whenever `parity_scheme` is set: recovering a missing
-// *last* fragment via XOR requires knowing its true (possibly short) length,
-// which is only derivable from total_bytes + count + chunkLen. See
-// docs/FINDINGS.md.
 
 function chunkLength(totalBytes, count) {
   return Math.ceil(totalBytes / count);
@@ -120,17 +101,18 @@ function splitEncode(innerBytes, { count, parityScheme = PARITY_SCHEME_NONE }) {
     const start = i * chunkLen;
     const end = Math.min(start + chunkLen, totalBytes);
     const slice = innerBytes.subarray(start, end);
-    fragments.push(
-      new Map([
-        [0, SPLIT_TYPE],
-        [2, groupId],
-        [4, i],
-        [6, count],
-        [8, Buffer.from(slice)],
-        [9, totalBytes],
-        ...(parityScheme !== PARITY_SCHEME_NONE ? [[11, parityScheme]] : []),
-      ])
-    );
+    const fields = new Map([
+      [0, groupId],
+      [2, i],
+      [4, count],
+      [6, Buffer.from(slice)],
+      [7, totalBytes],
+    ]);
+    if (parityScheme !== PARITY_SCHEME_NONE) fields.set(9, parityScheme);
+    fragments.push({
+      typeIds: [SPLIT_TYPE],
+      fields,
+    });
   }
 
   if (parityScheme === PARITY_SCHEME_XOR) {
@@ -139,17 +121,18 @@ function splitEncode(innerBytes, { count, parityScheme = PARITY_SCHEME_NONE }) {
       const padded = zeroPad(innerBytes.subarray(i * chunkLen, Math.min((i + 1) * chunkLen, totalBytes)), chunkLen);
       xorInPlace(parity, padded);
     }
-    fragments.push(
-      new Map([
-        [0, SPLIT_TYPE],
-        [2, groupId],
-        [4, count], // parity fragment index == count (first index >= count)
-        [6, count],
-        [8, parity],
-        [9, totalBytes],
-        [11, parityScheme],
-      ])
-    );
+    const fields = new Map([
+      [0, groupId],
+      [2, count], // parity fragment index == count (first index >= count)
+      [4, count],
+      [6, parity],
+      [7, totalBytes],
+      [9, parityScheme],
+    ]);
+    fragments.push({
+      typeIds: [SPLIT_TYPE],
+      fields,
+    });
   } else if (parityScheme !== PARITY_SCHEME_NONE) {
     throw new Error(`unsupported parity_scheme: ${parityScheme}`);
   }
@@ -169,29 +152,29 @@ function xorInPlace(target, src) {
 }
 
 /**
- * Reassemble a Split group from whatever fragment maps were recovered
+ * Reassemble a Split group from whatever fragment records were recovered
  * (order doesn't matter, duplicates tolerated). Returns the original bytes,
  * recovering one missing real fragment via XOR parity if needed and
  * possible. Throws if reassembly is not possible with what's present.
  */
-function splitDecode(fragmentMaps) {
-  if (fragmentMaps.length === 0) throw new Error('no fragments given');
-  const groupId = fragmentMaps[0].get(2);
-  const count = fragmentMaps[0].get(6);
-  const totalBytes = fragmentMaps[0].get(9);
-  const parityScheme = fragmentMaps[0].get(11) ?? PARITY_SCHEME_NONE;
+function splitDecode(fragmentRecords) {
+  if (fragmentRecords.length === 0) throw new Error('no fragments given');
+  const groupId = fragmentRecords[0].map.get(0);
+  const count = fragmentRecords[0].map.get(4);
+  const totalBytes = fragmentRecords[0].map.get(7);
+  const parityScheme = fragmentRecords[0].map.get(9) ?? PARITY_SCHEME_NONE;
 
-  for (const f of fragmentMaps) {
-    if (!f.get(2).equals(groupId)) throw new Error('fragments from mismatched groups');
-    if (f.get(6) !== count) throw new Error('fragments disagree on count');
+  for (const f of fragmentRecords) {
+    if (!f.map.get(0).equals(groupId)) throw new Error('fragments from mismatched groups');
+    if (f.map.get(4) !== count) throw new Error('fragments disagree on count');
   }
   if (totalBytes === undefined) {
-    throw new Error('total_bytes (key 9) absent: cannot safely reassemble/recover without it');
+    throw new Error('total_bytes (key 7) absent: cannot safely reassemble/recover without it');
   }
 
   const chunkLen = chunkLength(totalBytes, count);
   const byIndex = new Map();
-  for (const f of fragmentMaps) byIndex.set(f.get(4), f.get(8));
+  for (const f of fragmentRecords) byIndex.set(f.map.get(2), f.map.get(6));
 
   const missing = [];
   for (let i = 0; i < count; i++) {
@@ -235,20 +218,6 @@ function splitDecode(fragmentMaps) {
 }
 
 // ---- Generic wrapper resolver ------------------------------------------
-//
-// This is the "one resolver, written once, works for every Record Type
-// that opts in" claim from §4.1, made real: it recursively unwraps
-// Compress/Encrypt layers as soon as they're seen (one code at a time) and
-// gathers Split fragments across codes before unwrapping past them. It has
-// NO notion of "correct" nesting order — it just keeps unwrapping whatever
-// wrapper Type ID it finds until it hits a non-wrapper (terminal) Record.
-//
-// Prototype finding: this means nesting order (§4.1's "fixed nesting
-// order", DESIGN.md's nesting-order question) is genuinely unenforceable/undetectable
-// by a generically-written decoder — both the documented order
-// (Split-outermost) and a deliberately reversed order (Encrypt applied
-// per-code, Split innermost) round-trip through this exact same resolver
-// with no error. See docs/FINDINGS.md.
 
 const WRAPPER_TYPES = new Set([SPLIT_TYPE, COMPRESS_TYPE, ENCRYPT_TYPE]);
 
@@ -260,7 +229,7 @@ function unwrapSingle(typeId, map, ctx) {
 
 function decodeAndCheck(bytes, knownKeysRegistry) {
   const rec = core.decodeRecordBytes(bytes);
-  const knownKeys = knownKeysRegistry.get(rec.typeId) ?? new Set([0]);
+  const knownKeys = knownKeysRegistry.get(rec.typeId) ?? new Set();
   const checked = core.applyCriticality(rec, knownKeys);
   if (checked.aborted) throw new Error(`record type ${rec.typeId} aborted: ${checked.abortReason}`);
   return checked;
@@ -282,7 +251,7 @@ function resolveStack(codesBytesList, ctx, knownKeysRegistry) {
 
   for (const codeBytes of codesBytesList) {
     const { records } = core.decodeContainer(codeBytes);
-    const knownKeys = knownKeysRegistry.get(records[0].typeId) ?? new Set([0]);
+    const knownKeys = knownKeysRegistry.get(records[0].typeId) ?? new Set();
     let rec = core.applyCriticality(records[0], knownKeys);
     if (rec.aborted) throw new Error(`record type ${rec.typeId} aborted: ${rec.abortReason}`);
     while (WRAPPER_TYPES.has(rec.typeId) && rec.typeId !== SPLIT_TYPE) {
@@ -290,7 +259,7 @@ function resolveStack(codesBytesList, ctx, knownKeysRegistry) {
       rec = decodeAndCheck(bytes, knownKeysRegistry);
     }
     if (rec.typeId === SPLIT_TYPE) {
-      pendingSplitFragments.push(rec.map);
+      pendingSplitFragments.push(rec);
     } else {
       terminal = rec;
     }

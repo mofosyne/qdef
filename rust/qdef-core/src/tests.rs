@@ -7,7 +7,7 @@
 use super::fixtures::*;
 use super::*;
 
-const WIFI_KNOWN_KEYS: &[u64] = &[0, 2, 3, 4, 6];
+const WIFI_KNOWN_KEYS: &[u64] = &[0, 1, 2, 4];
 
 #[test]
 fn wifi_record_routes_and_fields_extract() {
@@ -16,8 +16,8 @@ fn wifi_record_routes_and_fields_extract() {
     let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
     assert_eq!(records.len(), 1);
     let rec = &records[0];
-    assert_eq!(rec.type_id, Some(Key::Uint(100)));
-    assert!(!rec.aborted);
+    assert_eq!(rec.type_id(), Some(Key::Uint(100)));
+    assert!(!rec.ignored);
 
     let outcome = check_criticality(rec.map_bytes, WIFI_KNOWN_KEYS, |_| {
         panic!("no odd keys here")
@@ -25,25 +25,19 @@ fn wifi_record_routes_and_fields_extract() {
     .unwrap();
     assert_eq!(outcome, CriticalityOutcome::Ok);
 
-    let ssid = find_value(rec.map_bytes, 2).unwrap().unwrap();
+    let ssid = find_value(rec.map_bytes, 0).unwrap().unwrap();
     assert_eq!(read_definite_string(ssid).unwrap(), b"My Coffee Shop");
-    let password = find_value(rec.map_bytes, 4).unwrap().unwrap();
+    let password = find_value(rec.map_bytes, 2).unwrap().unwrap();
     assert_eq!(read_definite_string(password).unwrap(), b"guest123");
 }
 
 #[test]
 fn a_64_bit_class_private_use_type_id_decodes_correctly() {
-    // §3.1's even-uint standard tier supports the full uint64 range — this
-    // crate's `type_id: Option<Key>` already supports it, but proving it
-    // against a fixture the Node encoder actually produced (not just an
-    // assumed capability) is what caught a real bug in the *Node* prototype's
-    // plain `cbor.encode()` path (docs/FINDINGS.md #14). The fixture here
-    // uses u64::MAX, the top of the range.
     let container = Container::parse(LARGE_TYPE_ID_CONTAINER).expect("valid container");
     let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
     assert_eq!(records.len(), 1);
-    assert_eq!(records[0].type_id, Some(Key::Uint(u64::MAX)));
-    assert!(!records[0].aborted);
+    assert_eq!(records[0].type_id(), Some(Key::Uint(u64::MAX)));
+    assert!(!records[0].ignored);
 }
 
 #[test]
@@ -51,13 +45,13 @@ fn unrecognized_even_key_aborts_the_record() {
     let container = Container::parse(WIFI_UNKNOWN_EVEN_KEY_CONTAINER).unwrap();
     let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
     let rec = &records[0];
-    assert!(!rec.aborted); // routing itself succeeds; criticality is a separate, Record-Type-specific check
+    assert!(!rec.ignored);
 
     let outcome = check_criticality(rec.map_bytes, WIFI_KNOWN_KEYS, |_| {
         panic!("must not reach an odd key")
     })
     .unwrap();
-    assert_eq!(outcome, CriticalityOutcome::Aborted(8));
+    assert_eq!(outcome, CriticalityOutcome::Aborted(6));
 }
 
 #[test]
@@ -69,32 +63,19 @@ fn unrecognized_odd_key_is_silently_ignored() {
     let mut ignored = Vec::new();
     let outcome = check_criticality(rec.map_bytes, WIFI_KNOWN_KEYS, |k| ignored.push(k)).unwrap();
     assert_eq!(outcome, CriticalityOutcome::Ok);
-    assert_eq!(ignored, vec![9]);
+    assert_eq!(ignored, vec![7]);
 
-    // Rest of the record is still fully usable.
-    let ssid = find_value(rec.map_bytes, 2).unwrap().unwrap();
+    let ssid = find_value(rec.map_bytes, 0).unwrap().unwrap();
     assert_eq!(read_definite_string(ssid).unwrap(), b"SSID");
 }
 
 #[test]
-fn a_tagged_item_is_malformed_input_not_an_alternate_route() {
-    // Key 0 is the sole routing mechanism (§3.1) — an earlier draft also
-    // routed via a CBOR tag equal to the Type ID, removed after finding it
-    // collided with the IANA CBOR tag registry (FINDINGS.md #11-#12). A
-    // CBOR-tagged item is no longer valid Record syntax: it's malformed,
-    // Sequence-fatal input, not something to unwrap.
-    let container = Container::parse(TAGGED_ITEM_IS_MALFORMED_CONTAINER).unwrap();
-    let result: Result<Vec<_>, _> = container.records().collect();
-    assert_eq!(result.err(), Some(Error::Cbor(cbor::Error::NotAMap)));
-}
-
-#[test]
-fn missing_key_zero_aborts_at_routing_time() {
-    let container = Container::parse(MISSING_KEY0_CONTAINER).unwrap();
+fn a_record_with_no_typeid_is_ignored() {
+    let container = Container::parse(NO_TYPEID_CONTAINER).unwrap();
     let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
     let rec = &records[0];
-    assert!(rec.aborted);
-    assert_eq!(rec.abort_reason, Some(AbortReason::MissingKeyZero));
+    assert!(rec.ignored);
+    assert_eq!(rec.type_id(), None);
 }
 
 #[test]
@@ -104,18 +85,16 @@ fn one_aborted_record_does_not_affect_its_sibling() {
     assert_eq!(records.len(), 2);
 
     let first = check_criticality(records[0].map_bytes, WIFI_KNOWN_KEYS, |_| {}).unwrap();
-    assert_eq!(first, CriticalityOutcome::Aborted(8));
+    assert_eq!(first, CriticalityOutcome::Aborted(6));
 
-    assert_eq!(records[1].type_id, Some(Key::Uint(900)));
-    assert!(!records[1].aborted);
-    let payload = find_value(records[1].map_bytes, 2).unwrap().unwrap();
+    assert_eq!(records[1].type_id(), Some(Key::Uint(900)));
+    assert!(!records[1].ignored);
+    let payload = find_value(records[1].map_bytes, 0).unwrap().unwrap();
     assert_eq!(read_definite_string(payload).unwrap(), b"sibling record");
 }
 
 #[test]
 fn ndef_path_bare_sequence_with_no_magic_still_routes() {
-    // Strip the 4-byte magic prefix and decode the bare CBOR Sequence
-    // directly, simulating the NDEF MIME-typed path (§2).
     let bare_seq = &WIFI_CONTAINER[4..];
     assert!(
         Container::parse(bare_seq).is_err(),
@@ -125,7 +104,7 @@ fn ndef_path_bare_sequence_with_no_magic_still_routes() {
     let records: Vec<_> = records_from_sequence(bare_seq)
         .collect::<Result<_, _>>()
         .unwrap();
-    assert_eq!(records[0].type_id, Some(Key::Uint(100)));
+    assert_eq!(records[0].type_id(), Some(Key::Uint(100)));
 }
 
 #[test]
@@ -137,12 +116,6 @@ fn bad_magic_is_rejected() {
 
 #[test]
 fn field_value_shape_rule_rejects_a_bare_array_even_under_an_odd_optional_key() {
-    // Key 11 is odd (optional) — without the field-value-shape rule, an
-    // unrecognized odd key would just be silently ignored. It must instead
-    // be rejected: the decoder can't determine this Record's byte length
-    // without walking into the array's structure, which the rule forbids
-    // it from ever attempting. This is a routing-time failure (the walker
-    // can't even finish reading the map), not a criticality-check failure.
     let container = Container::parse(DISALLOWED_ARRAY_VALUE_CONTAINER).unwrap();
     let result: Result<Vec<_>, _> = container.records().collect();
     assert_eq!(
@@ -153,46 +126,30 @@ fn field_value_shape_rule_rejects_a_bare_array_even_under_an_odd_optional_key() 
 
 #[test]
 fn structured_content_is_carried_as_an_opaque_byte_string_and_skips_at_zero_cost() {
-    // The rule's *sanctioned* alternative: pre-encode the structured data
-    // (here, a 2-element CBOR array of auth method names) and carry the
-    // encoded bytes as a definite-length byte string under an ordinary
-    // field key. The outer decoder never looks inside it — it's skip-safe
-    // and round-trips byte-for-byte, exactly like any other opaque payload
-    // (the same property Wrapper Records rely on in §4.1).
     let container = Container::parse(BYTE_STRING_WRAPPED_VALUE_CONTAINER).unwrap();
     let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
     let rec = &records[0];
-    assert!(!rec.aborted);
+    assert!(!rec.ignored);
 
-    // Odd/unrecognized key 11 doesn't trip criticality either — it's a
-    // perfectly ordinary skip-safe byte-string value from the core's POV.
-    let outcome = check_criticality(rec.map_bytes, WIFI_KNOWN_KEYS, |k| assert_eq!(k, 11)).unwrap();
+    let outcome = check_criticality(rec.map_bytes, WIFI_KNOWN_KEYS, |k| assert_eq!(k, 9)).unwrap();
     assert_eq!(outcome, CriticalityOutcome::Ok);
 
-    let raw = find_value(rec.map_bytes, 11).unwrap().unwrap();
+    let raw = find_value(rec.map_bytes, 9).unwrap().unwrap();
     let nested_cbor = read_definite_string(raw).unwrap();
     assert_eq!(nested_cbor, NESTED_AUTH_METHODS_CBOR);
 }
 
 #[test]
 fn tag_24_wrapping_a_definite_length_string_directly_is_a_legal_field_value() {
-    // GitHub issue #8: tag 24 ("encoded CBOR data item") wrapping a
-    // definite-length string directly is exactly as skip-safe as a bare
-    // byte string — two fixed header reads instead of one, never a walk —
-    // and gives generic CBOR tooling a marker that this field's bytes are
-    // re-parseable, which a bare, unmarked byte string never can.
     let container = Container::parse(TAG24_WRAPPED_VALUE_CONTAINER).unwrap();
     let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
     let rec = &records[0];
-    assert!(!rec.aborted);
+    assert!(!rec.ignored);
 
-    let outcome = check_criticality(rec.map_bytes, WIFI_KNOWN_KEYS, |k| assert_eq!(k, 11)).unwrap();
+    let outcome = check_criticality(rec.map_bytes, WIFI_KNOWN_KEYS, |k| assert_eq!(k, 9)).unwrap();
     assert_eq!(outcome, CriticalityOutcome::Ok);
 
-    let raw = find_value(rec.map_bytes, 11).unwrap().unwrap();
-    // find_value returns the *whole* value including the tag header — the
-    // caller unwraps it, the same way it would unwrap any tag it chooses
-    // to interpret. Tag 24 is always a 2-byte head (0xd8 0x18).
+    let raw = find_value(rec.map_bytes, 9).unwrap().unwrap();
     assert_eq!(&raw[..2], &[0xd8, 0x18]);
     let nested_cbor = read_definite_string(&raw[2..]).unwrap();
     assert_eq!(nested_cbor, NESTED_AUTH_METHODS_CBOR);
@@ -200,13 +157,6 @@ fn tag_24_wrapping_a_definite_length_string_directly_is_a_legal_field_value() {
 
 #[test]
 fn tag_24_directly_wrapping_another_tag_is_rejected_not_silently_walked() {
-    // The bound that keeps this from reopening unbounded recursion: tag 24
-    // MUST wrap a definite-length string *directly*. Here the outer tag
-    // 24's immediately-following item is itself a tag (24 again), not a
-    // string — genuinely different from a byte string whose own contents
-    // happen to be tag-24'd (still allowed, since that's opaque to the
-    // outer skip). This MUST fail the same way a bare array does, not be
-    // silently accepted at whatever depth an adversarial encoder chooses.
     let container = Container::parse(NESTED_TAG24_CONTAINER).unwrap();
     let result: Result<Vec<_>, _> = container.records().collect();
     assert_eq!(
@@ -217,34 +167,22 @@ fn tag_24_directly_wrapping_another_tag_is_rejected_not_silently_walked() {
 
 #[test]
 fn any_tag_number_is_allowed_when_its_content_is_a_definite_length_string() {
-    // FINDINGS.md #16: widened from "only tag 24" to any tag number — it's
-    // the content shape that makes a tag skip-safe, not which specific
-    // number is on the wire. Tag 0 ("standard date/time string") wrapping
-    // a definite-length text string directly is a real, IANA-registered
-    // tag, genuinely scalar-shaped by its own RFC 8949 definition, so it's
-    // accepted the same way tag 24 is.
     let container = Container::parse(OTHER_TAG_WRAPPED_VALUE_CONTAINER).unwrap();
     let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
     let rec = &records[0];
-    assert!(!rec.aborted);
+    assert!(!rec.ignored);
 
-    let outcome = check_criticality(rec.map_bytes, WIFI_KNOWN_KEYS, |k| assert_eq!(k, 11)).unwrap();
+    let outcome = check_criticality(rec.map_bytes, WIFI_KNOWN_KEYS, |k| assert_eq!(k, 9)).unwrap();
     assert_eq!(outcome, CriticalityOutcome::Ok);
 
-    let raw = find_value(rec.map_bytes, 11).unwrap().unwrap();
-    assert_eq!(raw[0], 0xc0); // tag 0, one-byte head (info 0, tag number 0..23)
+    let raw = find_value(rec.map_bytes, 9).unwrap().unwrap();
+    assert_eq!(raw[0], 0xc0); // tag 0
     let date_string = read_definite_string(&raw[1..]).unwrap();
     assert_eq!(date_string, b"2026-07-10T12:00:00Z");
 }
 
 #[test]
 fn a_real_tag_whose_own_definition_requires_array_content_is_still_rejected() {
-    // The other half of the bound: it's the *content shape* that's
-    // checked, never the tag number alone. Tag 4 ("decimal fraction")
-    // wraps a 2-element array [exponent, mantissa] by its own RFC 8949
-    // definition — a real, plausible value (-2, 27315 => 273.15), not a
-    // contrived one — and MUST still be rejected, since array content
-    // isn't skip-safe regardless of which tag says so.
     let container = Container::parse(STRUCTURED_TAG_WRAPPED_VALUE_CONTAINER).unwrap();
     let result: Result<Vec<_>, _> = container.records().collect();
     assert_eq!(
@@ -255,52 +193,57 @@ fn a_real_tag_whose_own_definition_requires_array_content_is_still_rejected() {
 
 #[test]
 fn record_type_0_needs_no_special_handling_from_this_crate() {
-    // The container-level header (a format namespace, §QDEF-SPEC.md §2) is
-    // Record Type 0 -- an ordinary Record, not a distinct wire structure.
-    // This crate has zero Type-0-specific code path; it's routed and
-    // walked by the exact same key-0/even-odd machinery as any other
-    // Type, proven here rather than just claimed. Field-level
-    // interpretation (namespace at key 3, Hint name at key 5) is a
-    // standard-record-type-layer concern, out of scope for this crate -- this test only
-    // proves the mandatory core doesn't choke on or need to recognize it.
     let container = Container::parse(HEADER_CONTAINER).expect("valid container");
     let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
     assert_eq!(records.len(), 2);
 
-    assert_eq!(records[0].type_id, Some(Key::Uint(0)));
-    assert!(!records[0].aborted);
-    let namespace = find_value(records[0].map_bytes, 3).unwrap().unwrap();
+    assert_eq!(records[0].type_id(), Some(Key::Uint(0)));
+    assert!(!records[0].ignored);
+    let namespace = find_value(records[0].map_bytes, 1).unwrap().unwrap();
     assert_eq!(read_uint(namespace).unwrap(), 12271745624591856273u64);
 
-    assert_eq!(records[1].type_id, Some(Key::Uint(100)));
-    assert!(!records[1].aborted);
-    let ssid = find_value(records[1].map_bytes, 2).unwrap().unwrap();
+    assert_eq!(records[1].type_id(), Some(Key::Uint(100)));
+    assert!(!records[1].ignored);
+    let ssid = find_value(records[1].map_bytes, 0).unwrap().unwrap();
     assert_eq!(read_definite_string(ssid).unwrap(), b"SSID");
 }
 
 #[test]
 fn byte_string_type_id_routes_correctly() {
-    // §3.1's three-type classification: byte string value at key 0 is a
-    // decentralized/global Type ID. The Node prototype encodes it as
-    // {0: <byte_string>, ...} — key 0 is always uint 0, the value is the
-    // Type ID (which can be uint or byte string). The core routes it
-    // without interpreting the bytes — the caller resolves scope via their
-    // own namespace logic.
     let container = Container::parse(BYTE_STRING_TYPE_ID_CONTAINER).expect("valid container");
     let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
     assert_eq!(records.len(), 1);
     let rec = &records[0];
-    assert!(!rec.aborted);
-    match &rec.type_id {
+    assert!(!rec.ignored);
+    match &rec.type_id() {
         Some(Key::ByteString(bytes)) => {
             assert_eq!(bytes, &[0xa7, 0xf9, 0x0b, 0x3c]);
         }
         other => panic!("expected ByteString type_id, got {:?}", other),
     }
 
-    let payload = find_value(rec.map_bytes, 2).unwrap().unwrap();
+    let payload = find_value(rec.map_bytes, 0).unwrap().unwrap();
     assert_eq!(
         read_definite_string(payload).unwrap(),
         b"decentralized payload"
     );
+}
+
+#[test]
+fn backup_type_ids_are_accumulated_and_accessible() {
+    let container = Container::parse(BACKUP_TYPE_ID_CONTAINER).expect("valid container");
+    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
+    assert_eq!(records.len(), 1);
+    let rec = &records[0];
+    assert!(!rec.ignored);
+
+    // Primary type ID is the uint
+    assert_eq!(rec.type_id(), Some(Key::Uint(100)));
+    // Backup type ID is the byte string
+    let ids = rec.type_ids();
+    assert_eq!(ids.len(), 2);
+    match ids[1] {
+        Key::ByteString(bytes) => assert_eq!(bytes, &[0xa7, 0xf9, 0x0b, 0x3c]),
+        other => panic!("expected ByteString backup, got {:?}", other),
+    }
 }

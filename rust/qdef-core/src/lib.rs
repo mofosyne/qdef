@@ -1,44 +1,43 @@
 //! QDEF mandatory core: magic framing, CBOR-Sequence-of-Records walking,
-//! key-0 routing, the even/odd criticality rule (docs/QDEF-SPEC.md
-//! §2–§3.3). No knowledge of any specific Record Type, no compression,
-//! no reassembly — those live in a separate standard-record-type layer, not here, by
-//! design.
+//! typeID-prefix routing (§3.1), the even/odd criticality rule
+//! (docs/QDEF-SPEC.md §2–§3.3). No knowledge of any specific Record
+//! Type, no compression, no reassembly — those live in a separate
+//! standard-record-type layer, not here, by design.
+//!
+//! Every Record is a sequence of CBOR items terminating in a CBOR Map:
+//! one or more typeID items (uint or byte string) followed by zero or
+//! more unknown items (forward-compat padding), then the field Map as
+//! the record delimiter. The parser accumulates typeIDs in a contiguous
+//! run at the start, skips unknown items, and stops at the first Map.
 //!
 //! No version byte: the container is magic + a CBOR Sequence of Records,
 //! full stop. Container-level metadata (a format namespace) lives inside
-//! the Sequence itself as a Record with the reserved Type ID 0 — an
-//! ordinary Record, not special to this crate, since the mandatory core
-//! has no per-Type schema knowledge at all. A genuinely incompatible
-//! future change to that Record would be a new even/critical key on it,
-//! handled by the same even/odd criticality rule below, not by this
-//! crate.
+//! the Sequence itself, as a Record with the reserved Type ID 0 (see
+//! header.js in the Node prototype) — an ordinary Record, not a distinct
+//! wire structure. The mandatory core has no per-Type schema knowledge at
+//! all; Type 0 is routed and walked by the exact same machinery as any
+//! other Record.
 //!
 //! `no_std`, zero heap allocation, zero dependencies, and — thanks to
 //! §3.2's field-value-shape rule (Record field values are always a scalar
-//! or a definite-length string, never a bare array/map/tag) — zero
-//! recursion anywhere in this crate. Skipping a field this crate doesn't
-//! recognize is always exactly one bounded read, never a walk into nested
-//! structure. See `cbor::skip_value` and ../../docs/FINDINGS.md.
+//! or a definite-length string, never a bare array/map/tag) — the
+//! field-value skip is entirely recursion-free. Skipping unknown prefix
+//! items uses a bounded explicit stack (also zero allocation). See
+//! `cbor::skip_value`, `cbor::skip_any_item`, and ../../docs/FINDINGS.md.
 #![cfg_attr(not(test), no_std)]
 
 mod cbor;
 
 pub const MAGIC: [u8; 4] = *b"QDEF";
 
+/// Maximum number of typeIDs accumulated per Record.
+const MAX_TYPE_IDS: usize = 4;
+
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Error {
     TooShortForHeader,
     BadMagic,
     Cbor(cbor::Error),
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum AbortReason {
-    /// §3.1: a Record with no key 0 cannot be routed by any parser.
-    MissingKeyZero,
-    /// §3.1: an odd uint Type ID (key 0) without a declared namespace.
-    /// Odd uints are namespace-scoped; using one without a namespace is an error.
-    OddKeyWithoutNamespace,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -108,14 +107,8 @@ impl<'a> Iterator for Records<'a> {
             Err(e) => {
                 // A malformed CBOR item means we can no longer determine
                 // where it ends, so we can't safely resume the Sequence —
-                // unlike a well-formed-but-unroutable Record (missing key 0),
-                // which aborts only itself. See FINDINGS.md: the spec's
-                // "abort just that record" promise silently assumes the
-                // record is at least well-formed CBOR. A CBOR-tagged item is
-                // one such malformed case now: key 0 is the sole routing
-                // mechanism (§3.1), so a tag around a Record is no longer
-                // valid Record syntax at all — it's rejected here as "not a
-                // map", the same as any other malformed item.
+                // unlike a well-formed Record with no typeIDs (ignored),
+                // which skips only itself.
                 self.done = true;
                 Some(Err(e))
             }
@@ -123,75 +116,99 @@ impl<'a> Iterator for Records<'a> {
     }
 }
 
-/// A routed Record: which Type ID it claims (via key 0, §3.1's sole routing
-/// mechanism), and its raw map bytes for a Record-Type-specific handler
-/// (e.g. `check_criticality`, `find_value`) to inspect further.
+/// A routed Record: which Type IDs it claims (via the prefix items,
+/// §3.1's routing mechanism), and its raw map bytes for a
+/// Record-Type-specific handler (e.g. `check_criticality`,
+/// `find_value`) to inspect further.
 pub struct Record<'a> {
-    pub type_id: Option<cbor::Key<'a>>,
-    pub aborted: bool,
-    pub abort_reason: Option<AbortReason>,
+    /// The accumulated typeID keys from the record prefix (up to
+    /// `MAX_TYPE_IDS`; extras are silently dropped).
+    type_ids_buf: [cbor::Key<'a>; MAX_TYPE_IDS],
+    /// Number of valid entries in `type_ids_buf`.
+    type_id_count: usize,
+    /// True if no typeID was found before the map — the record is
+    /// unroutable and should be ignored by dispatch logic.
+    pub ignored: bool,
+    /// The field map bytes (from the map delimiter to the end of the
+    /// map). Empty slice if no map was found (incomplete record).
     pub map_bytes: &'a [u8],
 }
 
-fn parse_record(buf: &[u8]) -> Result<(Record<'_>, usize), Error> {
-    let (key0, map_len) = parse_map_key0(buf).map_err(Error::Cbor)?;
-    let map_bytes = &buf[..map_len];
+impl<'a> Record<'a> {
+    /// The first typeID, if any. This is the primary routing key.
+    pub fn type_id(&self) -> Option<cbor::Key<'a>> {
+        if self.type_id_count > 0 {
+            Some(self.type_ids_buf[0])
+        } else {
+            None
+        }
+    }
 
-    let (type_id, aborted, abort_reason) = match key0 {
-        None => (None, true, Some(AbortReason::MissingKeyZero)),
-        Some(key) => (Some(key), false, None),
-    };
+    /// All accumulated typeIDs (primary + backup).
+    pub fn type_ids(&self) -> &[cbor::Key<'a>] {
+        &self.type_ids_buf[..self.type_id_count]
+    }
+}
+
+fn parse_record(buf: &[u8]) -> Result<(Record<'_>, usize), Error> {
+    let mut pos = 0usize;
+    let mut type_ids_buf = [cbor::Key::Uint(0); MAX_TYPE_IDS];
+    let mut type_id_count = 0usize;
+
+    // Phase 1: accumulate typeIDs — contiguous run of uint/byte-string/text-string
+    // at the start of the record.
+    while pos < buf.len() {
+        // Peek at the head to check major type before fully parsing.
+        let head = cbor::read_head(&buf[pos..]).map_err(Error::Cbor)?;
+        if head.major == 0 || head.major == 2 || head.major == 3 {
+            // It's a typeID (uint or byte string). Parse the key.
+            let (key, len) = cbor::read_key(&buf[pos..]).map_err(Error::Cbor)?;
+            if type_id_count < MAX_TYPE_IDS {
+                type_ids_buf[type_id_count] = key;
+                type_id_count += 1;
+            }
+            pos += len;
+        } else {
+            break;
+        }
+    }
+
+    // Phase 2: skip non-map items until the map delimiter.
+    let mut map_bytes: &[u8] = &[];
+    while pos < buf.len() {
+        let head = cbor::read_head(&buf[pos..]).map_err(Error::Cbor)?;
+        if head.major == 5 {
+            // It's a map — the record delimiter.
+            let map_len = cbor::skip_any_item(&buf[pos..]).map_err(Error::Cbor)?;
+            map_bytes = &buf[pos..pos + map_len];
+            pos += map_len;
+            break;
+        } else {
+            // Not a map — skip it (forward-compat unknown item).
+            let skip_len = cbor::skip_any_item(&buf[pos..]).map_err(Error::Cbor)?;
+            pos += skip_len;
+        }
+    }
+
+    // Validate field-value-shape (§3.2): walk every field value to
+    // ensure it's skip-safe (scalar, definite string, or tag-wrapping-
+    // a-string). This catches disallowed shapes early, during parsing,
+    // so a well-formed-but-illegal Record never silently passes through.
+    if !map_bytes.is_empty() {
+        walk_map_pairs(map_bytes, |_k, _v| Ok(ControlFlow::Continue)).map_err(Error::Cbor)?;
+    }
+
+    let ignored = type_id_count == 0;
 
     Ok((
         Record {
-            type_id,
-            aborted,
-            abort_reason,
+            type_ids_buf,
+            type_id_count,
+            ignored,
             map_bytes,
         },
-        map_len,
+        pos,
     ))
-}
-
-fn parse_map_key0<'a>(buf: &'a [u8]) -> Result<(Option<cbor::Key<'a>>, usize), cbor::Error> {
-    let mut key0: Option<cbor::Key<'a>> = None;
-    let mut first = true;
-    let consumed = walk_map_pairs(buf, |k, v| {
-        if first {
-            first = false;
-            match k {
-                cbor::Key::Uint(0) => {
-                    // Key 0's value is the Type ID — a uint (even=standard,
-                    // odd=scoped) or a byte string (decentralized). Parse
-                    // the value to determine which.
-                    let head = cbor::read_head(v)?;
-                    match head.major {
-                        0 => {
-                            key0 = Some(cbor::Key::Uint(head.arg));
-                        }
-                        2 => {
-                            let len = head.arg as usize;
-                            let total = head.head_len + len;
-                            if v.len() < total {
-                                return Err(cbor::Error::UnexpectedEof);
-                            }
-                            key0 = Some(cbor::Key::ByteString(&v[head.head_len..total]));
-                        }
-                        _ => {
-                            key0 = Some(cbor::Key::Uint(0));
-                        } // malformed, caller will handle
-                    }
-                }
-                cbor::Key::ByteString(_) => {
-                    // Byte string as key itself (not key 0 with a byte string value)
-                    key0 = Some(k);
-                }
-                _ => {} // first key is not 0; key 0 absent
-            }
-        }
-        Ok(ControlFlow::Continue)
-    })?;
-    Ok((key0, consumed))
 }
 
 /// Applies the even/odd criticality rule (§3.2) to a Record's map bytes
@@ -208,10 +225,10 @@ pub fn check_criticality(
 ) -> Result<CriticalityOutcome, Error> {
     let mut aborted_on: Option<u64> = None;
     walk_map_pairs(map_bytes, |k, _v| {
-        // Key 0 is always skipped (it's the Type ID, not a field key).
-        // All non-zero keys in QDEF are uints (§3).
+        // All QDEF map keys are uints (§3). Key 0 is now a regular
+        // field key like any other — no special-case skip.
         if let cbor::Key::Uint(key) = k {
-            if key != 0 && !known_keys.contains(&key) {
+            if !known_keys.contains(&key) {
                 if key % 2 == 0 {
                     aborted_on = Some(key);
                     return Ok(ControlFlow::Stop);
@@ -248,12 +265,9 @@ pub fn find_value<'a>(map_bytes: &'a [u8], key: u64) -> Result<Option<&'a [u8]>,
     Ok(found)
 }
 
-/// Shared pair-walker used by key-0 routing, criticality checking, and
-/// field lookup alike — one generic "walk a CBOR map's key/value pairs"
-/// implementation instead of three near-duplicates. QDEF Record keys are
-/// always uints (§3), except key 0 which may also be a byte string (§3.1's
-/// three-type classification). A non-uint, non-byte-string key is treated
-/// as malformed.
+/// Shared pair-walker used by criticality checking and field lookup —
+/// one generic "walk a CBOR map's key/value pairs" implementation
+/// instead of two near-duplicates. QDEF Record keys are always uints (§3).
 fn walk_map_pairs<'a>(
     map_bytes: &'a [u8],
     mut visit: impl FnMut(cbor::Key<'a>, &'a [u8]) -> Result<ControlFlow, cbor::Error>,
@@ -308,7 +322,7 @@ pub fn read_uint(value_bytes: &[u8]) -> Result<u64, Error> {
     Ok(v)
 }
 
-/// Re-export the Key enum so callers can pattern-match on key 0's type.
+/// Re-export the Key enum so callers can pattern-match on typeID types.
 pub use cbor::Key;
 
 #[cfg(test)]

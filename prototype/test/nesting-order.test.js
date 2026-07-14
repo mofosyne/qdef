@@ -28,42 +28,35 @@ test('canonical order (Split outermost -> Encrypt -> plain) resolves via the gen
   const aesKey = crypto.randomBytes(32);
 
   const innerRecordBytes = core.encodeRecordBytes({
-    typeId: rt.PGP_BACKUP_TYPE,
-    fields: new Map([[2, secretKeyBytes]]),
+    typeIds: [rt.PGP_BACKUP_TYPE],
+    fields: new Map([[0, secretKeyBytes]]),
   });
-  const encryptFields = wrappers.encryptEncode(innerRecordBytes, aesKey);
-  const encryptRecordBytes = core.encodeRecordBytes({ typeId: wrappers.ENCRYPT_TYPE, fields: encryptFields });
-  const fragmentMaps = wrappers.splitEncode(encryptRecordBytes, { count: 3, parityScheme: wrappers.PARITY_SCHEME_XOR });
-  const codes = fragmentMaps.map((f) => core.encodeContainer([{ typeId: wrappers.SPLIT_TYPE, fields: f }]));
+  const { typeIds: encTypeIds, fields: encFields } = wrappers.encryptEncode(innerRecordBytes, aesKey);
+  const encryptRecordBytes = core.encodeRecordBytes({ typeIds: encTypeIds, fields: encFields });
+  const fragmentRecords = wrappers.splitEncode(encryptRecordBytes, { count: 3, parityScheme: wrappers.PARITY_SCHEME_XOR });
+  const codes = fragmentRecords.map((f) => core.encodeContainer([f]));
 
   const terminal = wrappers.resolveStack(codes, { aesKey }, KNOWN_KEYS_REGISTRY);
   assert.equal(terminal.typeId, rt.PGP_BACKUP_TYPE);
-  assert.ok(terminal.map.get(2).equals(secretKeyBytes));
+  assert.ok(terminal.map.get(0).equals(secretKeyBytes));
 });
 
 test('FINDING: a reversed, non-conformant order (Encrypt-per-code outermost, Split innermost) ALSO resolves cleanly', () => {
-  // This is exactly the order §4.1 says NOT to use ("Split must be
-  // outermost"). Built anyway, to check whether the generic resolver can
-  // tell the difference.
   const secretKeyBytes = crypto.randomBytes(80);
   const aesKey = crypto.randomBytes(32);
 
   const innerRecordBytes = core.encodeRecordBytes({
-    typeId: rt.PGP_BACKUP_TYPE,
-    fields: new Map([[2, secretKeyBytes]]),
+    typeIds: [rt.PGP_BACKUP_TYPE],
+    fields: new Map([[0, secretKeyBytes]]),
   });
-  // Split the PLAIN record first (Split innermost)...
-  const fragmentMaps = wrappers.splitEncode(innerRecordBytes, { count: 3, parityScheme: wrappers.PARITY_SCHEME_XOR });
-  // ...then encrypt each fragment individually, per code (Encrypt outermost).
-  const codes = fragmentMaps.map((fragMap) => {
-    const fragRecordBytes = core.encodeRecordBytes({ typeId: wrappers.SPLIT_TYPE, fields: fragMap });
-    const encField = wrappers.encryptEncode(fragRecordBytes, aesKey); // fresh nonce per fragment
-    return core.encodeContainer([{ typeId: wrappers.ENCRYPT_TYPE, fields: encField }]);
+  const fragmentRecords = wrappers.splitEncode(innerRecordBytes, { count: 3, parityScheme: wrappers.PARITY_SCHEME_XOR });
+  const codes = fragmentRecords.map((fragRec) => {
+    const fragRecordBytes = core.encodeRecordBytes({ typeIds: fragRec.typeIds, fields: fragRec.fields });
+    const { typeIds: encTypeIds, fields: encFields } = wrappers.encryptEncode(fragRecordBytes, aesKey);
+    return core.encodeContainer([{ typeIds: encTypeIds, fields: encFields }]);
   });
 
-  // No exception, no rejection: the resolver has no concept of "wrong
-  // order" — it just keeps unwrapping whatever wrapper Type ID it sees.
   const terminal = wrappers.resolveStack(codes, { aesKey }, KNOWN_KEYS_REGISTRY);
   assert.equal(terminal.typeId, rt.PGP_BACKUP_TYPE);
-  assert.ok(terminal.map.get(2).equals(secretKeyBytes));
+  assert.ok(terminal.map.get(0).equals(secretKeyBytes));
 });

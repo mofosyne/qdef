@@ -23,7 +23,8 @@
 // --width lets you pick the output byte width. Without it, 4 and 8 are shown.
 
 const crypto = require('crypto');
-const { MIN_BYTE_LENGTH } = require('../src/typeHint');
+
+const MIN_BYTE_LENGTH = 2;
 
 function deriveHashId(name, byteWidth) {
   if (byteWidth < MIN_BYTE_LENGTH) {

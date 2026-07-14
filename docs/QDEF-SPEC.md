@@ -26,14 +26,14 @@ it wants to recognize is one more heuristic bolted onto that guesswork, a
 list that only grows and never gets more reliable, because nothing in the
 payload itself ever says what it is. NDEF sidestepped this for NFC decades
 ago with its MIME-type/TNF field; QR never had the equivalent, so readers
-inherited the sniffing problem instead. QDEF's magic header plus key-`0`
-Type-ID routing (§3) gives byte-mode QR that same explicit, extensible
-dispatch — a reader checks one field instead of accumulating heuristics.
+inherited the sniffing problem instead. QDEF's magic header plus prefix-based Type-ID routing (§3) gives byte-mode
+QR that same explicit, extensible dispatch — a reader checks a few prefix
+items instead of accumulating heuristics.
 
 QDEF is meant to be adopted by unrelated applications with no shared
 history — a Wi-Fi provisioning sticker, an event ticket, a passphrase-
 protected key backup spread across several printed codes (worked example in
-§8) are all equally valid uses. It is not tied to, and does not assume
+§7) are all equally valid uses. It is not tied to, and does not assume
 familiarity with, any particular application.
 
 ## 1. Abstract & Philosophy
@@ -47,7 +47,7 @@ uints, and strings.
 QDEF is deliberately two things, not one:
 
 - A minimal **core format** (§3): magic framing, a CBOR Sequence of
-  Records, Type-ID routing via a plain map key, and a per-key criticality
+  Records, prefix-based Type-ID routing, and a per-key criticality
   rule. A parser that only implements this can route or skip any Record
   without knowing anything else about it.
 - A separate, optional **standard library** (§4): reusable building blocks
@@ -68,7 +68,7 @@ recognition job QDEF's magic header exists for (§2); wrapping adds only
 redundant bytes with nothing to show for them. QDEF earns its place on
 carriers with **no pre-existing dispatch**: plain byte-mode QR with no URI
 at all, or an NDEF payload with no app-specific MIME type already routing
-it. §8's PGP-key-backup example is exactly this case — those codes are only
+it. §7's PGP-key-backup example is exactly this case — those codes are only
 ever scanned by one app, never clicked or typed, so there's no scheme to
 lean on instead.
 
@@ -91,6 +91,24 @@ CBOR decoder fed arbitrary byte chunks).
 +----------------------+----------------------------------+
 ```
 
+A minimal Record is at minimum a typeID prefix (uint or byte string) followed
+by a flat field Map:
+
+```
++---------------------------+-------------------------------+
+|  typeID prefix (1+ items) |   field Map (CBOR map)        |
++---------------------------+-------------------------------+
+|  100                      |  { 0: "SSID", 2: 2 }         |
++---------------------------+-------------------------------+
+```
+
+The map acts as the record delimiter in the Sequence — the parser knows a
+Record ends when it reaches the first Map. Additional prefix items may
+follow the primary typeID (backup IDs for transitional routing, §3.1), and
+unknown items may appear between typeIDs and the map (forward-compat
+padding for future QDEF evolution), but the minimum viable Record is just
+typeID + map.
+
 For NFC, the magic prefix is redundant: NDEF's own MIME-type field already
 identifies the payload. An NDEF record carrying QDEF content uses MIME type
 `application/vnd.qdef` with just the CBOR Sequence of Records as the
@@ -101,73 +119,69 @@ any higher-level dispatch exists to tell it what it's looking at.
 decodes through the exact same Record-routing logic as the full
 container.)
 
-**No version byte, deliberately.** An earlier draft had one, gating the
-interpretation of everything after it — but that design forces a hard,
-global "I cannot safely interpret any of this" failure for *any* future
-change to the container, however small, since a decoder has no way to
-know in advance which changes a version bump will cover. §3.2's even/odd
-criticality rule already provides graceful, *local* forward compatibility
-for ordinary Record evolution — new Record Types are skipped, new odd
-keys are ignored, new even keys abort only the one Record that has them.
-The only thing a version byte still gave beyond that was safety for
-changes to the container's own outermost framing — and even that need is
-now covered without one: see §3.5 (Record Type `0`, the container's
-namespace/header mechanism), which extends exactly the same even/odd
-tools inward, rather than needing a separate, cruder all-or-nothing gate
-around them.
+**No version byte.** §3.2's even/odd criticality rule already provides
+local forward compatibility; see [DESIGN.md](DESIGN.md#container-framing-choices)
+for why an earlier draft's version byte was removed.
 
-**Deliberately no record count or total payload size in the header** —
-suggested more than once as a natural addition to a binary header, and
-deliberately left out. Either field would require an encoder to know its
-final size before writing the header, and a decoder to trust a value that
-duplicates information already recoverable by walking the Sequence, adding
-a way for the two to disagree with no benefit: the entire point of a CBOR
-*Sequence* over a wrapping array (above) is that a Record's presence is
-self-delimiting and a constrained parser can stream through Records one at
-a time without ever needing to know the total count up front. A count/size
-field would sit unused by that parser and be one more thing a fuzzer or a
-malformed input could make lie.
+**No record count or total payload size in the header.** A CBOR Sequence
+is self-delimiting; see [DESIGN.md](DESIGN.md#container-framing-choices)
+for why these fields were deliberately left out.
 
 ## 3. The Record Architecture
 
-Every Record is a CBOR Map, one level deep, no more — a flat set of
-key/value pairs and nothing else. Using §5's Wi-Fi Record (Type `100`) as
-the example (this is where §3.2's even/odd rule and field-value-shape rule
+Every Record is a sequence of CBOR items terminated by a CBOR Map — one or
+more typeID prefix items (uint or byte string), zero or more unknown items
+(forward-compat padding for future QDEF evolution), then a flat field Map
+as the record delimiter. Using a Wi-Fi Record (Type `100`, see
+[EXAMPLES.md](EXAMPLES.md)) as the
+example (this is where §3.2's even/odd rule and field-value-shape rule
 apply — the "Type" column below is never array, map, or tag, by that
 rule):
 
 ```
+Prefix: 100                                  // typeID (uint 100)
+
+Map:
 +-----+------------------------+-------+----------+-----------------------------+
 | Key | Value                  | Type  | Even/Odd | If unrecognized             |
 +-----+------------------------+-------+----------+-----------------------------+
-| 0   | 100                    | uint  | even     | n/a -- always required      |
-| 2   | "My Coffee Shop"       | text  | even     | CRITICAL: abort Record      |
-| 4   | "guest123"             | text  | even     | CRITICAL: abort Record      |
-| 6   | 2                      | uint  | even     | CRITICAL: abort Record      |
-| 3   | true                   | bool  | odd      | OPTIONAL: silently ignored  |
+| 0   | "My Coffee Shop"       | text  | even     | CRITICAL: abort Record      |
+| 2   | "guest123"             | text  | even     | CRITICAL: abort Record      |
+| 4   | 2                      | uint  | even     | CRITICAL: abort Record      |
+| 1   | true                   | bool  | odd      | OPTIONAL: silently ignored  |
 +-----+------------------------+-------+----------+-----------------------------+
 ```
 
-Every Record — a plain content Record like this one or a standard record type Wrapper
-Record (§4.1) — has exactly this shape: a flat Map, and field values that
-are always scalar-or-string, never structure to walk into. That fixed
-shape is what §3.3 means by "a conformant core parser never needs
-recursion at all."
+Every Record — a plain content Record like this one or a standard record
+type Wrapper Record (§4.1) — has exactly this shape: prefix typeIDs
+followed by a flat Map, and field values that are always scalar-or-string,
+never structure to walk into. That fixed shape is what §3.3 means by "a
+conformant core parser never needs recursion at all."
 
-### 3.1 Record Type ID (Key 0) and Type Hint (Key 1)
+The parser uses a two-phase loop to find each Record's boundaries:
+Phase 1 accumulates contiguous typeID items (uint or byte string) at the
+start of the Record. Phase 2 skips any non-map items (forward-compat
+padding) until it reaches the first Map, which serves as the record
+delimiter.
 
-The Record Map MUST contain Key `0` (uint or byte string), the Record
-Type ID. This is the *only* routing mechanism — a parser reads `map[0]` to
-decide what kind of Record it's looking at, or to skip a Record it doesn't
-recognize. Key `0` is even, and is always critical: a Record with no key
-`0` cannot be routed at all and MUST be treated as an abort of that Record
-(§3.2's critical-key failure mode).
+### 3.1 Record Type ID (prefix items) and Backup Type IDs
 
-The value's CBOR major type determines its classification:
+Every Record begins with one or more typeID prefix items — a contiguous
+run of uint (major type 0) or byte string (major type 2) items at the
+start of the Record, before the field Map. The first typeID is the
+*primary* routing key; any subsequent typeIDs are *backup* IDs carried for
+transitional routing (see below).
+
+The parser reads these prefix items to decide what kind of Record it's
+looking at, or to skip a Record it doesn't recognize. A Record with no
+typeID prefix items before the map cannot be routed at all and MUST be
+marked as ignored (§3.2's well-formed-but-unroutable case).
+
+The primary typeID's CBOR major type determines its classification:
 
 ```
 +------------------+-------------------+------------------+-----------------------+
-| Key 0 CBOR type  | Classification    | Scope            | Meaning               |
+| typeID CBOR type | Classification    | Scope            | Meaning               |
 +------------------+-------------------+------------------+-----------------------+
 | uint, even       | Standard record   | Always global    | Registered standard   |
 |                  | type              |                  | mechanism or content  |
@@ -182,6 +196,10 @@ The value's CBOR major type determines its classification:
 | (major type 2)   | random ID         |                  | byte length is the    |
 |                  |                   |                  | truncation choice     |
 +------------------+-------------------+------------------+-----------------------+
+| text string      | Named ID          | Always global    | Human-readable ID;    |
+| (major type 3)   | (reserved for     |                  | collision safety from |
+|                  | future use)       |                  | name uniqueness       |
++------------------+-------------------+------------------+-----------------------+
 ```
 
 Even uints are always globally interpreted regardless of any declared
@@ -192,25 +210,49 @@ Protocol Buffers, and HTTP where infrastructure mechanisms stay globally
 interpretable. Odd uints require a declared namespace; without one, the
 Record MUST be treated as an abort. Byte string IDs are always global —
 collision safety comes from the byte length the developer chose, not from
-a namespace.
+a namespace. Text string IDs are reserved for future use as
+human-readable, self-describing typeIDs — a parser MUST treat them as
+valid prefix items (same as uints and byte strings) but no registration
+scheme for them is defined yet.
+
+**TypeID form boundary.** Only CBOR major types 0, 2, and 3 are valid
+typeID forms — simple, self-delimiting items a parser can skip with zero
+recursion. Major types 1 (negative int), 4 (array), 5 (map), 6 (tag),
+and 7 (simple/float) are not valid typeIDs: they either lack a clear use
+case over the existing forms, violate the skip-safe principle, or don't
+make sense as identifiers. A future revision could only add a new major
+type if it preserved the zero-recursion skip guarantee.
 
 **Note on even/odd vocabulary reuse.** The even/odd convention also
 appears in §3.2 for map *keys* (critical vs. optional). The two
-conventions apply to different axes — map keys vs. key `0`'s *value* —
-and never overlap in practice: key `0` is always even, and its value's
-parity determines the ID classification above. A parser checking whether
-a *key* is critical never looks at key `0`'s *value* parity, and a
-parser classifying the Type ID never looks at other keys' parity. Both
+conventions apply to different axes — map keys vs. typeID *values* —
+and never overlap in practice. A parser checking whether a *key* is
+critical never looks at a typeID's *value* parity, and a parser
+classifying the Type ID never looks at field keys' parity. Both
 follow the same mnemonic (even = safe/default, odd = conditional/special)
 applied at different layers.
 
 An earlier draft also wrapped the Record Map in a CBOR semantic Tag
-matching the Type ID, as a second, redundant routing path for tag-aware
-CBOR libraries. That mechanism has been removed — see
-[DESIGN.md's "CBOR tag-number collision"](DESIGN.md#cbor-tag-number-collision-resolved--the-tag-route-was-removed)
-and FINDINGS.md #11 for why. Key `0` was never part of the problem — this
-simplification costs nothing: every prototype test already routed through
-key `0` alone.
+matching the Type ID as a redundant routing path. That mechanism has been
+removed; see [DESIGN.md](DESIGN.md#cbor-tag-routing--removed) and
+FINDINGS.md #11 for why. The prefix-based typeID mechanism is sufficient on
+its own.
+
+**Backup Type IDs for transitional routing.** When a Record Type's
+primary typeID is promoted from a byte string to a registered uint, older
+decoders that only recognize the byte string ID can still find it: the
+encoder carries the old byte string as a second (or subsequent) prefix
+item alongside the new uint primary. The parser accumulates all prefix
+typeIDs into a contiguous run; a decoder that recognizes any one of them
+can route the Record. Once the transitional window passes, the backup
+items can be dropped — they are never required, just a bridge.
+
+```
+Prefix: 100, h'A7F90B3C'    // primary uint 100 + backup byte string
+```
+
+A Record never needs more than a handful of prefix typeIDs; the parser
+silently drops any beyond `MAX_TYPE_IDS` (recommended: 4).
 
 **Implementer caution for byte string Type IDs:** a byte string Type ID
 MUST be a definite-length CBOR byte string (major type 2), never
@@ -233,59 +275,15 @@ Node prototype had exactly this bug for its entire history, undetected
 because none of its own worked examples ever used a Type ID large enough
 to trigger it. See FINDINGS.md #14.
 
-**Key `1` (odd, OPTIONAL) is reserved, globally, as the Type Hint.** Unlike
-every other key besides `0`, key `1`'s meaning is fixed across *every*
-Record Type, not defined per-Type — because its purpose only works if a
-reader with zero prior knowledge of a specific Type's schema can still find
-it. It carries "the other identity" of this Record Type, and its CBOR
-shape depends on which identity key `0` currently holds:
-
-- If `key 0` is a **byte string** (decentralized/random, §9 — self-
-  assigned, no registry involved), `key 1`, if present, is a **text
-  string**: a human-readable name the original author chose for this Type
-  (e.g. a reverse-domain string). This lets a future registry curator, or
-  anyone who finds a stray code, recover intent even if the original
-  author is unreachable — the "the ID means nothing without a working
-  registry lookup" failure mode this tier is otherwise exposed to.
-- If `key 0` is a **uint, even** (standard record type, came through
-  registration, however informal), `key 1`, if present, is a **byte
-  string**: the decentralized ID this Type was previously known by (from
-  before promotion to a standard number). A reader built *before* the
-  promotion happened — and so only recognizes the old byte string ID —
-  can still route the Record by checking `key 1` against its own known-ID
-  table when `key 0` itself comes back unrecognized.
-- If `key 0` is a **uint, odd** (scoped), `key 1` semantics are the same
-  as the standard case — a byte string legacy pointer for transitional
-  routing.
-
-A Record never needs both forms at once: the name matters before
-promotion, the legacy-ID pointer matters only for a transitional window
-after it, and the full history (name ↔ old ID ↔ new ID) is expected to
-live in registry documentation, not persist in every future-minted code.
-Key `1` MUST stay odd/optional — it is pure metadata a reader is always
-free to ignore; routing MUST always happen through key `0` alone, never
-key `1`.
-
-This type-polymorphism (uint, byte string, or text string, depending on
-context) doesn't cost the mandatory core anything: a parser skipping an
-unrecognized odd key never inspects its shape at all (§3.2's
-field-value-shape rule already requires it to be skip-safe either way).
-Only a reader that specifically wants to *interpret* key `1` needs to
-branch on its CBOR major type, and that's opportunistic tooling, not the
-baseline parser.
-
-Folding this hint into key `0` itself instead of reserving key `1` was
-considered and rejected — see
-[DESIGN.md's "Type Hint (Key 1)"](DESIGN.md#type-hint-key-1-folding-into-key-0-instead--considered-rejected)
-for why.
-
 **Optional, self-certifying strengthening (not required):** a
 decentralized Type ID MAY be derived as a truncated hash of its own
-`key 1` name string rather than pure randomness. This upgrades the name
+Hint name string rather than pure randomness. This upgrades the name
 from an unverifiable claim into something anyone can independently check —
-recompute the hash, compare to `key 0` — without trusting a registry or a
+recompute the hash, compare to the typeID — without trusting a registry or a
 possibly-unreachable original author, the same "hash as proof" instinct
-already behind `group_id` (§4.1) and the Sign coverage scheme (§9).
+already behind `group_id` (§4.1) and the Sign coverage scheme (§8).
+The Hint name is carried as a subsequent prefix item (backup typeID) or
+inside the field map at an odd/optional key, depending on context.
 
 **The derivation algorithm is pinned, not left as "hash(name)" with
 implementation-defined details** — "anyone can independently check" is
@@ -324,8 +322,8 @@ Recommended truncation lengths:
 +-------------+------------------+---------------------------------------+
 ```
 
-**Note:** These recommendations apply to Record Type IDs (key `0`).
-Namespace IDs (Type `0`, key `3`) are the global root of trust for all
+**Note:** These recommendations apply to Record Type IDs (prefix items).
+Namespace IDs (Type `0`, key `1`) are the global root of trust for all
 scoped IDs within a container — two unrelated namespaces with the same
 ID would cause all their scoped Type IDs to collide. Namespace IDs MUST
 therefore use at least 4 bytes; 8 bytes is recommended for maximum safety.
@@ -353,7 +351,7 @@ draw" property the whole mechanism depends on — an unqualified word
 does not have that property no matter how good the hash function is.
 
 This matters most exactly where nothing else already protects the
-value: a *namespace's* own Hint name (§3.5's key `5`) and a *standalone*
+value: a *namespace's* own Hint name (§3.5's key `3`) and a *standalone*
 decentralized Type ID's Hint name (no namespace declared at all).
 A Record-Type-local Hint name used *within* an already-declared
 namespace doesn't need this — collision-safety there already comes from
@@ -361,8 +359,9 @@ the namespace itself (§3.5), so a bare, unqualified local name is fine.
 
 No version marker is needed to record whether a given ID used this
 convention: verification is opportunistic — if the hash matches, the
-binding is confirmed; if it doesn't, `key 1` simply degrades to a plain,
-unverified label, exactly as if this convention weren't in use at all.
+binding is confirmed; if it doesn't, the Hint name simply degrades to a
+plain, unverified label, exactly as if this convention weren't in use at
+all.
 
 Prototyped in `prototype/src/typeHint.js` (round-trip, opportunistic
 verify, and graceful degradation on both a non-hash-derived ID and a
@@ -370,29 +369,28 @@ non-string hint all pass — see `prototype/test/type-hint.test.js`). That
 same test file locks in a real bug this exact underspecification caused:
 an earlier version of this prototype always truncated to 4 bytes
 regardless of the candidate ID's actual width, silently unable to verify
-any 64-bit-class ID — exactly the width §9 itself recommends and a real
+any 64-bit-class ID — exactly the width §8 itself recommends and a real
 adopter, TagDrop, actually uses. See FINDINGS.md #21.
 
 **Encoder etiquette (SHOULD, not required):** many optical codes are
 quantized into fixed-capacity classes (a QR Version's byte budget at a
 given error-correction level); when the payload doesn't fill that budget
-anyway, encoders SHOULD spend the otherwise-wasted bytes on key `1` rather
-than leave them as padding — the marginal cost is zero, and it's what
-makes decentralized Type IDs inferable at scale over time (via field
+anyway, encoders SHOULD spend the otherwise-wasted bytes on Hint names
+rather than leave them as padding — the marginal cost is zero, and it's
+what makes decentralized Type IDs inferable at scale over time (via field
 telemetry correlating observed IDs to observed Hints) even with no
 registry coordinating any of it.
 
 ### 3.2 The Extensibility Rule (Even/Odd Keys)
 
 Borrowed from PNG's critical/ancillary chunk convention. Note: this even/odd
-rule applies to *map keys* only, not to key `0`'s *value* — see §3.1 for
-the even/odd classification of Type ID values, which is a separate
-convention on a separate axis.
+rule applies to *map keys* only, not to a typeID prefix item's *value* —
+see §3.1 for the even/odd classification of Type ID values, which is a
+separate convention on a separate axis.
 
 - **Even keys are CRITICAL.** An unrecognized even-numbered key MUST cause
   the parser to abort processing *that record* (not the whole stream —
-  other records in the same Sequence are unaffected). Key `0` is even, and
-  is always critical.
+  other records in the same Sequence are unaffected).
 - **Odd keys are OPTIONAL.** An unrecognized odd-numbered key MUST be
   silently ignored; the rest of the record still processes normally.
 
@@ -420,7 +418,7 @@ For example, a field carrying a list of supported Wi-Fi channel numbers
 (`[1, 6, 11]`) MUST NOT appear as a bare array:
 
 ```
-9: [1, 6, 11]                     // INVALID — bare array (major type 4)
+7: [1, 6, 11]                     // INVALID — bare array (major type 4)
 ```
 
 It MUST instead be pre-encoded as CBOR and carried as an opaque byte
@@ -428,7 +426,7 @@ string — the outer decoder skips it as 4 bytes at a known length, never
 looking inside:
 
 ```
-9: h'8301060b'                    // VALID — pre-encoded [1, 6, 11],
+7: h'8301060b'                    // VALID — pre-encoded [1, 6, 11],
                                    //   opaque to the outer decoder
 ```
 
@@ -438,25 +436,20 @@ schema (both encode the identical 4 payload bytes; the tag only adds a
 2-byte marker in front):
 
 ```
-9: 24(h'8301060b')                // VALID and self-describing — tag 24
+7: 24(h'8301060b')                // VALID and self-describing — tag 24
                                    //   (0xd818) + a 4-byte string
                                    //   (0x8301060b), 7 bytes total
 ```
 
-This isn't a style preference: determining a field's length ordinarily
-requires walking into its structure (an array's or map's true byte length
-isn't known until every element inside it has been walked, recursively for
-nested structure), which is an unbounded-recursion hazard on a target with
-only a few KB of stack. A byte or text string's length, by contrast, is
-always stated directly in its own head — skipping one is pure cursor
-arithmetic, never a walk. Restricting every field value to that shape means
-a conformant core parser never needs to recurse *at all* to skip a field it
-doesn't recognize — not "recursion bounded by a depth guard," but no
-recursion, structurally. A tag doesn't cost that guarantee, *provided* its
-content is checked to be a definite-length string directly rather than
-assumed: skipping one is exactly two fixed header reads in sequence —
-never a third, since nesting is rejected outright rather than walked — not
-a call back into whatever skipped the tag in the first place.
+This restriction exists because determining a field's length ordinarily
+requires walking into its structure — an unbounded-recursion hazard on
+constrained targets. A byte or text string's length is always stated
+directly in its own head, so skipping one is pure cursor arithmetic. A tag
+doesn't cost that guarantee, *provided* its content is checked to be a
+definite-length string directly: skipping one is exactly two fixed header
+reads in sequence — never a third, since nesting is rejected outright. See
+[DESIGN.md](DESIGN.md#field-value-shape-rule--rationale) for the full
+rationale.
 
 **Any tag number is allowed here, not just one** — a deliberate widening
 from an earlier draft that permitted only tag `24` (see FINDINGS.md #15
@@ -476,7 +469,7 @@ their own definition (dates, URIs, UUIDs, regex, bignums, base64/base16
 conversion hints, typed numeric arrays wire-encoded as byte strings) are
 usable directly. This also means QDEF isn't repurposing tag numbers as a
 private enumeration space the way the old CBOR-tag routing mechanism did
-(§9's "CBOR tag-number collision," now DESIGN.md) — it's letting Record
+(§8's "CBOR tag-number collision," now DESIGN.md) — it's letting Record
 authors use real, IANA-standardized tags for their intended purpose
 (annotating a field's actual semantic meaning), not inventing a QDEF-
 specific interpretation of any number. It's also genuinely useful beyond
@@ -489,7 +482,7 @@ in [`rust/qdef-core`](../rust/qdef-core); see FINDINGS.md.)
 guarantee assumes the Record is at least well-formed CBOR *and* obeys the
 field-value-shape rule above — a parser needs to determine the Record's
 byte length to find where the next Record starts. A Record that fails to
-route (missing key `0`, §3.1) is still well-formed and isolable this way. A Record that is malformed CBOR, or
+route (no typeIDs in prefix, §3.1) is still well-formed and isolable this way. A Record that is malformed CBOR, or
 whose bytes violate the field-value-shape rule (a bare array/map/tag as a
 field value), is a stronger failure in both cases: the parser can no longer
 determine that boundary and cannot safely resume the Sequence at all.
@@ -503,7 +496,7 @@ implementer has to bring a compression library or sector-reassembly logic
 just to support the *container*:
 
 - **Core QDEF parser (mandatory, all implementers):** verify magic, walk
-  the CBOR Sequence, read each Record's `map[0]` to route or skip it,
+  the CBOR Sequence, read each Record's prefix typeIDs to route or skip it,
   apply the even/odd rule (§3.2) to unrecognized keys. That's the entire
   surface area — no compression, no multi-code state, no knowledge of any
   specific Record Type's fields (including Type `0`, §3.5 — the core
@@ -518,10 +511,11 @@ just to support the *container*:
 
 Because of §3.2's field-value-shape rule, a conformant core parser never
 needs recursion at all to do its job — not bounded recursion, none. A
-Record is always exactly `Map → (scalar | definite-length string)*`: one
-flat level, walked once. Skipping a field whose key isn't recognized, or
-an entire Record whose Type ID isn't recognized, is always a direct read
-or a cursor-arithmetic jump, never a walk into unbounded structure. A conformant core parser SHOULD still reject a Record outright
+Record is always exactly `(typeIDs)* → Map → (scalar | definite-length string)*`:
+prefix items followed by one flat map level, walked once. Skipping a field
+whose key isn't recognized, or an entire Record whose Type ID isn't
+recognized, is always a direct read or a cursor-arithmetic jump, never a
+walk into unbounded structure. A conformant core parser SHOULD still reject a Record outright
 (rather than attempt to interpret it) the instant it encounters a field
 value that violates the shape rule, since by definition that value's true
 length can't be determined without doing the recursive walk the rule exists
@@ -544,7 +538,7 @@ never affects whether `map[N]` is findable — §3's Record Map is a
 CBOR map, not something position-dependent). The rule exists for a
 narrower, specific reason: anywhere QDEF hashes a Record's bytes for
 content-addressing (§4.1's `group_id`, and any future Sign mechanism,
-§9), that hash is only meaningful as "same logical content" across
+§8), that hash is only meaningful as "same logical content" across
 independent tools if those tools agree on what bytes "the same logical
 content" produces in the first place. Two conformant encoders handed
 identical field values but disagreeing on integer width or map key order
@@ -569,8 +563,8 @@ Record Type `0` is reserved for container-level metadata — currently just
 a format namespace, for a QDEF-based file format that wants a fast,
 early "what kind of file is this" identifier, RIFF's form-type
 (`WAVE`/`AVI `) being the closest existing analogue. It is an ordinary
-Record, not a distinct wire structure: same key-`0` routing, same
-even/odd criticality (§3.2), same canonical encoding (§3.4). No new
+Record, not a distinct wire structure: same prefix-based typeID routing,
+same even/odd criticality (§3.2), same canonical encoding (§3.4). No new
 parsing concept exists for it, and the mandatory core (§3.3) needs zero
 special-cased knowledge of Type `0` to route or skip it correctly.
 
@@ -584,8 +578,9 @@ slot broken out:
 |  (4 bytes) |   container-level metadata,  |   ordinary content,        |
 |            |   MUST be first if present   |   exactly as before        |
 +------------+-----------------------------+-----------------------------+
-|   "QDEF"   |  { 0:0, 3:<namespace>,       |                             |
-|            |    5:<Hint name> }           |                             |
+|   "QDEF"   |  Prefix: 0                  |                             |
+|            |  Map: { 1:<namespace>,       |                             |
+|            |        3:<Hint name> }       |                             |
 +------------+-----------------------------+-----------------------------+
              \_____________________________________________________/
                     still one CBOR Sequence — Type `0` is an
@@ -594,24 +589,24 @@ slot broken out:
 
 That's the useful mental model, not the literal wire shape: nothing
 marks this slot as special at the byte level, and a decoder finds it the
-same way it finds any Record — by decoding the first Sequence item and
-checking its `map[0]`. The "slot" is a consequence of the MUST-be-first
+same way it finds any Record — by reading the first prefix typeID and
+checking it. The "slot" is a consequence of the MUST-be-first
 rule below, not a distinct structure the format defines.
 
 ```
 Type 0: {                            // Container Header (standard record type)
-  0: 0,                              // CRITICAL: fixed, this is what
-                                      //   makes it the header
-  3: h'663c1cf2',                    // OPTIONAL: format namespace, a
+  // prefix typeID: 0               // the typeID makes it the header
+  // field map:
+  1: h'663c1cf2',                    // OPTIONAL: format namespace, a
                                       //   uint or byte string (same
                                       //   convention as §3.1's Type IDs
                                       //   — see below). Byte string
                                       //   namespace IDs MUST be 4+ bytes
                                       //   (they are the global root of
                                       //   trust for all scoped IDs)
-  5: "com.example/tagdrop-paper"     // OPTIONAL: recoverable name for
-                                      //   the namespace, Type Hint's
-                                      //   exact pattern (§3.1)
+  3: "com.example/tagdrop-paper"     // OPTIONAL: recoverable name for
+                                      //   the namespace, same pattern as
+                                      //   §3.1's hash-derivation hint
 }
 ```
 
@@ -644,11 +639,9 @@ developer chose. However, namespace IDs are the global root of trust:
 two unrelated namespaces with the same byte string ID would cause all
 their scoped Type IDs to collide. Byte string namespace IDs MUST
 therefore be at least 4 bytes; 8 bytes is recommended for maximum
-safety. Key `5`'s Hint name plays Type Hint's exact role (§3.1),
-including the same optional, opportunistic self-certifying strengthening
-and the same pinned algorithm (§3.1's SHA-256/UTF-8/truncated-byte-string
-definition — reused exactly, not a second hash convention that happens to
-look similar). Prototyped in `prototype/src/header.js`'s
+safety. Key `3`'s Hint name plays the same self-certifying strengthening
+role as §3.1's hash-derivation hint (pinned algorithm, opportunistic
+verify). Prototyped in `prototype/src/header.js`'s
 `verifyNamespaceHint`, which calls the same `typeHint.js` derivation
 rather than reimplementing it.
 
@@ -679,7 +672,7 @@ pre-allocated in advance.
 Type IDs always stay globally, absolutely interpreted regardless of any
 declared namespace — standard record type mechanisms (§4: a generic tool
 must still be able to unwrap Split/Compress/Encrypt and recognize App
-Route inside a namespaced file) *and* registered content types (§9's
+Route inside a namespaced file) *and* registered content types (§8's
 Registry governance). This is deliberate and matches the universal
 pattern across CBOR, XML, NDEF, Protocol Buffers, and HTTP where
 infrastructure mechanisms stay globally interpretable — see
@@ -719,9 +712,8 @@ an abort of that Record — this is stricter than the current even-uint
 fallback, and deliberately so: a wrong match is worse than a clean miss.
 
 **This is Record-Type-interpretation-specific handling (§3.3's optional
-tier), not a mandatory-core requirement — the same category Type Hint's
-own dual-mode key `1` already sits in.** The mandatory core is
-unaffected: it still just reads `map[0]` to route or skip, with zero
+tier), not a mandatory-core requirement.** The mandatory core is
+unaffected: it still just reads prefix typeIDs to route or skip, with zero
 knowledge of namespaces, exactly as validated today (`rust/qdef-core`
 needs no Type-`0`-specific code at all). The correctness obligation
 falls on any decoder that implements specific semantics for *any*
@@ -766,9 +758,39 @@ code of its own.
 **Standard record type IDs:** even numbers `2`–`98` are reserved for
 these standard record types, maintained alongside the QDEF spec itself.
 Even numbers `100` and above are open for applications to register their
-own domain-specific Record Types (§5's examples) — who governs *that*
-allocation is still open (§9), but at least the two registries are
+own domain-specific Record Types ([EXAMPLES.md](EXAMPLES.md)) — who governs *that*
+allocation is still open (§8), but at least the two registries are
 partitioned by construction and can't collide.
+
+**Type ID allocation ranges** (adapted from CBOR's tag registry pattern,
+RFC 8949 §9.2):
+
+```
++----------------+----------+----------------------------------------------+
+| Range          | Even/Odd | Purpose & governance                         |
++----------------+----------+----------------------------------------------+
+| 0              | even     | Container header (§3.5) — reserved           |
+| 2–22           | even     | Standards Action — Wrapper Records and other  |
+|                |          | standard record type infrastructure,         |
+|                |          | spec-maintained                              |
+| 24–98          | even     | Specification Required — standard record     |
+|                |          | types reserved for future use                |
+| 100–32767      | even     | Specification Required — common vocabulary,  |
+|                |          | reviewed application-specific types          |
+| 32768+         | even     | First Come First Served — self-allocated     |
+| odd uints      | odd      | Namespace-scoped only (§3.5) — requires      |
+|                |          | declared namespace, abort otherwise          |
+| byte strings   | —        | Decentralized — always global, collision     |
+|                |          | safety from byte length (§3.1)               |
+| text strings   | —        | Named IDs — reserved for future use as       |
+|                |          | human-readable typeIDs (§3.1)                |
++----------------+----------+----------------------------------------------+
+```
+
+Byte string IDs are always global regardless of number; they provide
+collision safety from byte length, not from registry position. Text
+string IDs are recognized as valid prefix items by parsers but have no
+registration scheme defined yet.
 
 ### 4.1 Wrapper Records (optional)
 
@@ -787,8 +809,9 @@ Reserved Wrapper Type IDs (placeholders, pending a real registry):
 
 ```
 Type 2: {                    // Split
-  0: 2,
-  2: h'<group_id>',          // CRITICAL: content-addressed (a hash of the
+  // prefix typeID: 2
+  // field map:
+  0: h'<group_id>',          // CRITICAL: content-addressed (a hash of the
                               //   full reassembled bytes) — never an issued
                               //   serial, so no coordination is needed
                               //   between independent encoders (relies on
@@ -797,34 +820,36 @@ Type 2: {                    // Split
                               //   decoder MUST recompute this hash after
                               //   reassembly and reject a mismatch — it
                               //   doubles as the group's integrity check.
-  4: 1,                      // CRITICAL: this fragment's index
-  6: 4,                      // CRITICAL: total fragment count in the group
-  8: h'<fragment bytes>',    // CRITICAL: this code's slice
-  9: 5821,                   // OPTIONAL as a key (odd), but MUST be present
-                              //   whenever key 11 (parity_scheme) is set —
+  2: 1,                      // CRITICAL: this fragment's index
+  4: 4,                      // CRITICAL: total fragment count in the group
+  6: h'<fragment bytes>',    // CRITICAL: this code's slice
+  7: 5821,                   // OPTIONAL as a key (odd), but MUST be present
+                              //   whenever key 9 (parity_scheme) is set —
                               //   see chunking rule below. When present:
                               //   total_bytes of the reassembled whole.
-  11: 1                      // OPTIONAL: parity_scheme — 0/absent = none,
+  9: 1                       // OPTIONAL: parity_scheme — 0/absent = none,
                               //   nonzero selects a registered forward-
                               //   error-correction scheme so the group
                               //   tolerates a missing/damaged code.
 }
 
 Type 8: {                    // Compress (DEFLATE)
-  0: 8,
-  2: h'<deflate bytes>'      // CRITICAL
+  // prefix typeID: 8
+  // field map:
+  0: h'<deflate bytes>'      // CRITICAL
 }
 
 Type 4: {                    // Encrypt (e.g. AES-GCM)
-  0: 4,
-  2: h'<nonce>',             // CRITICAL
-  4: h'<ciphertext+tag>',    // CRITICAL
-  5: 3,                      // OPTIONAL: Algorithm — 3 = A256GCM
-  7: -25                     // OPTIONAL: Key Algorithm — -25 = ECDH-ES+HKDF-256
+  // prefix typeID: 4
+  // field map:
+  0: h'<nonce>',             // CRITICAL
+  2: h'<ciphertext+tag>',    // CRITICAL
+  3: 3,                      // OPTIONAL: Algorithm — 3 = A256GCM
+  5: -25                     // OPTIONAL: Key Algorithm — -25 = ECDH-ES+HKDF-256
 }
 ```
 
-**Keys `5` (Algorithm) and `7` (Key Algorithm)** are each a uint or a text
+**Keys `3` (Algorithm) and `5` (Key Algorithm)** are each a uint or a text
 string, an encoder's choice — the same two-form pattern as §4.3's Media
 Type, and for the same reason: both name something with a stable identity
 independent of QDEF, so there's no opacity for a decentralized-ID-plus-
@@ -853,7 +878,7 @@ obtained, not just agree that something called "Encrypt" happened.
 
 Both keys are odd/optional, matching `parity_scheme`'s precedent (§4.1's
 Split fields) rather than nonce/ciphertext's: absent, everything works
-exactly as before (two ends that already agree out of band, as in §8's
+exactly as before (two ends that already agree out of band, as in §7's
 worked example, need neither field), and a decoder that doesn't recognize
 either key simply falls back to whatever algorithm it already assumed —
 which fails safely either way, since AEAD's own authentication tag check
@@ -861,7 +886,7 @@ already catches a wrong-algorithm or wrong-key attempt. They exist for
 when unrelated apps need self-description, not to tax the case that
 already works.
 
-**A decoder that does honor key `5`/`7` MUST NOT let them broaden which
+**A decoder that does honor key `3`/`5` MUST NOT let them broaden which
 algorithms it's willing to run** — the same "alg" confusion class of
 vulnerability JOSE/JWT is well known for (an attacker-controlled
 algorithm identifier tricking a verifier into a weaker or inappropriate
@@ -879,8 +904,8 @@ indistinguishable from random has a requirement this wrapper structurally
 cannot satisfy no matter how its fields are shaped — self-describing
 dispatch is the format's entire reason for existing. Such an application
 should keep its own encryption entirely inside an opaque registered blob
-(§6) rather than use this wrapper, the same way any application with its
-own proven mechanism should (§7). See FINDINGS.md #13.
+(§5) rather than use this wrapper, the same way any application with its
+own proven mechanism should (§6). See FINDINGS.md #13.
 
 **Fragment chunking (Type 2).** The spec must fix *how* the original bytes
 are sliced, not just what fields describe the result, or two independent
@@ -899,7 +924,7 @@ using the missing index's known slice boundaries). It is also a real
 constraint on encoders: a Split group can't freely give different physical
 codes different-sized fragments to match each code's own capacity while
 still supporting parity recovery under this rule. That tension is not yet
-resolved — see §9.
+resolved — see §8.
 
 `parity_scheme` mechanics: a parity fragment (index ≥ `count`, present only
 when `parity_scheme` is set) is pure bonus redundancy — plain reassembly
@@ -924,19 +949,14 @@ reversed one (see FINDINGS.md §7 and
 [DESIGN.md's "Nesting order enforcement"](DESIGN.md#nesting-order-enforcement--now-answered-not-open)).
 
 **Why a wrapper, not a reserved key range on the inner record itself:**
-wrapping avoids a cross-record correctness hazard a sibling/key-range
-approach doesn't. If spanning info were just extra keys inside, say, a
-"Photo Fragment" Record Type, a parser that recognizes that Type but not
-the spanning convention would happily treat one fragment as if it were the
-whole photo. A Wrapper Record can't be misread that way: its payload is
-opaque bytes, not a valid inner Record, so a parser that doesn't implement
-Type 2 just skips the entire record like any other unrecognized Type ID —
-it never sees anything to misinterpret.
+wrapping avoids a cross-record correctness hazard. See
+[DESIGN.md](DESIGN.md#wrapper-records--why-a-wrapper-not-a-reserved-key-range)
+for the full rationale.
 
 **Cost:** wrapper framing (CBOR map + a few keys) is added per code on top
 of the inner record, so this stays strictly opt-in — a Record Type with no
-need for it stays a plain, unwrapped Record, exactly as cheap as §5's
-examples.
+need for it stays a plain, unwrapped Record, exactly as cheap as
+[EXAMPLES.md](EXAMPLES.md).
 
 ### 4.2 Fallback Hint (optional)
 
@@ -947,10 +967,11 @@ understand anything else in the container:
 
 ```
 Type 10: {                         // Fallback Hint (standard record type)
-  0: 10,
-  2: "https://example.com/open-this",  // CRITICAL: a URI a generic tool
+  // prefix typeID: 10
+  // field map:
+  0: "https://example.com/open-this",  // CRITICAL: a URI a generic tool
                                         //   or browser can follow
-  3: "Open in MyApp"                   // OPTIONAL: human-readable label
+  1: "Open in MyApp"                    // OPTIONAL: human-readable label
 }
 ```
 
@@ -965,18 +986,19 @@ Wrapper's opaque payload would defeat.
 A plain standard record type Record Type — not a wrapper — for attaching a standard,
 already-widely-recognized media type (a JPEG thumbnail, a vCard, a PDF
 snippet) without registering a bespoke Type ID for every possible file
-format the way §5's examples do for application-specific content:
+format the way [EXAMPLES.md](EXAMPLES.md) does for application-specific content:
 
 ```
 Type 6: {                          // Media Payload (standard record type)
-  0: 6,
-  2: 22,                           // CRITICAL: Media Type — uint or text,
+  // prefix typeID: 6
+  // field map:
+  0: 22,                           // CRITICAL: Media Type — uint or text,
                                     //   see below (22 = image/jpeg)
-  4: h'<payload bytes>'            // CRITICAL: the content itself
+  2: h'<payload bytes>'            // CRITICAL: the content itself
 }
 ```
 
-**Key `2` (Media Type) may be a uint or a text string** — an encoder's
+**Key `0` (Media Type) may be a uint or a text string** — an encoder's
 choice, and a decoder MUST accept either shape (both are already
 skip-safe under §3.2's field-value-shape rule regardless of which an
 encoder picks):
@@ -998,11 +1020,12 @@ encoder picks):
   already has a stable, globally-meaningful name independent of any
   numeric registry (defined by RFC 6838's Media Types registry, which
   predates and doesn't depend on CoAP's numeric shortcut for it) — there's
-  no opacity problem here for a hint to solve. A private-use Type ID has
-  *no* other identity besides the number, which is exactly why Type Hint
-  has to exist; a media type not in CoAP's table already has its name, so
-  falling back to the plain string directly is sufficient, not a
-  workaround.
+no opacity problem here for a hint to solve. A private-use Type ID has
+*no* other identity besides the number, which is exactly why a hash-
+derivation hint has to exist; a media type not in CoAP's table already
+has its name, so
+falling back to the plain string directly is sufficient, not a
+workaround.
 
 **Depending on an external registry is a deliberate, conditional choice,
 not a default.** It's only justified here because CoAP's Content-Formats
@@ -1019,7 +1042,7 @@ unmaintained, rather than leaving every uint in this field meaningless.
 Prototyped in `prototype/test/media-payload.test.js`: both the
 CoAP-numeric and plain-string forms round-trip, and an application with
 no interest in Media Payload skips the whole Record cleanly by Type ID
-alone — the same "unaware decoder pays nothing" guarantee every other
+prefix alone — the same "unaware decoder pays nothing" guarantee every other
 standard record type gets, not just an aspiration.
 
 ### 4.4 App Route (optional)
@@ -1033,22 +1056,24 @@ implementer-specific knowledge baked in ([GitHub issue
 
 ```
 Type 12: {                         // App Route (standard record type) — domain form
-  0: 12,
-  2: "example.com",                // CRITICAL: a domain the routing
+  // prefix typeID: 12
+  // field map:
+  0: "example.com",                // CRITICAL: a domain the routing
                                     //   target has verified control over
-  3: "Open in Example App"         // OPTIONAL: human-readable label
+  1: "Open in Example App"         // OPTIONAL: human-readable label
 }
 
 Type 12: {                         // App Route (standard record type) — decentralized form
-  0: 12,
-  2: h'<truncated SHA-256>',      // CRITICAL: decentralized/random byte
+  // prefix typeID: 12
+  // field map:
+  0: h'<truncated SHA-256>',      // CRITICAL: decentralized/random byte
                                     //   string ID (§3.1)
-  3: "com.example/tagdrop-paper"   // OPTIONAL: Hint name, same role as
-                                    //   Type Hint (§3.1) — not a label
+  1: "com.example/tagdrop-paper"   // OPTIONAL: Hint name, same role as
+                                    //   §3.1's hash-derivation hint
 }
 ```
 
-**Key `2` may be a domain string or a decentralized byte string — two
+**Key `0` may be a domain string or a decentralized byte string — two
 genuinely different trust models for two genuinely different purposes,
 not two encodings of the same thing.**
 
@@ -1063,8 +1088,8 @@ inherits that existing, proven trust machinery on both platforms instead
 of inventing a new one. Use this form for auto-launch dispatch, where
 getting it wrong means the wrong application opens.
 
-*The decentralized form* reuses Type Hint's exact pattern (§3.1): a
-decentralized byte string ID, with key `3` playing Hint's role — a
+*The decentralized form* reuses §3.1's hash-derivation pattern: a
+decentralized byte string ID, with key `1` playing the Hint name role — a
 recoverable name, optionally derived as `ID = truncate(SHA-256(name), N)`
 so the binding is checkable rather than an unverifiable claim, exactly as
 described there. **This form has no anti-spoofing property, and that is not a
@@ -1119,7 +1144,7 @@ also means adopting App Route never requires restructuring an
 application's existing Type IDs.
 
 **Not positionally special.** QDEF's dispatch already routes by Type ID
-at key `0` regardless of position (§3.1), so this Record doesn't need a
+prefix regardless of position (§3.1), so this Record doesn't need a
 fixed position in the Sequence — a decoder finds it the same way it
 finds any recognized Record Type.
 
@@ -1150,7 +1175,7 @@ per-code repetition means the cost multiplies by fragment count: the
 Record shown above (byte string ID plus a Hint name) is cheap on any
 one code, but a 7-code Split group pays that 7 times over — for App
 Route alone, on top of whatever else repeats per code (Split's
-own Wrapper framing, Type Hint, etc.). Dropping the Hint name shrinks a
+own Wrapper framing, etc.). Dropping the Hint name shrinks a
 single Record significantly at the cost of losing the hash-derivation
 check. Not a flaw in the mechanism — the per-code repetition requirement
 is exactly what makes the pre-filter work at all — but an adopter
@@ -1159,43 +1184,17 @@ size, not just the anti-spoofing difference.
 
 **Scope note.** App Route is QDEF's dedicated mechanism for
 cross-implementer routing — not a special case carved out of some
-narrower scope. The decentralized Type ID space (§9) was never
+narrower scope. The decentralized Type ID space (§8) was never
 restricted to closed/internal use in the first place (DESIGN.md's
 "Registry governance" corrects an earlier note that implied otherwise);
 self-allocation means no registry gatekeeps *minting* an ID, not that
 the ID stays unpublished or unrecognized. What App Route adds on top is
 a *trust model* for routing specifically — domain verification for the
-form that drives auto-launch, Type Hint's existing name-binding pattern
+form that drives auto-launch, §3.1's existing hash-derivation pattern
 for the form that doesn't — decoupled entirely from payload Type IDs so
 routing identity and payload shape can evolve independently.
 
-## 5. Record Type Registry (informative examples)
-
-### Type `100`: Wi-Fi Provisioning
-
-```
-{
-  0: 100,               // CRITICAL: Record Type ID
-  2: "My Coffee Shop",  // CRITICAL: SSID
-  4: "guest123",        // CRITICAL: Password
-  6: 2,                 // CRITICAL: Auth Type (0=Open, 1=WEP, 2=WPA2/3)
-  3: true                // OPTIONAL: Hidden Network Flag
-}
-```
-
-### Type `106`: Universal Transit / Event Ticket
-
-```
-{
-  0: 106,                // CRITICAL: Record Type ID
-  2: h'A7F90B...',       // CRITICAL: Ticket Hash/Token
-  4: 1735689600,         // CRITICAL: Expiry Epoch Timestamp
-  5: "General Admit",    // OPTIONAL: UI Display Text
-  3: "Gate A"            // OPTIONAL: Wayfinding Hint
-}
-```
-
-## 6. Adopting QDEF for an existing application-specific format
+## 5. Adopting QDEF for an existing application-specific format
 
 An application with its own existing binary payload format (e.g. a
 proprietary CBOR sequence used today for some other transport) can register
@@ -1203,9 +1202,9 @@ one Record Type ID and carry that payload unchanged, byte-for-byte, as an
 opaque blob under a single key:
 
 ```
+// prefix typeID: N
 {
-  0: <N>,                          // application-chosen Type ID
-  2: h'<existing payload bytes>'  // CRITICAL: raw bytes, unchanged from
+  0: h'<existing payload bytes>'  // CRITICAL: raw bytes, unchanged from
                                    //   whatever that application already
                                    //   defines — QDEF never looks inside
 }
@@ -1214,18 +1213,18 @@ opaque blob under a single key:
 This lets a QDEF-aware scanner dispatch a single byte-mode QR or NFC tag
 containing, say, a Wi-Fi Record *and* this application's own content Record
 together — without that application's own decoder changing at all: it
-still just reads the raw bytes out of key `2`. This is additive and
+still just reads the raw bytes out of key `0`. This is additive and
 opt-in — nothing about the application's own format needs to route through
 QDEF for it to keep working exactly as it does today.
 
 (The `mofosyne/tagdrop` project uses exactly this pattern to register its
 own byte-mode payload, illustrated here as Type `900` — see that repo for
 the worked details. It's one adopter among the format's intended audience,
-not the reason this format exists; §8 below is an unrelated adopter using
+not the reason this format exists; §7 below is an unrelated adopter using
 the same mechanism.)
 
 **Registering a real Type ID before governance exists.** `900` here is an
-illustrative placeholder, not a protected allocation — §9's registry
+illustrative placeholder, not a protected allocation — §8's registry
 governance for the `100`–`32767` "common vocabulary" tier has no authority
 yet, so nothing stops an unrelated adopter from also picking `900`. Any
 adopter wiring this pattern into real shipping code *before* that
@@ -1239,7 +1238,7 @@ own signature already covers the fully-reassembled plaintext (signed once,
 after all splitting/addressing is resolved, with nothing about the
 signature depending on how the content happened to be fragmented in
 transit) needs no QDEF-level Sign mechanism at all, wrapper or sibling
-(§9). §4.1's `group_id` is already a content hash a decoder MUST verify
+(§8). §4.1's `group_id` is already a content hash a decoder MUST verify
 after Split reassembly — that alone guarantees "the bytes you got back are
 the bytes that went in," which is all a whole-payload signature needs from
 the container. The signature fields themselves are just ordinary payload
@@ -1252,32 +1251,17 @@ that content, regardless of whether any given adopter's UI/tooling
 actually produces signed multi-sector content yet. An adopter whose
 signature is instead coupled to its own splitting/addressing scheme
 (covers per-sector metadata, not just reassembled bytes) would not get
-this for free — see §9's Sign entry. This reasoning generalizes beyond any
-one adopter — see §7's note on signing.
+this for free — see §8's Sign entry. This reasoning generalizes beyond any
+one adopter — see §6's note on signing.
 
-## 7. Compression and splitting across multiple tags/codes
+## 6. Compression and splitting across multiple tags/codes
 
 **QDEF itself defines neither** — both stay entirely inside each Record
-Type's own payload definition (§6's registration pattern is one example of
-why: an application that already solved reassembly/compression for its own
-format keeps using its own solution, unchanged, rather than adopting a
-second, competing one at the QDEF layer).
-
-**Why not build them into the container:**
-
-- *Compression:* §3.1's key-`0` routing only works if a bare-metal scanner
-  can read `map[0]` at zero decode cost to decide whether a record concerns
-  it. If the CBOR Sequence itself were compressed, that scanner would need
-  a DEFLATE implementation just to *skip* a record it doesn't recognize —
-  directly against the point of routing at all (§3.1). Keeping compression
-  a per-Record-Type concern means a parser that doesn't recognize a given
-  Type never touches a compressed byte it didn't ask for.
-- *Splitting:* QDEF is deliberately scoped to one physical code's records
-  (§2). Reassembling a payload spread across multiple codes (ordering,
-  missing/duplicate parts, parity, content-addressing) is a much harder
-  problem than routing. An application that already has its own proven
-  answer to that problem should keep using it rather than adopt a second,
-  possibly-disagreeing addressing scheme at the QDEF layer.
+Type's own payload definition. An application that already solved
+reassembly/compression for its own format keeps using its own solution,
+unchanged, rather than adopting a second, competing one at the QDEF layer.
+See [DESIGN.md](DESIGN.md#why-not-build-compression-or-splitting-into-the-container)
+for why these were deliberately kept out of the container.
 
 **The same reasoning applies to signing, not just compression and
 splitting.** An application with its own proven authentication mechanism
@@ -1285,18 +1269,18 @@ splitting.** An application with its own proven authentication mechanism
 computed independently of however the transport happened to fragment it —
 needs no QDEF Sign primitive for that content either, for the identical
 reason: it already solved this, adopting a second, QDEF-native mechanism
-would just be a second thing that could disagree with the first. §6's
+would just be a second thing that could disagree with the first. §5's
 registration pattern already demonstrates this for an adopter whose
-signature covers reassembled bytes; §9's Sign entry is for the different
+signature covers reassembled bytes; §8's Sign entry is for the different
 case — a Record with no pre-existing answer of its own.
 
 **If an application wants splitting, compression, or encryption without
 writing any of it itself:** that's what §4.1's Wrapper Records are for — a
 generic, reusable resolver any Record Type can opt into by simply being
-wrapped, with zero code written by that Record Type's own author (§8 is the
+wrapped, with zero code written by that Record Type's own author (§7 is the
 worked example).
 
-## 8. Worked example: passphrase-protected key backup across several codes
+## 7. Worked example: passphrase-protected key backup across several codes
 
 An app backs up a passphrase-protected secret key across a set of printed
 QR codes. This app has **no scheme of its own** to dispatch on — these
@@ -1307,9 +1291,9 @@ codes are only ever scanned by its own app, never clicked or typed — so per
 Registers one Record Type, say `950`, for the plain secret-key bytes:
 
 ```
+// prefix typeID: 950
 {
-  0: 950,
-  2: h'<raw secret key packet bytes>'  // CRITICAL
+  0: h'<raw secret key packet bytes>'  // CRITICAL
 }
 ```
 
@@ -1342,10 +1326,10 @@ fragment deliberately dropped and recovered, then the full
 Split→Encrypt→plain chain decrypted and re-parsed — is exercised end to end
 in `prototype/test/roundtrip.test.js`.
 
-## 9. Design rationale and open questions
+## 8. Design rationale and open questions
 
 Moved to [`DESIGN.md`](DESIGN.md): why mechanisms were removed (the CBOR
-tag route, folding Type Hint into key `0`), alternatives weighed and
+tag route), alternatives weighed and
 rejected, comparisons against NDEF/BBQr/MCAP and `mofosyne/tagdrop`, and
 what this draft still hasn't resolved (registry governance, canonical
 encoding, the Sign wrapper, Encrypt key provisioning, Split's per-code
