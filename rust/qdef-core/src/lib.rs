@@ -155,12 +155,12 @@ fn parse_record(buf: &[u8]) -> Result<(Record<'_>, usize), Error> {
     let mut type_ids_buf = [cbor::Key::Uint(0); MAX_TYPE_IDS];
     let mut type_id_count = 0usize;
 
-    // Phase 1: accumulate typeIDs — contiguous run of uint/byte-string
+    // Phase 1: accumulate typeIDs — contiguous run of uint/byte-string/text-string
     // at the start of the record.
     while pos < buf.len() {
         // Peek at the head to check major type before fully parsing.
         let head = cbor::read_head(&buf[pos..]).map_err(Error::Cbor)?;
-        if head.major == 0 || head.major == 2 {
+        if head.major == 0 || head.major == 2 || head.major == 3 {
             // It's a typeID (uint or byte string). Parse the key.
             let (key, len) = cbor::read_key(&buf[pos..]).map_err(Error::Cbor)?;
             if type_id_count < MAX_TYPE_IDS {

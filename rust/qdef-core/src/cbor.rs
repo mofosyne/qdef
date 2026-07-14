@@ -288,15 +288,16 @@ pub(crate) fn skip_any_item(buf: &[u8]) -> Result<usize, Error> {
     Ok(pos)
 }
 
-/// A Record map key: always a uint for all map keys (§3).
+/// A Record map key: a uint, byte string, or text string (§3).
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Key<'a> {
     Uint(u64),
     ByteString(&'a [u8]),
+    TextString(&'a [u8]),
 }
 
-/// Reads a Record map key at `buf[0]`: a uint (major type 0) or a byte
-/// string (major type 2).
+/// Reads a Record map key at `buf[0]`: a uint (major type 0), byte
+/// string (major type 2), or text string (major type 3).
 pub fn read_key<'a>(buf: &'a [u8]) -> Result<(Key<'a>, usize), Error> {
     let head = read_head(buf)?;
     match head.major {
@@ -312,6 +313,18 @@ pub fn read_key<'a>(buf: &'a [u8]) -> Result<(Key<'a>, usize), Error> {
             }
             let payload = &buf[head.head_len..total];
             Ok((Key::ByteString(payload), total))
+        }
+        3 => {
+            let len = head.arg as usize;
+            let total = head
+                .head_len
+                .checked_add(len)
+                .ok_or(Error::LengthOverflow)?;
+            if buf.len() < total {
+                return Err(Error::UnexpectedEof);
+            }
+            let payload = &buf[head.head_len..total];
+            Ok((Key::TextString(payload), total))
         }
         _ => Err(Error::NotAKey),
     }

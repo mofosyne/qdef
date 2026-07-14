@@ -120,8 +120,9 @@ function parseRecords(items) {
 }
 
 /**
- * Check whether a decoded CBOR item is a valid typeID: a non-negative
- * integer (uint, major type 0) or a byte string (major type 2).
+ * Check if a decoded CBOR item is a valid typeID prefix item:
+ * unsigned integer (uint, major type 0), byte string (major type 2),
+ * or text string (major type 3, reserved for future use).
  */
 function isTypeId(item) {
   if (typeof item === 'number' && Number.isInteger(item) && item >= 0) {
@@ -131,6 +132,9 @@ function isTypeId(item) {
     return true;
   }
   if (Buffer.isBuffer(item)) {
+    return true;
+  }
+  if (typeof item === 'string') {
     return true;
   }
   return false;

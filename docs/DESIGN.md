@@ -1135,6 +1135,97 @@ certain-collision hazard, demonstrated), and that qualifying each by a
 domain they actually control resolves it (`"com.example-a/config"` vs
 `"com.example-b/config"` — different IDs).
 
+## Container framing choices
+
+### No version byte
+
+An earlier draft had one, gating the interpretation of everything after it
+— but that design forces a hard, global "I cannot safely interpret any of
+this" failure for *any* future change to the container, however small, since
+a decoder has no way to know in advance which changes a version bump will
+cover. §3.2's even/odd criticality rule already provides graceful, *local*
+forward compatibility for ordinary Record evolution — new Record Types are
+skipped, new odd keys are ignored, new even keys abort only the one Record
+that has them. The only thing a version byte still gave beyond that was
+safety for changes to the container's own outermost framing — and even that
+need is now covered without one: see §3.5 (Record Type `0`, the container's
+namespace/header mechanism), which extends exactly the same even/odd tools
+inward, rather than needing a separate, cruder all-or-nothing gate around
+them.
+
+### No record count or total payload size
+
+Suggested more than once as a natural addition to a binary header, and
+deliberately left out. Either field would require an encoder to know its
+final size before writing the header, and a decoder to trust a value that
+duplicates information already recoverable by walking the Sequence, adding a
+way for the two to disagree with no benefit: the entire point of a CBOR
+*Sequence* over a wrapping array is that a Record's presence is
+self-delimiting and a constrained parser can stream through Records one at a
+time without ever needing to know the total count up front. A count/size
+field would sit unused by that parser and be one more thing a fuzzer or a
+malformed input could make lie.
+
+## CBOR tag routing — removed
+
+An earlier draft also wrapped the Record Map in a CBOR semantic Tag matching
+the Type ID, as a second, redundant routing path for tag-aware CBOR
+libraries. That mechanism has been removed — see "CBOR tag-number
+collision" below and FINDINGS.md #11 for why. The prefix-based typeID
+mechanism is sufficient on its own.
+
+## Field-value-shape rule — rationale
+
+The field-value-shape rule (§3.2) restricts field values to scalars,
+definite-length strings, or tags wrapping a definite-length string directly.
+This isn't a style preference: determining a field's length ordinarily
+requires walking into its structure (an array's or map's true byte length
+isn't known until every element inside it has been walked, recursively for
+nested structure), which is an unbounded-recursion hazard on a target with
+only a few KB of stack. A byte or text string's length, by contrast, is
+always stated directly in its own head — skipping one is pure cursor
+arithmetic, never a walk. Restricting every field value to that shape means
+a conformant core parser never needs to recurse *at all* to skip a field it
+doesn't recognize — not "recursion bounded by a depth guard," but no
+recursion, structurally.
+
+## Wrapper Records — why a wrapper, not a reserved key range
+
+Wrapping avoids a cross-record correctness hazard a sibling/key-range
+approach doesn't. If spanning info were just extra keys inside, say, a
+"Photo Fragment" Record Type, a parser that recognizes that Type but not the
+spanning convention would happily treat one fragment as if it were the whole
+photo. A Wrapper Record can't be misread that way: its payload is opaque
+bytes, not a valid inner Record, so a parser that doesn't implement Type 2
+just skips the entire record like any other unrecognized Type ID — it never
+sees anything to misinterpret.
+
+## Why not build compression or splitting into the container
+
+Both stay entirely inside each Record Type's own payload definition. Why not
+build them into the container:
+
+- *Compression:* §3.1's prefix-based routing only works if a bare-metal
+  scanner can read the typeID prefix at zero decode cost to decide whether a
+  record concerns it. If the CBOR Sequence itself were compressed, that
+  scanner would need a DEFLATE implementation just to *skip* a record it
+  doesn't recognize — directly against the point of routing at all (§3.1).
+  Keeping compression a per-Record-Type concern means a parser that doesn't
+  recognize a given Type never touches a compressed byte it didn't ask for.
+- *Splitting:* QDEF is deliberately scoped to one physical code's records
+  (§2). Reassembling a payload spread across multiple codes (ordering,
+  missing/duplicate parts, parity, content-addressing) is a much harder
+  problem than routing. An application that already has its own proven answer
+  to that problem should keep using it rather than adopt a second,
+  possibly-disagreeing addressing scheme at the QDEF layer.
+
+The same reasoning applies to signing: an application with its own proven
+authentication mechanism (e.g. a single hash-then-sign step over the fully
+reassembled payload) needs no QDEF Sign primitive for that content either,
+for the identical reason — it already solved this, adopting a second,
+QDEF-native mechanism would just be a second thing that could disagree with
+the first.
+
 ## A confession (Parkinson's Law of Triviality, self-reported)
 
 C. Northcote Parkinson's original example: a committee approves a
