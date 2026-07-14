@@ -195,8 +195,7 @@ fn parse_record(buf: &[u8]) -> Result<(Record<'_>, usize), Error> {
     // a-string). This catches disallowed shapes early, during parsing,
     // so a well-formed-but-illegal Record never silently passes through.
     if !map_bytes.is_empty() {
-        walk_map_pairs(map_bytes, |_k, _v| Ok(ControlFlow::Continue))
-            .map_err(Error::Cbor)?;
+        walk_map_pairs(map_bytes, |_k, _v| Ok(ControlFlow::Continue)).map_err(Error::Cbor)?;
     }
 
     let ignored = type_id_count == 0;
