@@ -213,7 +213,11 @@ collision safety comes from the byte length the developer chose, not from
 a namespace. Text string IDs are reserved for future use as
 human-readable, self-describing typeIDs — a parser MUST treat them as
 valid prefix items (same as uints and byte strings) but no registration
-scheme for them is defined yet.
+scheme for them is defined yet. Unlike a reserved *numeric* range, which
+carries no meaning until one is assigned, a text string already looks
+usable the moment it exists — see the caution below for why that
+specifically calls for pinning a few rules now, ahead of the full
+registration scheme.
 
 **TypeID form boundary.** Only CBOR major types 0, 2, and 3 are valid
 typeID forms — simple, self-delimiting items a parser can skip with zero
@@ -265,6 +269,40 @@ string) was chosen as the hash algorithm for derivation for the same
 reason `group_id` and CoAP/COSE registry reuse elsewhere in this spec
 favor already-ubiquitous, already-implemented primitives over inventing
 new ones.
+
+**Implementer caution for text string Type IDs:** a text string Type ID
+MUST be a definite-length CBOR text string (major type 3), never
+indefinite-length — the identical skip-safety requirement byte string
+Type IDs already have, above, for the identical reason: an
+indefinite-length string can only be measured by walking its chunks,
+the unbounded-recursion-adjacent hazard §3.2's field-value-shape rule
+already exists to keep out of this format entirely.
+
+**Comparison MUST be exact, byte-for-byte over the raw UTF-8 encoding —
+no Unicode normalization, case-folding, or whitespace trimming.**
+Leaving this unstated would repeat a mistake this project has already
+made once and paid for: §3.1's own hash-derivation algorithm shipped
+without a pinned comparison rule and produced a real, silently-wrong
+verification bug in the prototype before two independent
+implementations were actually checked against each other (FINDINGS.md
+#21). Pinning the rule here, before any text string Type ID has
+shipped in real content, costs nothing and heads off finding the same
+class of bug a second time.
+
+A bare, unqualified text string Type ID (`"wifi"`, `"config"`) carries
+exactly the same collision hazard as an unqualified hash-derivation
+name, below — being human-readable doesn't make a word collision-safe,
+and text string Type IDs are always global, so nothing but the string's
+own distinctiveness protects it. The same reverse-domain qualification
+guidance below applies here.
+
+**Text string Type IDs are not yet safe to rely on for guaranteed
+cross-implementer uniqueness.** "Reserved for future use" means exactly
+that: no registration scheme exists, no authority is checking for
+collisions, and nothing guarantees an unrelated implementer hasn't
+already picked the identical string for something else. Treat any
+current use as experimental/private-use, not interoperable, until a
+real registration scheme is defined (§8).
 
 **Implementer caution for uint Type IDs:** a uint Type ID MUST be encoded
 as a native CBOR uint (major type 0), never wrapped in a bignum tag
@@ -351,8 +389,11 @@ draw" property the whole mechanism depends on — an unqualified word
 does not have that property no matter how good the hash function is.
 
 This matters most exactly where nothing else already protects the
-value: a *namespace's* own Hint name (§3.5's key `3`) and a *standalone*
-decentralized Type ID's Hint name (no namespace declared at all).
+value: a *namespace's* own Hint name (§3.5's key `3`), a *standalone*
+decentralized Type ID's Hint name (no namespace declared at all), and a
+text string Type ID used as a primary or backup typeID (see the caution
+above) — all three are always-global values with nothing but the
+string's own distinctiveness standing between them and collision.
 A Record-Type-local Hint name used *within* an already-declared
 namespace doesn't need this — collision-safety there already comes from
 the namespace itself (§3.5), so a bare, unqualified local name is fine.
