@@ -769,6 +769,52 @@ odd uints are being asked to serve two different lookup schemes (global
 vs. namespace-scoped) depending on context a decoder must actually check,
 not assume.
 
+**MUST repeat, identically, on every physical code of a multi-code group
+whenever that group carries any namespace-scoped (odd uint) Type ID —
+whether the scoped Type ID belongs to a plain sibling Record or is only
+reachable after a Wrapper stack (§4.1) fully resolves.** Each physical
+code is its own independent container, parsed from a blank slate with no
+cross-code state (§8) — a decoder holding only one code out of a group
+has no way to learn a namespace declared on some other code. This is the
+same reasoning that already requires Fallback Hint's URI and App Route's
+decentralized form to repeat per code (§4.2, §4.4): a mechanism meant to
+work from any single code, or to survive losing one, cannot rely on a
+declaration that exists on only one of them. It applies with equal force
+to a Type ID only reachable after Split reassembly: `parity_scheme`
+(§4.1) recovers a missing *fragment's bytes*, but a Type `0` Record is a
+whole sibling Record, not fragment data — parity gives it no protection
+at all. A namespace declared on a single code is therefore a genuine
+single point of failure the Split-protected *content* does not share:
+losing that one code loses the namespace even when every other code
+needed for full content recovery is intact. Once declared, the same
+namespace value applies to every Record in that code's own Sequence *and*
+to whatever Record a Wrapper stack (Split/Compress/Encrypt) in that
+Sequence ultimately resolves to, once fully unwrapped.
+
+**This has a real, sometimes negative, wire-code cost — verified against
+the actual encoder, not assumed.** Shrinking one namespace-scoped Type ID
+from a private-use-random byte string (10 bytes bare) to a small odd uint
+(4 bytes bare) saves 6 bytes; the cheapest legal repeated Type `0` header
+(a 4-byte byte string namespace, no Hint name) costs 8 bytes *per code*.
+A single namespace-scoped Type ID repeating alone on each code is
+therefore a net **regression** (+2 bytes/code), not a savings, once the
+mandatory repetition is priced in. It only becomes a net win once at
+least two namespace-scoped Type IDs' worth of savings land on the same
+code (2 × 6 bytes saved ≥ 8 bytes spent) — an adopter should count how
+many namespace-scoped Type IDs actually co-occur per physical code before
+adopting this mechanism for per-code-repeated content, not just compare
+the Type ID widths in isolation.
+
+Prototyped in `prototype/src/wrappers.js`'s `resolveStack`: extended to
+look for a Type `0` sibling on each code, require every code that
+declares one to agree, and apply the agreed namespace to whatever Record
+the stack ultimately resolves to. `prototype/test/multi-code-namespace.test.js`
+demonstrates the mechanism end to end — including the single-point-of-
+failure case above, reproduced directly: a namespace declared on only one
+code resolves correctly while that code survives, and aborts the instant
+it's the one dropped, even though XOR parity fully recovers the
+Split-protected content regardless.
+
 **Fully additive, no migration forced.** An app with existing even uint
 or byte string Type IDs keeps them working forever, namespaced container
 or not — nothing about this mechanism invalidates any ID that predates it.
