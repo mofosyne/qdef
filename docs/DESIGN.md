@@ -1174,7 +1174,7 @@ step, not asserted:**
 | Approach (per group of N codes, N=4 shown)   | bytes | delta |
 +---------------------------------------------+-------+-------+
 | TagDrop's own envelope (version + type)      |     8 |     — |
-| QDEF, magic + namespace-scoped (original)    |    68 |   +60 |
+| QDEF, magic + namespace-scoped (original)    |    58 |   +50 |
 | QDEF, no magic (own scheme dispatches)       |    42 |   +34 |
 | QDEF, no magic, no namespace (own scheme     |    20 |   +12 |
 |   also isolates -- self-allocated even ID)   |       |       |

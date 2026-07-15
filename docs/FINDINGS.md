@@ -1004,15 +1004,21 @@ no registry) is exactly as collision-safe in that deployment as a
 namespace-scoped one, at a fraction of the cost.
 
 **Verified against the real encoder, not estimated:** for a 4-code
-group, the original comparison (magic + namespace-scoped) cost 68 bytes
+group, the original comparison (magic + namespace-scoped, using the
+already-corrected minimal odd-uint width from finding #24) cost 58 bytes
 against TagDrop's own 8-byte envelope; dropping magic alone brings it to
 42; dropping namespace-scoping too (self-allocated even ID) brings it to
-20 — a 48-byte reduction from the original estimate, achieved entirely
+20 — a 38-byte reduction from the original estimate, achieved entirely
 by applying principles this document already stated rather than by
 building anything new. The remaining ~12-byte gap reflects a real
 capability difference (an open-ended, self-describing typeID vs.
 TagDrop's closed 2-value enum), not waste, and is called out as such
-rather than framed as more overhead to eliminate.
+rather than framed as more overhead to eliminate. (An earlier version of
+this note said 68/+60/48-byte reduction — that reused the pre-#24
+32769-width figure for this one row while the other two rows already
+used the corrected width. Caught when a reader asked the table to
+explain itself and the arithmetic didn't hold together; fixed to be
+internally consistent.)
 
 Fixed the actual gap this exposed: §2 had NDEF's magic-skip case fully
 worked out (paragraph, example, prototype test) but nothing equivalent
