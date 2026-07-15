@@ -16,6 +16,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const cbor = require('cbor');
 
 const core = require('../src/core');
 const header = require('../src/header');
@@ -25,16 +26,16 @@ const header = require('../src/header');
 // namespace specifically because this application's own URI scheme
 // already ensures no other QDEF-aware decoder ever sees these bytes.
 const PREVIEW_TYPE = 32768;
-const BODY_TYPE = 32770;
 const KNOWN_KEYS = new Set([0]);
 
-test('a bare CBOR Sequence carried under a custom URI scheme round-trips with no magic bytes, via the same decodeSequence path NDEF uses', () => {
-  const container = core.encodeContainer([
-    { typeIds: [PREVIEW_TYPE], fields: new Map([[0, 'preview text']]) },
-  ]);
-  // Strip the magic prefix, simulating what actually goes on the wire
-  // after a `myapp:` scheme prefix: just the bare Sequence.
-  const bareSeq = container.subarray(core.MAGIC.length);
+test('a bare CBOR Sequence carried under a custom URI scheme round-trips with no magic bytes and no discriminator, via the same decodeSequence path NDEF uses', () => {
+  // Built directly, not by stripping magic off encodeContainer's output --
+  // a full container now also carries the mandatory discriminator item
+  // right after magic, which this path deliberately has neither of.
+  const bareSeq = core.encodeRecordBytes({
+    typeIds: [PREVIEW_TYPE],
+    fields: new Map([[0, 'preview text']]),
+  });
 
   assert.throws(() => core.decodeContainer(bareSeq), /bad magic/);
 
@@ -53,31 +54,34 @@ test('the same self-allocated even Type ID needs no declared namespace to resolv
   assert.deepEqual(withUnrelatedNamespace, { scope: 'global', typeId: PREVIEW_TYPE });
 });
 
-test('FINDING: skipping both magic and namespace-scoping is real, verified savings, not an estimate', () => {
+test('FINDING: skipping magic, the discriminator, and namespace-scoping together is real, verified savings, not an estimate', () => {
   function bareCost(typeIds, fields) {
     return core.encodeRecordBytes({ typeIds, fields: fields || new Map() }).length;
   }
 
   const namespaceValue = Buffer.alloc(4, 0xcd);
-  const type0Cost = bareCost([header.HEADER_TYPE], new Map([[header.HEADER_NAMESPACE_KEY, namespaceValue]]));
+  const discriminatorCost = cbor.encodeCanonical(namespaceValue).length;
   const namespaceScopedPreviewCost = bareCost([1]); // smallest legal odd uint
 
   const selfAllocatedEvenCost = bareCost([PREVIEW_TYPE]);
 
-  // Per-code cost, generic shared-container path: magic + repeated Type 0
-  // header + namespace-scoped small odd uint.
-  const sharedContainerPath = core.MAGIC.length + type0Cost + namespaceScopedPreviewCost;
+  // Per-code cost, generic shared-container path: magic + a decentralized-
+  // namespace discriminator + a namespace-scoped small odd uint Record.
+  const sharedContainerPath = core.MAGIC.length + discriminatorCost + namespaceScopedPreviewCost;
 
   // Per-code cost, own-URI-scheme path: no magic (scheme already
-  // dispatches), no Type 0 (scheme already isolates), self-allocated
-  // even Type ID directly.
+  // dispatches), no discriminator (scheme already isolates), self-
+  // allocated even Type ID directly.
   const ownSchemePath = selfAllocatedEvenCost;
 
   assert.ok(
     ownSchemePath < sharedContainerPath,
     `own-scheme path (${ownSchemePath}) should cost less than the shared-container path (${sharedContainerPath})`,
   );
-  // Verified, not asserted: the actual saving at time of writing.
-  assert.equal(sharedContainerPath, 14);
+  // Verified, not asserted: the actual saving at time of writing. Lower
+  // than earlier findings recorded (was 14) because the mandatory
+  // discriminator item is itself cheaper than the old typeID(0)+map
+  // Type 0 Record it replaced.
+  assert.equal(sharedContainerPath, 11);
   assert.equal(ownSchemePath, 4);
 });

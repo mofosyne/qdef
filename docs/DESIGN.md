@@ -167,8 +167,9 @@ name:
 
 - **Record Type ID + Record Type Name** — the identity carried in the
   prefix typeIDs before the Record map (spec §3.1).
-- **Namespace ID + Namespace Name** — the identity at key `1` / key `3`
-  on the Type `0` header Record (spec §3.5).
+- **Namespace ID + Namespace Name** — the identity carried by the
+  container discriminator (spec §3.5), key `1` / key `3` in its map
+  form or the equivalent bare-array shape.
 
 ### Template
 
@@ -777,7 +778,112 @@ Record Type, since the wire shape, skip behavior, and Type Hint's
 name-binding pattern are all identical; only the trust model and the
 etiquette guidance around repetition differ (§4.4).
 
+## Container discriminator redesign
+
+**Supersedes the optional Type `0` header documented below — read this
+first.** Everything from here down through
+"Own-URI-scheme carriers skip magic AND namespace-scoping" documents the
+optional-Record header design (Record Type `0`, an ordinary odd/optional
+key on an ordinary Record). That design shipped, was used in production
+analysis and TagDrop's own cost comparisons, and is kept below as the
+real trail of reasoning that led here — but it has since been replaced
+by a **mandatory container discriminator** (spec §3.5). This section
+records why, and is the current source of truth; treat every "Type `0`"
+reference below this point as historical unless it's also true of the
+discriminator (most of the *namespace semantics* — even/odd scoping,
+Hint-name qualification, per-code repetition — carried forward
+unchanged; only the *container-level wire shape* changed).
+
+**The problem the optional-Record design turned out to have.** An
+optional leading item that's a bare uint or byte string is structurally
+ambiguous: nothing on the wire distinguishes "this is the container's
+declared namespace" from "this is the first (or a backup) typeID
+belonging to the container's actual first Record." Both are the
+identical CBOR shape in the identical position, and a decoder has no
+principled way to tell them apart without already knowing which one it
+is — which is circular. This was not a hypothetical concern: tracing it
+through the actual JS parser's Phase-1 typeID accumulation confirmed it
+accepts uint/bstr/tstr items with no way to distinguish "header" from
+"second prefix item of the real Record 1." A CBOR tag number could have
+marked the difference unambiguously, but tag-number collision risk with
+other CBOR-based ecosystems already ruled that mechanism out once
+(FINDINGS.md #11, [below](#cbor-tag-routing--removed)). The only
+remaining way to resolve the ambiguity *structurally*, rather than by an
+encoder convention that a careless implementation could violate, is to
+make the discriminator unconditionally present — exactly one item,
+always first, no exceptions.
+
+**The trade-off, argued through explicitly rather than assumed.** Making
+the discriminator mandatory means giving up "zero cost when unused,"
+which the optional-Record design had treated as an important property
+(every other standard record type mechanism has it). Every container now
+pays at least 1 byte (`uint 0`) even when it wants no namespace at all.
+The case for accepting this: MCU-constrained parsing cost is not the
+relevant constraint for this project's actual priorities (smartphone
+scanning first, deeply-constrained embedded scanners a nice-to-have) —
+wire size is what actually matters, and a single byte answering "is this
+a generic QDEF record or a specific application's own file format" is
+proportionally negligible against any realistic payload, closer to a
+RIFF form-type field than to wasted padding. It is not really "unused
+overhead" the way a genuinely optional field would be: it's a
+universally meaningful piece of self-description every container
+benefits from having answered cheaply and unambiguously, the same job
+RIFF's own form-type byte does immediately after RIFF's own magic.
+
+**What it buys back.** The discriminator's six recognized shapes (spec
+§3.5) are each individually cheaper than the old Type `0` Record shape,
+since none of them pay for a typeID prefix item plus a Map wrapper the
+way an ordinary Record does. Verified against the actual encoder: a bare
+4-byte decentralized namespace value costs 5 bytes as a discriminator,
+versus 8 bytes as the old optional Type `0` Record (`Prefix: 0` + `Map: {
+1: h'...' }`). Repeating that discriminator on every code of a
+multi-code group (still required, for the same single-point-of-failure
+reason as before) now costs 5 bytes/code instead of 8 — enough that a
+single shrunk namespace-scoped odd uint Type ID (saving ≥8 bytes against
+a private-use-random byte string baseline) already nets a **win**
+per code on its own, not merely a breakeven the way the old 8-byte
+header required two shrunk IDs to clear.
+
+**What did not change.** The mandatory core still needs zero semantic
+knowledge of the discriminator — it only knows how to skip exactly one
+well-formed CBOR item to find where the Record Sequence starts
+(`Container::discriminator()` in `rust/qdef-core`, backed by the
+crate's existing generic `skip_any_item`; no discriminator-shape-aware
+code was added). Interpretation — namespace/hint extraction — stays
+entirely in `prototype/src/header.js`'s `parseDiscriminator`, matching
+the original two-layer core/stdlib split. The own-URI-scheme and NDEF
+carrier paths (`decodeSequence`) are unaffected: they never had a magic
+prefix or a Type `0` header, and they never get a discriminator item
+either, for the identical reason.
+
+**This is a breaking wire-format change**, made deliberately rather than
+incrementally, because the spec is still Draft status and explicitly
+"not yet used in production anywhere" — see spec §1. There is no
+version-negotiation machinery to preserve compatibility with (the
+project removed the version byte earlier, on the theory that even/odd
+criticality already provides forward compatibility), so this redesign
+is a one-time, pre-production correction, not something requiring a
+migration path.
+
+Prototyped end to end: `prototype/src/core.js` (`encodeContainer`/
+`decodeContainer` split off exactly one discriminator item),
+`prototype/src/header.js` (`parseDiscriminator`, all six shapes),
+`prototype/src/wrappers.js` (`resolveStack` reads each code's
+discriminator via `parseDiscriminator` instead of scanning
+`records[0]`), and `rust/qdef-core` (`Container::discriminator()`,
+cross-validated against Node-encoded fixtures in `fixtures.rs`). See
+FINDINGS.md for a real gap this redesign surfaced during
+implementation: the Rust fixtures had gone stale and the test suite was
+passing for the wrong reason before they were regenerated.
+
 ## The container header collapsed to magic + a CBOR Sequence, full stop
+
+**Historical — the wire shape described here (Type `0` as an ordinary
+optional Record) has since been superseded by the mandatory container
+discriminator; see
+["Container discriminator redesign"](#container-discriminator-redesign)
+above.** Kept as the real trail of reasoning that led to the current
+design, not as a description of current behavior.
 
 What started as "can the header carry an optional format namespace for
 fast identification" ended somewhere more radical: there is no longer a
@@ -1113,9 +1219,21 @@ where Body's one-time saving doesn't stack with a per-code tax the way
 two *repeating* IDs would) — it just isn't the general rule this section
 implied. Fixed the stale examples in both places; see FINDINGS.md.
 
-Prototyped in `prototype/src/wrappers.js`'s `resolveStack` (extended to
-locate a Type `0` sibling per code, require agreement across every code
-that declares one, and apply it to the resolved terminal Record) and
+**Superseded numbers, not re-derived here.** The `8 bytes` repeated-header
+cost above was the optional Type `0` Record's cost; the mandatory
+container discriminator (["Container discriminator
+redesign"](#container-discriminator-redesign), above) replaced it at 5
+bytes/code for the equivalent bare 4-byte decentralized namespace,
+making a single repeating shrunk ID a net win outright rather than a
+breakeven. The qualitative conclusions in this section (repetition is
+required per code, a Wrapper-reachable namespace-scoped ID gets no
+parity protection, disagreement is rejected) are unchanged — only the
+Type `0`-specific byte totals are dated.
+
+Prototyped in `prototype/src/wrappers.js`'s `resolveStack` (reads each
+code's discriminator via `header.parseDiscriminator`, requires agreement
+across every code that declares one, and applies it to the resolved
+terminal Record) and
 `prototype/test/multi-code-namespace.test.js`: the repeated case
 resolving correctly through full Split reassembly, the single-point-of-
 failure case reproduced directly (a namespace declared on only one code
@@ -1174,12 +1292,22 @@ step, not asserted:**
 | Approach (per group of N codes, N=4 shown)   | bytes | delta |
 +---------------------------------------------+-------+-------+
 | TagDrop's own envelope (version + type)      |     8 |     — |
-| QDEF, magic + namespace-scoped (original)    |    58 |   +50 |
-| QDEF, no magic (own scheme dispatches)       |    42 |   +34 |
-| QDEF, no magic, no namespace (own scheme     |    20 |   +12 |
+| QDEF, magic + discriminator + namespace-     |    44 |   +36 |
+|   scoped (original)                          |       |       |
+| QDEF, no magic (own scheme dispatches)       |    28 |   +20 |
+| QDEF, no magic, no discriminator (own scheme |    16 |    +8 |
 |   also isolates -- self-allocated even ID)   |       |       |
 +---------------------------------------------+-------+-------+
 ```
+
+**Numbers updated for the mandatory container discriminator** (["Container
+discriminator redesign"](#container-discriminator-redesign), above),
+which replaced the old optional Type `0` Record header this table
+originally priced (58/+50, 42/+34, 20/+12) — the discriminator's cheapest
+namespace-bearing shape costs less than the old header's typeID+map
+framing, so every row that carries a namespace got cheaper. Recomputed
+directly from `prototype/test/custom-scheme-carrier.test.js`'s own
+verified per-code figures (11, 7, 4) × 4 codes, not hand-estimated.
 
 Each row is a real, previously-unapplied instance of a principle this
 document already stated, not a new mechanism — the fix was recognizing
@@ -1187,8 +1315,9 @@ that "own URI scheme" and "own MIME type" already buy *two* things
 (dispatch AND isolation), and this project's own cost comparisons had
 only been crediting the first.
 
-**The remaining ~12–18 byte gap is not waste, and shouldn't be chased
-away.** It's the cost of a typeID being a self-describing, open-ended
+**The remaining +8 byte gap (own-scheme, self-allocated ID vs. TagDrop's
+own envelope) is not waste, and shouldn't be chased away.** It's the cost
+of a typeID being a self-describing, open-ended
 registry entry — meaningful to any future or generic reader, not just
 one application's own decoder — versus TagDrop's `type` byte, a closed,
 app-private 2-value enum. That's a genuinely different capability, not
@@ -1204,8 +1333,10 @@ matching namespace-skip guidance connected to the same "already isolated"
 reasoning, and `prototype/test/custom-scheme-carrier.test.js` demonstrates
 both — a bare Sequence round-tripping via the same `decodeSequence` path
 NDEF already used, and the corrected byte counts verified directly against
-the encoder (`14` bytes shared-container path vs. `4` bytes own-scheme
-path, per occurrence).
+the encoder (`11` bytes shared-container path vs. `4` bytes own-scheme
+path, per occurrence — the shared-container figure reflects the mandatory
+container discriminator, cheaper than the optional Type `0` Record header
+in place when this figure was first measured).
 
 §3.1's form boundary excludes CBOR major type 1 (negative integer) from
 valid typeID prefix forms, alongside array/map/tag/simple for
@@ -1518,10 +1649,9 @@ forward compatibility for ordinary Record evolution — new Record Types are
 skipped, new odd keys are ignored, new even keys abort only the one Record
 that has them. The only thing a version byte still gave beyond that was
 safety for changes to the container's own outermost framing — and even that
-need is now covered without one: see §3.5 (Record Type `0`, the container's
-namespace/header mechanism), which extends exactly the same even/odd tools
-inward, rather than needing a separate, cruder all-or-nothing gate around
-them.
+need is now covered without one: see §3.5 (the container discriminator's
+map form), which extends exactly the same even/odd tools inward, rather
+than needing a separate, cruder all-or-nothing gate around them.
 
 ### No record count or total payload size
 

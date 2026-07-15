@@ -52,10 +52,24 @@ const wifiUnknownOddKeyContainer = core.encodeContainer([
 ]);
 
 // --- Record with no typeID prefix: ignored (not routed) ---
+// Manually constructed (not via encodeContainer) to keep the mandatory
+// discriminator explicit here: uint 0 (no namespace), then a bare map
+// with no preceding typeID item.
 
+const noTypeidDiscBytes = cbor.encodeCanonical(0);
 const noTypeidMap = new Map([[0, 'SSID']]);
 const noTypeidBytes = cbor.encode(noTypeidMap);
-const noTypeidContainer = Buffer.concat([core.MAGIC, noTypeidBytes]);
+const noTypeidContainer = Buffer.concat([core.MAGIC, noTypeidDiscBytes, noTypeidBytes]);
+
+// --- Bare NDEF/own-URI-scheme sequence: no magic, no discriminator ---
+// Built directly via encodeRecordBytes (bypassing encodeContainer entirely),
+// since that carrier already supplies its own dispatch/isolation and never
+// carries a magic or a discriminator item (§ own-URI-scheme carriers).
+
+const bareSequenceNoDiscriminator = core.encodeRecordBytes({
+  typeIds: [rt.WIFI_TYPE],
+  fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2], [1, true]]),
+});
 
 // --- Two records in one sequence: first aborts (unknown even key), second is fine ---
 
@@ -182,21 +196,20 @@ const largeTypeIdContainer = core.encodeContainer([
   { typeIds: [2n ** 64n - 1n], fields: new Map([[0, 'private-use content']]) },
 ]);
 
-// --- Record Type 0 (container-level header) ---
-// The mandatory core needs zero special knowledge of this Type ID at all
-// — it's just an ordinary Record. This fixture proves that directly: a
-// Type 0 record (namespace at key 3, Hint name at key 5, both
-// odd/optional) followed by a plain Wi-Fi record, decoded by the same
-// generic Rust decoder with no Type-0-specific code path.
+// --- Container discriminator (§3.5) ---
+// The mandatory core needs zero special knowledge of what the
+// discriminator means -- it only knows how to split exactly one CBOR
+// item off the front (`Container::discriminator()`), never how to
+// interpret it. This fixture proves the records that follow are routed
+// by the exact same generic Rust decoder either way: a decentralized
+// (byte-string) namespace discriminator, followed by a plain Wi-Fi
+// record.
 
 const header = require('../src/header');
-const headerContainer = core.encodeContainer([
-  {
-    typeIds: [header.HEADER_TYPE],
-    fields: new Map([[1, 12271745624591856273n], [3, 'com.example/tagdrop-paper']]),
-  },
-  { typeIds: [rt.WIFI_TYPE], fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) },
-]);
+const headerContainer = core.encodeContainer(
+  [{ typeIds: [rt.WIFI_TYPE], fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) }],
+  Buffer.from('a9d6e1f30b7c4482', 'hex'),
+);
 
 // --- §3.1's byte-string Type ID ---
 // A byte string Type ID is a decentralized/global Type ID. The core routes
@@ -243,6 +256,8 @@ console.log();
 console.log(rustBytes('WIFI_UNKNOWN_ODD_KEY_CONTAINER', wifiUnknownOddKeyContainer));
 console.log();
 console.log(rustBytes('NO_TYPEID_CONTAINER', noTypeidContainer));
+console.log();
+console.log(rustBytes('BARE_SEQUENCE_NO_DISCRIMINATOR', bareSequenceNoDiscriminator));
 console.log();
 console.log(rustBytes('TWO_RECORD_CONTAINER', twoRecordContainer));
 console.log();

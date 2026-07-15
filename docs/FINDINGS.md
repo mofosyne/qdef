@@ -1151,3 +1151,77 @@ Costs:
   before entering the map, adding a step to the routing path. The
   prefix is a straightforward CBOR major-type check — trivial cost,
   but present.
+
+### 26. The optional Type `0` header was structurally ambiguous with an ordinary Record's own prefix typeIDs — replaced with a mandatory container discriminator
+
+Type `0` (§3.5) worked as an *optional* leading Record: a bare uint or
+byte string, present or absent, MUST-be-first if present. Walking through
+exactly how a decoder tells "the header is present" apart from "the
+header is absent and this is just the first real Record's own prefix
+typeID" surfaced a real structural gap: both cases are the identical CBOR
+shape (uint or byte string) in the identical position. Tracing the
+actual JS parser confirmed it: Phase-1 typeID accumulation
+(`core.js`/`isTypeId`) accepts uint/bstr/tstr items with no way to
+distinguish "this is a header" from "this is the second prefix item of
+Record 1." A CBOR tag number could mark the difference unambiguously, but
+tag-based routing was already rejected once for real collision risk
+(Finding #11). The only remaining fix that resolves the ambiguity
+structurally, rather than relying on encoder discipline that could be
+violated, is to make the discriminator unconditionally present.
+
+**Redesigned as a mandatory container discriminator**, always exactly
+one CBOR item, always immediately after magic: `uint 0` (no namespace),
+`uint N>0` (allocated namespace), byte string (decentralized namespace),
+`[uint, bstr]` (allocated + decentralized backup), `[bstr, tstr]`
+(decentralized + hint), or the full map form (extensible, same shape the
+old Type `0` Record's own map had). An unrecognized shape degrades to
+"no namespace," matching every other graceful-degrade path in this
+format.
+
+**This gives up "zero cost when unused"** — every container now pays at
+least 1 byte, even one wanting no namespace. Initially rejected on that
+basis (a mandatory tax on the common case), but reconsidered after being
+pointed at the wrong framing: MCU-constrained parsing cost isn't this
+project's actual binding constraint (smartphone-first; embedded scanners
+are a nice-to-have), and a single byte answering "generic QDEF record vs.
+specific application file format" is proportionally negligible against
+any realistic payload — closer to RIFF's form-type byte than to wasted
+padding. It also isn't purely a tax: the discriminator's shapes are each
+cheaper than the old Type `0` Record's typeID+map framing, verified
+against the actual encoder — a bare 4-byte decentralized namespace costs
+5 bytes as a discriminator versus 8 bytes as the old optional Record,
+enough that a single repeating namespace-scoped ID now nets a real win
+per code rather than merely breaking even (see DESIGN.md's ["Container
+discriminator redesign"](DESIGN.md#container-discriminator-redesign)).
+
+**Verified the mandatory core stays minimal, not just asserted it.**
+`rust/qdef-core`'s `Container::parse` needed exactly one addition — call
+the crate's existing generic `skip_any_item` once to split the
+discriminator off before parsing Records — and zero discriminator-shape
+interpretation code. `header.js`'s `parseDiscriminator` is the only place
+that understands what the six shapes mean.
+
+**A real gap surfaced while implementing this: the Rust test suite was
+green for the wrong reason.** After updating the JS encoder/decoder, all
+60 Node tests passed as expected, but `cargo test` also reported all
+green *before* `fixtures.rs` was regenerated — because `rust/qdef-core`
+has zero discriminator-awareness of its own (by design), it was still
+correctly parsing the *old*-format fixture bytes, never actually
+exercising the new split-off-one-item behavior at all. A green Rust run
+proved nothing here. Caught by reasoning through why that had to be
+suspicious before trusting it, then confirmed for real by regenerating
+`fixtures.rs` from the updated Node encoder and rerunning — which
+surfaced two genuine failures (a stale fixture built by manually
+concatenating magic + record bytes with no discriminator, and a
+bare-NDEF-sequence test that stripped only magic off a full container,
+leaving the discriminator byte in front of the real Record). Both fixed:
+the manually-built fixture gained an explicit `uint 0` discriminator, and
+the bare-sequence fixture was rebuilt directly via `encodeRecordBytes`
+(bypassing `encodeContainer` entirely) instead of slicing a full
+container — the same fix pattern already applied on the JS side in
+`custom-scheme-carrier.test.js`. This is the general lesson, not
+specific to this change: a cross-language fixture-based test only proves
+what it was last regenerated against, and a decoder with intentionally
+no semantic knowledge of a wire-format detail (by design, here) can stay
+green on stale bytes indefinitely without ever really testing the new
+shape.

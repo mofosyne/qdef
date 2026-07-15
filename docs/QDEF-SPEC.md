@@ -76,19 +76,21 @@ lean on instead.
 
 8-bit byte mode only — never alphanumeric; text-safety is explicitly not a
 goal. A 4-byte magic header (4 bytes total, no version byte) for instant
-optical-stream validation, followed by a CBOR Sequence (RFC 8742) of
-Records — a sequence rather than a wrapping CBOR array, so a constrained
-parser can process each Record as it streams in without buffering the
-whole payload first (validated in the prototype against a real incremental
-CBOR decoder fed arbitrary byte chunks).
+optical-stream validation, followed by a **mandatory container
+discriminator** (§3.5 — always exactly one CBOR item, always present),
+followed by a CBOR Sequence (RFC 8742) of Records — a sequence rather
+than a wrapping CBOR array, so a constrained parser can process each
+Record as it streams in without buffering the whole payload first
+(validated in the prototype against a real incremental CBOR decoder fed
+arbitrary byte chunks).
 
 ```
-+----------------------+----------------------------------+
-|   Magic (4 bytes)     |     CBOR Sequence of Records     |
-+----------------------+----------------------------------+
-| 0x51 0x44 0x45 0x46   |  Record, Record, Record, ...     |
-|       "QDEF"          |                                  |
-+----------------------+----------------------------------+
++----------------------+------------------------+----------------------------------+
+|   Magic (4 bytes)     | Discriminator (1 item) |     CBOR Sequence of Records     |
++----------------------+------------------------+----------------------------------+
+| 0x51 0x44 0x45 0x46   |  uint, bstr, array,    |  Record, Record, Record, ...     |
+|       "QDEF"          |  or map (§3.5)         |                                  |
++----------------------+------------------------+----------------------------------+
 ```
 
 A minimal Record is at minimum a typeID prefix (uint or byte string) followed
@@ -112,26 +114,30 @@ typeID + map.
 For NFC, the magic prefix is redundant: NDEF's own MIME-type field already
 identifies the payload. An NDEF record carrying QDEF content uses MIME type
 `application/vnd.qdef` with just the CBOR Sequence of Records as the
-payload, no magic bytes. The magic header exists only for the QR/optical
-case, where a scanner needs to recognize the byte stream's format before
-any higher-level dispatch exists to tell it what it's looking at.
-(Validated in the prototype: a bare CBOR Sequence with no magic prefix
+payload — no magic bytes, and no discriminator item either, since NDEF's
+MIME type already provides the "what kind of file is this" identification
+the discriminator otherwise exists to buy (§3.5). The magic-and-
+discriminator header exists only for the QR/optical case, where a scanner
+needs to recognize the byte stream's format before any higher-level
+dispatch exists to tell it what it's looking at. (Validated in the
+prototype: a bare CBOR Sequence with no magic prefix and no discriminator
 decodes through the exact same Record-routing logic as the full
 container.)
 
 **The same is true for an application carrying QDEF content under its own
 URI scheme** (§1's "When QDEF earns its place"): the scheme prefix
 (`myapp:...`) already told the reader what it's looking at before any
-QDEF-specific parsing begins, doing the identical dispatch job magic
-exists to provide for an otherwise-unidentified byte-mode stream — a
-scanner recognizes `myapp:` and hands the remainder straight to that
-app's own decoder. The remainder is a bare CBOR Sequence of Records,
-decoded exactly the same way as the NDEF case above, via the same
-`decodeSequence` path. `mofosyne/tagdrop`'s own `tagdrop:<...>` scheme
-already does exactly this dispatch job for its own wire format today; an
-application in that position pays no magic-byte cost at all for adopting
-QDEF's Record shape underneath its existing scheme. (Validated in the
-prototype: `prototype/test/custom-scheme-carrier.test.js`.)
+QDEF-specific parsing begins, doing the identical dispatch job magic *and*
+the discriminator exist to provide for an otherwise-unidentified byte-mode
+stream — a scanner recognizes `myapp:` and hands the remainder straight to
+that app's own decoder. The remainder is a bare CBOR Sequence of Records
+with no magic and no discriminator, decoded exactly the same way as the
+NDEF case above, via the same `decodeSequence` path. `mofosyne/tagdrop`'s
+own `tagdrop:<...>` scheme already does exactly this dispatch job for its
+own wire format today; an application in that position pays no
+magic-byte or discriminator-byte cost at all for adopting QDEF's Record
+shape underneath its existing scheme. (Validated in the prototype:
+`prototype/test/custom-scheme-carrier.test.js`.)
 
 **No version byte.** §3.2's even/odd criticality rule already provides
 local forward compatibility; see [DESIGN.md](DESIGN.md#container-framing-choices)
@@ -375,7 +381,7 @@ Recommended truncation lengths:
 ```
 
 **Note:** These recommendations apply to Record Type IDs (prefix items).
-Namespace IDs (Type `0`, key `1`) are the global root of trust for all
+Namespace IDs (the container discriminator, §3.5) are the global root of trust for all
 scoped IDs within a container — two unrelated namespaces with the same
 ID would cause all their scoped Type IDs to collide. Namespace IDs MUST
 therefore use at least 4 bytes; 8 bytes is recommended for maximum safety.
@@ -550,12 +556,12 @@ QDEF is designed so a minimal, generic parser is genuinely minimal — no
 implementer has to bring a compression library or sector-reassembly logic
 just to support the *container*:
 
-- **Core QDEF parser (mandatory, all implementers):** verify magic, walk
-  the CBOR Sequence, read each Record's prefix typeIDs to route or skip it,
-  apply the even/odd rule (§3.2) to unrecognized keys. That's the entire
-  surface area — no compression, no multi-code state, no knowledge of any
-  specific Record Type's fields (including Type `0`, §3.5 — the core
-  needs no special case for it).
+- **Core QDEF parser (mandatory, all implementers):** verify magic, skip
+  the discriminator as one opaque CBOR item (§3.5 — never interpreting
+  its shape), walk the CBOR Sequence, read each Record's prefix typeIDs
+  to route or skip it, apply the even/odd rule (§3.2) to unrecognized
+  keys. That's the entire surface area — no compression, no multi-code
+  state, no knowledge of any specific Record Type's fields.
 - **Record-Type-specific handling (optional, per Record Type an implementer
   chooses to support):** everything else — including whether a given
   Record Type's payload happens to be compressed, or happens to require
@@ -612,77 +618,108 @@ ordering — sorting a Record's handful of keys before serializing is
 cheap, including on constrained hardware, and §3's Record Maps are small
 by construction (a flat set of fields, never nested).
 
-### 3.5 Record Type 0 — the Container Header
+### 3.5 The Container Discriminator
 
-Record Type `0` is reserved for container-level metadata — currently just
-a format namespace, for a QDEF-based file format that wants a fast,
-early "what kind of file is this" identifier, RIFF's form-type
-(`WAVE`/`AVI `) being the closest existing analogue. It is an ordinary
-Record, not a distinct wire structure: same prefix-based typeID routing,
-same even/odd criticality (§3.2), same canonical encoding (§3.4). No new
-parsing concept exists for it, and the mandatory core (§3.3) needs zero
-special-cased knowledge of Type `0` to route or skip it correctly.
+Immediately after the magic (§2), every QDEF container carries exactly
+one mandatory CBOR item — the **discriminator** — before the CBOR
+Sequence of Records begins. Its job is the same one RIFF's form-type
+(`WAVE`/`AVI `) does right after RIFF's own magic: a fast, early "what
+kind of file is this" identifier, specifically a format namespace for a
+QDEF-based file format that wants one. Unlike a Record, the
+discriminator is not itself typeID-prefixed or Map-shaped — it is
+whatever single well-formed CBOR item comes next, and its own CBOR major
+type is what tells a decoder which of the shapes below it is. The
+mandatory core (§3.3) only needs to know how to skip exactly one
+well-formed CBOR item to find where the Record Sequence starts — it
+never needs to interpret what the item means. That interpretation is
+Record-Type-interpretation-specific handling (§3.3's optional tier),
+prototyped in `prototype/src/header.js` and never added to the minimal
+Rust core (`rust/qdef-core`), which stays exactly as small as before.
 
-Visually, when present, it's easiest to think of as occupying a fixed
-metadata slot right after the magic — §2's diagram redrawn with that
-slot broken out:
+**Why mandatory, and not an optional leading Record the way an earlier
+draft of this section had it.** An optional item is structurally
+ambiguous the instant it's a bare uint or byte string: a decoder
+scanning for a discriminator has no way to distinguish "this is the
+container's own discriminator" from "this is the first typeID (or a
+backup typeID) belonging to the container's first real Record" — both
+are the identical CBOR shape at the identical position. A CBOR tag
+number could mark the difference, but tag-number collision risk with
+other CBOR-based ecosystems already ruled that mechanism out once
+(FINDINGS.md #11, [DESIGN.md](DESIGN.md#cbor-tag-routing--removed)).
+The only way left to resolve the ambiguity structurally, rather than by
+convention a careless encoder could violate, is to make the
+discriminator unconditionally present — always exactly one item, always
+first, no exceptions — so a decoder never has to guess which case it's
+looking at.
+
+**Six recognized shapes**, dispatched purely by the discriminator
+item's own CBOR major type:
 
 ```
-+------------+-----------------------------+-----------------------------+
-|   Magic    |   Record Type 0 (OPTIONAL)   |   Record, Record, ...      |
-|  (4 bytes) |   container-level metadata,  |   ordinary content,        |
-|            |   MUST be first if present   |   exactly as before        |
-+------------+-----------------------------+-----------------------------+
-|   "QDEF"   |  Prefix: 0                  |                             |
-|            |  Map: { 1:<namespace>,       |                             |
-|            |        3:<Hint name> }       |                             |
-+------------+-----------------------------+-----------------------------+
-             \_____________________________________________________/
-                    still one CBOR Sequence — Type `0` is an
-                 ordinary Record in it, not a second wire structure
++---------------------------------+--------------------------------------------------------------+
+| Discriminator shape              | Meaning                                                       |
++---------------------------------+--------------------------------------------------------------+
+| uint 0                           | No namespace declared (cheapest legal container: 1 byte)     |
+| uint N > 0                       | Allocated Namespace ID = N (registered/common-vocabulary)    |
+| byte string                      | Decentralized Namespace ID (self-certifying, no registry)    |
+| array [uint, byte string]        | [Allocated Namespace ID, Decentralized backup] — promotion/  |
+|                                   | transition pair, mirrors §3.1's backup-typeID convention     |
+| array [byte string, text string] | [Decentralized Namespace ID, Namespace Name hint]            |
+| map                              | Full extensible form: {1: namespace, 3: hint, ...}           |
+| anything else (unrecognized)     | Degrades to "no namespace" — same graceful degrade as uint 0 |
++---------------------------------+--------------------------------------------------------------+
 ```
 
-That's the useful mental model, not the literal wire shape: nothing
-marks this slot as special at the byte level, and a decoder finds it the
-same way it finds any Record — by reading the first prefix typeID and
-checking it. The "slot" is a consequence of the MUST-be-first
-rule below, not a distinct structure the format defines.
-
 ```
-Type 0: {                            // Container Header (standard record type)
-  // prefix typeID: 0               // the typeID makes it the header
-  // field map:
-  1: h'663c1cf2',                    // OPTIONAL: format namespace, a
-                                      //   uint or byte string (same
-                                      //   convention as §3.1's Type IDs
-                                      //   — see below). Byte string
-                                      //   namespace IDs MUST be 4+ bytes
-                                      //   (they are the global root of
-                                      //   trust for all scoped IDs)
-  3: "com.example/tagdrop-paper"     // OPTIONAL: recoverable name for
-                                      //   the namespace, same pattern as
-                                      //   §3.1's hash-derivation hint
+0                                      // cheapest legal container: no namespace declared
+
+h'a9d6e1f30b7c4482'                    // bare decentralized namespace, no hint
+
+[100, h'a7f90b3c']                     // allocated ID 100, with a decentralized
+                                        //   backup ID for older decoders
+
+[h'a9d6e1f30b7c4482', "com.example/tagdrop-paper"]
+                                        // decentralized namespace with a
+                                        //   recoverable Hint name
+
+{                                       // full extensible form
+  1: h'a9d6e1f30b7c4482',              // namespace: uint or byte string,
+                                        //   same convention as §3.1's Type IDs
+  3: "com.example/tagdrop-paper"       // OPTIONAL: recoverable Hint name,
+                                        //   same pattern as §3.1's hash-
+                                        //   derivation hint
 }
 ```
 
-**MUST be the first Record in the Sequence to serve its purpose.** Unlike
-every other standard record type (App Route, Media Payload, Fallback Hint are
-all explicitly *not* positionally special, §4), Type `0`'s entire reason
-to exist is early identification without scanning the whole container —
-a decoder shouldn't have to walk the full Sequence just to find out what
-it's looking at. A Type `0` Record found anywhere but first is simply
-not treated as the header: the container degrades to unnamespaced,
-never a hard failure. The same graceful degrade applies if Type `0` is
-absent entirely, or if it's present but aborts (an unrecognized future
-even key, per the versioning note below) — all three cases mean exactly
-the same thing to a decoder: no namespace declared, interpret every
-other Record's Type ID globally, as if this section didn't exist.
+The bare-array forms exist purely for compactness in the two most common
+non-trivial cases (a promoted allocated ID that still wants a backup, and
+a decentralized ID that wants a hint); the map form is the fully
+extensible fallback for anything future revisions need beyond keys `1`
+and `3`, using the identical even/odd key convention (§3.2) as every
+other Record's field Map. An encoder picks whichever of the six shapes
+is cheapest for what it actually needs to say; a decoder MUST recognize
+all six.
 
-**Zero cost when unused.** Because the field is a plain odd/optional key
-on an ordinary Record rather than a mandatory part of the fixed header,
-a container using only known, global Type IDs pays nothing at all for
-this mechanism — not even one byte — matching every other standard record type's
-Record's "unaware party pays nothing" property (§4).
+**Unrecognized shape degrades gracefully, exactly like `uint 0`.** A
+discriminator item that is well-formed CBOR but doesn't match any of the
+five namespace-bearing shapes above (for instance, a future revision's
+shape an old decoder doesn't yet understand) is treated identically to
+"no namespace declared" — never a hard failure. The mandatory core
+still only has to skip it as one CBOR item; it never needs to recognize
+its shape to do that.
+
+**Not "zero cost when unused" — deliberately, and by design.** Because
+the discriminator is unconditionally present, every container pays for
+it, including one that wants no namespace at all: `uint 0` still costs
+1 byte. This is a considered trade-off, not an oversight — see
+[DESIGN.md](DESIGN.md#container-discriminator-redesign) for the full
+byte-cost accounting and the reasoning that led here. In short: a
+single byte answering "is this a generic QDEF record, or a specific
+application's own file format" is proportionally negligible next to any
+realistic payload, and it buys back real savings (§3.1's own typeID
+prefix items no longer have to do double duty as an ambiguous
+leading-Record-or-header guess) the instant a namespace actually is
+wanted.
 
 **An application whose carrier already isolates its content from every
 other QDEF-aware decoder generally has no need for this mechanism at
@@ -693,15 +730,16 @@ IDs — the cross-app collision-safety a declared namespace exists to buy
 isn't needed when there is no shared, generic dispatch context for other
 apps' Type IDs to collide within in the first place. Such an application
 can use a small, self-allocated even Type ID (the `32768`+ tier, §4) with
-no namespace, no Type `0` Record, and no per-code repetition cost —
-cheaper than namespace-scoping and just as collision-safe *in that
-application's own actual deployment*, even though the same ID would not
-be safe to assume collision-free in a shared, generic QDEF container.
-Namespace-scoping earns its cost specifically where that isolation
-doesn't already exist — a byte-mode QR or an NDEF payload with no
-app-specific MIME type, where genuinely unrelated apps' content might
-share one container. See DESIGN.md for the real, verified byte-cost
-comparison this recommendation is based on.
+no namespace, no discriminator item at all (§2's own-URI-scheme carrier
+path), and no per-code repetition cost — cheaper than namespace-scoping
+and just as collision-safe *in that application's own actual
+deployment*, even though the same ID would not be safe to assume
+collision-free in a shared, generic QDEF container. Namespace-scoping
+earns its cost specifically where that isolation doesn't already
+exist — a byte-mode QR or an NDEF payload with no app-specific MIME
+type, where genuinely unrelated apps' content might share one container.
+See DESIGN.md for the real, verified byte-cost comparison this
+recommendation is based on.
 
 **Format namespace values follow the same convention as Record Type IDs
 (§3.1): a uint or a byte string.** A uint namespace follows the same
@@ -727,20 +765,16 @@ used *inside* an already-declared namespace, which doesn't need
 qualifying. A reverse-domain string (`"com.example.tagdrop"`, not bare
 `"tagdrop"`) is the recommended form here specifically.
 
-**No dedicated "version" field, and Type `0` does not get "versioned" by
-minting new Type IDs for future header revisions.** Both were considered
-and rejected: minting new low Type IDs for header generations would
-waste Type ID space that should stay available for real future standard record type
-mechanisms, and it's inconsistent with how every other standard record type Record
-actually evolves here (Encrypt gained Algorithm/Key Algorithm as new
-keys on its *existing* Type ID, never a new Type). Even/odd
-extensibility already *is* the version
-mechanism, for free: a genuinely incompatible future change to Type `0`
-itself is just a new even/critical key, whenever it's actually needed.
-An old decoder that doesn't recognize it aborts only this one Record
-(§3.2) and falls back to unnamespaced — the same graceful, already-
-proven degrade every other standard record type already has, with nothing
-pre-allocated in advance.
+**No dedicated "version" field, and the discriminator does not get
+"versioned" by minting new shapes for future revisions beyond the six
+above.** The map form is already the fully extensible escape hatch: a
+genuinely incompatible future addition is just a new even/critical key
+in the map form, whenever it's actually needed, using the same even/odd
+extensibility (§3.2) every Record's own field Map already relies on. A
+decoder that doesn't recognize a future key inside the map form aborts
+only that key's effect (or the whole map form, if the new key is
+even/critical) and falls back to unnamespaced — the same graceful,
+already-proven degrade every unrecognized discriminator shape gets.
 
 **What a declared namespace changes, and what it doesn't.** Even uint
 Type IDs always stay globally, absolutely interpreted regardless of any
@@ -754,7 +788,7 @@ mechanism exists at all.
 
 **Odd uint Type IDs become namespace-scoped once a namespace is declared,
 reusing the existing flat numbering space rather than carving out a new
-range for it.** When Type `0` declares namespace `N`, a subsequent Record's
+range for it.** When the discriminator declares namespace `N`, a subsequent Record's
 odd Type ID `T` is no longer looked up as the bare global identity `T` —
 its real identity is the *compound* key `(N, T)`, exactly the way a
 Bluetooth short UUID only means anything paired with the Base UUID it's
@@ -784,15 +818,17 @@ namespace happens to be declared.
 a declared namespace has no collision safety source — not registry
 curation (it's not registered), not numeric width (odd uints can be
 small), and not a namespace (none declared). A Record with an odd uint
-Type ID and no Type `0` header declaring a namespace MUST be treated as
+Type ID and no discriminator declaring a namespace MUST be treated as
 an abort of that Record — this is stricter than the current even-uint
 fallback, and deliberately so: a wrong match is worse than a clean miss.
 
 **This is Record-Type-interpretation-specific handling (§3.3's optional
 tier), not a mandatory-core requirement.** The mandatory core is
-unaffected: it still just reads prefix typeIDs to route or skip, with zero
+unaffected: it still just skips the discriminator as one opaque CBOR
+item and reads prefix typeIDs to route or skip Records, with zero
 knowledge of namespaces, exactly as validated today (`rust/qdef-core`
-needs no Type-`0`-specific code at all). The correctness obligation
+needs no discriminator-shape-specific code at all beyond splitting it
+off). The correctness obligation
 falls on any decoder that implements specific semantics for *any*
 odd uint or namespace-local Type ID: such a decoder MUST check for a
 declared namespace before applying its interpretation, and MUST NOT fall
@@ -818,8 +854,8 @@ decentralized form to repeat per code (§4.2, §4.4): a mechanism meant to
 work from any single code, or to survive losing one, cannot rely on a
 declaration that exists on only one of them. It applies with equal force
 to a Type ID only reachable after Split reassembly: `parity_scheme`
-(§4.1) recovers a missing *fragment's bytes*, but a Type `0` Record is a
-whole sibling Record, not fragment data — parity gives it no protection
+(§4.1) recovers a missing *fragment's bytes*, but the discriminator is a
+whole leading item, not fragment data — parity gives it no protection
 at all. A namespace declared on a single code is therefore a genuine
 single point of failure the Split-protected *content* does not share:
 losing that one code loses the namespace even when every other code
@@ -828,27 +864,30 @@ namespace value applies to every Record in that code's own Sequence *and*
 to whatever Record a Wrapper stack (Split/Compress/Encrypt) in that
 Sequence ultimately resolves to, once fully unwrapped.
 
-**This has a real, sometimes negative, wire-code cost — verified against
-the actual encoder, not assumed.** Shrinking one namespace-scoped Type ID
-from a private-use-random byte string (10 bytes bare) to a small odd uint
-(4 bytes bare) saves 6 bytes; the cheapest legal repeated Type `0` header
-(a 4-byte byte string namespace, no Hint name) costs 8 bytes *per code*.
-A single namespace-scoped Type ID repeating alone on each code is
-therefore a net **regression** (+2 bytes/code), not a savings, once the
-mandatory repetition is priced in. It only becomes a net win once at
-least two namespace-scoped Type IDs' worth of savings land on the same
-code (2 × 6 bytes saved ≥ 8 bytes spent) — an adopter should count how
-many namespace-scoped Type IDs actually co-occur per physical code before
-adopting this mechanism for per-code-repeated content, not just compare
-the Type ID widths in isolation.
+**This has a real wire-code cost, now cheaper than the earlier
+optional-Record design — verified against the actual encoder, not
+assumed.** Repeating a decentralized-namespace discriminator (a bare
+4-byte byte string, no hint) on every code costs 5 bytes *per code*
+(down from the earlier optional Type `0` Record header's 8 bytes,
+since the discriminator no longer pays for its own typeID prefix and
+map-wrapper framing). Shrinking one namespace-scoped Type ID from a
+private-use-random byte string to a small odd uint saves at least 8
+bytes for a genuinely minimal odd uint. A single namespace-scoped Type
+ID repeating alone on each code is therefore already a net **win**
+(+3 bytes/code) on its own, not merely a breakeven — an adopter should
+still count how many namespace-scoped Type IDs actually co-occur per
+physical code before assuming the savings compound, since only the
+first shrunk ID needs to clear the discriminator's now-smaller,
+per-code repeated cost.
 
-Prototyped in `prototype/src/wrappers.js`'s `resolveStack`: extended to
-look for a Type `0` sibling on each code, require every code that
-declares one to agree, and apply the agreed namespace to whatever Record
-the stack ultimately resolves to. `prototype/test/multi-code-namespace.test.js`
-demonstrates the mechanism end to end — including the single-point-of-
-failure case above, reproduced directly: a namespace declared on only one
-code resolves correctly while that code survives, and aborts the instant
+Prototyped in `prototype/src/wrappers.js`'s `resolveStack`: reads each
+code's discriminator via `header.parseDiscriminator`, requires every
+code that declares one to agree, and applies the agreed namespace to
+whatever Record the stack ultimately resolves to.
+`prototype/test/multi-code-namespace.test.js` demonstrates the
+mechanism end to end — including the single-point-of-failure case
+above, reproduced directly: a namespace declared on only one code
+resolves correctly while that code survives, and aborts the instant
 it's the one dropped, even though XOR parity fully recovers the
 Split-protected content regardless.
 
@@ -861,11 +900,11 @@ logical Record Type never collide, because an even or byte string ID was
 never namespace-scoped to begin with.
 
 Prototyped in `prototype/src/header.js` and `prototype/test/header.test.js`:
-namespace/hint round-trip, both fields independently optional, the
-positional requirement (misplaced Type `0` is not treated as the
-header), the JS falsy-zero trap guarded against explicitly, and
-cross-validated against the Rust core (`rust/qdef-core`), which needs no
-Type-`0`-specific code at all to route and walk it correctly.
+round-trip coverage for all six discriminator shapes, the
+unrecognized-shape graceful degrade, the JS falsy-zero trap guarded
+against explicitly, and cross-validated against the Rust core
+(`rust/qdef-core`), which needs no discriminator-shape-specific code at
+all to split it off and route/walk the Records that follow correctly.
 
 ## 4. The QDEF Standard Record Types
 
@@ -892,8 +931,7 @@ RFC 8949 §9.2):
 +----------------+----------+----------------------------------------------+
 | Range          | Even/Odd | Purpose & governance                         |
 +----------------+----------+----------------------------------------------+
-| 0              | even     | Container header (§3.5) — reserved           |
-| 2–22           | even     | Standards Action — Wrapper Records and other  |
+| 0–22           | even     | Standards Action — Wrapper Records and other  |
 |                |          | standard record type infrastructure,         |
 |                |          | spec-maintained                              |
 | 24–98          | even     | Specification Required — standard record     |

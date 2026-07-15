@@ -95,7 +95,10 @@ fn one_aborted_record_does_not_affect_its_sibling() {
 
 #[test]
 fn ndef_path_bare_sequence_with_no_magic_still_routes() {
-    let bare_seq = &WIFI_CONTAINER[4..];
+    // Own-URI-scheme carriers never carry magic or a discriminator -- built
+    // directly via encodeRecordBytes, not by stripping magic off a full
+    // container (which would now leave the discriminator item behind).
+    let bare_seq = BARE_SEQUENCE_NO_DISCRIMINATOR;
     assert!(
         Container::parse(bare_seq).is_err(),
         "must not look like a valid magic-prefixed container"
@@ -192,19 +195,29 @@ fn a_real_tag_whose_own_definition_requires_array_content_is_still_rejected() {
 }
 
 #[test]
-fn record_type_0_needs_no_special_handling_from_this_crate() {
+fn container_discriminator_needs_no_interpretation_from_this_crate() {
     let container = Container::parse(HEADER_CONTAINER).expect("valid container");
+
+    // This crate exposes the discriminator's raw bytes (including its own
+    // CBOR head byte) and nothing more -- no namespace/hint parsing lives
+    // here, that's an optional, Record-Type-interpretation-layer concern
+    // (header.js in the Node prototype). Just confirm it's exactly the
+    // 8-byte decentralized namespace value the fixture encodes (0x48 =
+    // major type 2, length 8), split off correctly.
+    assert_eq!(
+        container.discriminator(),
+        &[0x48, 0xa9, 0xd6, 0xe1, 0xf3, 0x0b, 0x7c, 0x44, 0x82]
+    );
+
+    // And the Records iterator starts from the *real* first Record,
+    // completely unaffected by whatever the discriminator's own shape
+    // was -- the same generic decoder, no discriminator-specific code
+    // path in how Records themselves get routed and walked.
     let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
-    assert_eq!(records.len(), 2);
-
-    assert_eq!(records[0].type_id(), Some(Key::Uint(0)));
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].type_id(), Some(Key::Uint(100)));
     assert!(!records[0].ignored);
-    let namespace = find_value(records[0].map_bytes, 1).unwrap().unwrap();
-    assert_eq!(read_uint(namespace).unwrap(), 12271745624591856273u64);
-
-    assert_eq!(records[1].type_id(), Some(Key::Uint(100)));
-    assert!(!records[1].ignored);
-    let ssid = find_value(records[1].map_bytes, 0).unwrap().unwrap();
+    let ssid = find_value(records[0].map_bytes, 0).unwrap().unwrap();
     assert_eq!(read_definite_string(ssid).unwrap(), b"SSID");
 }
 
