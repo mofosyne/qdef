@@ -239,13 +239,19 @@ usable the moment it exists — see the caution below for why that
 specifically calls for pinning a few rules now, ahead of the full
 registration scheme.
 
-**TypeID form boundary.** Only CBOR major types 0, 2, and 3 are valid
-typeID forms — simple, self-delimiting items a parser can skip with zero
-recursion. Major types 1 (negative int), 4 (array), 5 (map), 6 (tag),
-and 7 (simple/float) are not valid typeIDs: they either lack a clear use
-case over the existing forms, violate the skip-safe principle, or don't
-make sense as identifiers. A future revision could only add a new major
-type if it preserved the zero-recursion skip guarantee.
+**TypeID form boundary.** A bare typeID item is only ever CBOR major
+type 0, 2, or 3 — simple, self-delimiting items a parser can skip with
+zero recursion. Major types 1 (negative int), 5 (map), 6 (tag), and 7
+(simple/float) are never valid at a typeID-accumulation position: they
+either lack a clear use case over the existing forms, violate the
+skip-safe principle, or don't make sense as identifiers. Major type 4
+(array) is valid at a typeID-accumulation position in exactly one
+specific, structurally-recognized shape — a definite-length 2-element
+namespace-pairing item (below) — never as a general-purpose typeID form;
+an array of any other shape at that position is not a typeID and falls
+through to Phase 2's forward-compat skip like anything else unrecognized
+there. A future revision could only add a new major type, or a new array
+shape, if it preserved the same bounded, zero-recursion skip guarantee.
 
 **Note on even/odd vocabulary reuse.** The even/odd convention also
 appears in §3.2 for map *keys* (critical vs. optional). The two
@@ -277,6 +283,63 @@ Prefix: 100, h'A7F90B3C'    // primary uint 100 + backup byte string
 
 A Record never needs more than a handful of prefix typeIDs; the parser
 silently drops any beyond `MAX_TYPE_IDS` (recommended: 4).
+
+**Namespace-pairing prefix item: a Record MAY declare or override its
+own namespace inline, independent of the container discriminator's
+ambient one (§3.5).** Any position in a Record's contiguous prefix run
+that would otherwise hold a bare typeID item MAY instead hold a
+**namespace-pairing item**: a definite-length CBOR array of exactly 2
+elements, `[namespace, typeId]`, where `namespace` is a valid Namespace
+ID (a uint greater than 0, or a byte string — the same convention as
+the container discriminator's own namespace value, §3.5) and `typeId` is
+a uint (never a byte string — decentralized Record IDs stay a separate,
+unpaired, always-global mechanism; see below for why pairing one would
+not actually help). When present, the array's second element becomes
+the ordinary routing typeID at that prefix position (primary if first,
+backup if not); the array's first element declares the namespace that
+specific typeID is scoped against, taking priority over the container's
+ambient namespace for this one Record. Every other Record in the same
+container is unaffected — this is a purely local override.
+
+```
+Prefix: [h'a9d6e1f30b7c4482', 1]    // this Record's own namespace,
+                                     //   paired with a scoped typeID
+```
+
+An even (Allocated/global) `typeId` inside a pairing is vacuous: §3.5's
+invariant that even uints are always globally interpreted, regardless of
+any declared namespace, is unconditional and unaffected by pairing — a
+paired namespace only has an effect on an odd (Scoped) `typeId`. Pairing
+is not a way to give an even typeID a namespace-flavored meaning; it
+exists solely so an odd typeID can be scoped to something other than
+whatever the container's discriminator ambiently declares.
+
+**This is not a cheaper way to obtain a decentralized ID — it is a
+narrow, opt-in override, and is more expensive per use than either
+alternative it might be confused with.** Unlike the container
+discriminator (paid once, amortized across every Record in the
+container), a namespace-pairing item is paid fresh on every Record that
+carries one — there is no amortization. A Record that wants a
+collision-safe global ID with no namespace involved at all should still
+use a plain, unpaired byte string Type ID (above); a Record that's happy
+with the container's ambient namespace should still use a bare typeID.
+Namespace-pairing exists to answer one specific question — "can this one
+Record use a namespace other than the container's ambient one" — enabling
+more than one namespace to coexist within a single container without
+taxing the common single-namespace case: every Record that doesn't need
+an override still costs exactly what it always did. See DESIGN.md's
+"Multiple namespaces per container" for the verified byte-cost
+comparison and the two previously-considered mechanisms this one
+replaces.
+
+**Purely structural for the mandatory core (§3.3): recognizing the
+2-element-array shape and extracting its nested typeId is all the core
+does — it never learns what a namespace is, never compares it against
+anything, never applies even/odd scoping logic.** That interpretation
+(preferring a Record's own paired namespace over the container's
+ambient one when resolving an odd typeID's scope) is
+Record-Type-interpretation-specific handling, the same optional tier
+§3.5's namespace semantics already live in.
 
 **Implementer caution for byte string Type IDs:** a byte string Type ID
 MUST be a definite-length CBOR byte string (major type 2), never
@@ -804,6 +867,13 @@ since collision safety now comes from the namespace, not from the ID's
 own width. There is no magnitude floor on a namespace-scoped odd
 uint — parity alone determines scoping (§3.1), so there is nothing to
 be gained by picking a larger starting value.
+
+`N` here is normally the container discriminator's own ambient
+namespace, but a specific Record MAY instead pair its own typeID with a
+different namespace inline (§3.1's namespace-pairing prefix item),
+overriding `N` for that one Record only — the mechanism that lets more
+than one namespace coexist within a single container without taxing the
+common single-namespace case.
 
 **Byte string Type IDs are always global regardless of any declared
 namespace.** Collision safety for byte string IDs comes from the byte

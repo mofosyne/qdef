@@ -130,9 +130,35 @@ function resolveLookupKey(header, typeId) {
   throw new Error(`odd uint Type ID ${typeId} requires a declared namespace`);
 }
 
+/**
+ * Resolves the correct lookup key for a Record, the same as
+ * resolveLookupKey, but accounting for a per-Record namespace override
+ * (core.js's Record.localNamespace, from a namespace-pairing prefix
+ * item, §3.1) when the Record declares one. A local override takes
+ * priority over the container's ambient discriminator-declared
+ * namespace for this one Record only — every other Record in the same
+ * container is unaffected and still resolves against the ambient
+ * namespace. This is what makes more than one namespace usable within a
+ * single container without taxing the common single-namespace case: the
+ * ambient discriminator stays the cheap default, and only a Record that
+ * actually wants a different namespace pays anything extra for it.
+ *
+ * @param {{typeId: number|bigint|Buffer, localNamespace?: number|bigint|Buffer}} record
+ * @param {{namespace: number|bigint|Buffer, hint?: string}|undefined} containerHeader -
+ *   as returned by parseDiscriminator, or undefined
+ */
+function resolveLookupKeyForRecord(record, containerHeader) {
+  const effectiveHeader =
+    record.localNamespace !== undefined
+      ? { namespace: record.localNamespace }
+      : containerHeader;
+  return resolveLookupKey(effectiveHeader, record.typeId);
+}
+
 module.exports = {
   HEADER_NAMESPACE_KEY,
   HEADER_NAMESPACE_HINT_KEY,
   parseDiscriminator,
   resolveLookupKey,
+  resolveLookupKeyForRecord,
 };

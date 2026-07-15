@@ -1404,7 +1404,7 @@ before a real need identifies what it should actually say. If one shows
 up, it picks from whatever's still unclaimed then — including negint,
 still available, exactly as it is today.
 
-## Multiple namespaces per container — considered, not built, because the common case doesn't need it and the rare case is already served differently
+## Multiple namespaces per container — built via a per-Record namespace-pairing prefix item
 
 Asked directly: should one container support declaring more than one
 namespace, so a single physical code could mix content from several
@@ -1460,15 +1460,104 @@ asked for:**
   subsequent Record pay again defeats the reason to reach for this
   mechanism in the first place.
 
-**Not built.** TagDrop, the one real adopter whose concrete want drove
-namespace-scoping's existence at all, only ever wanted exactly one
-namespace. Building either option above would cost the common,
-already-motivated case to serve a hypothetical one, the same trade this
-project has consistently declined elsewhere (App Route, the negint
-reservation, the first-come-first-served tier). If a real adopter with a
-genuine multiple-unrelated-apps-in-one-code want shows up, the actual
-shape of their need should drive the design the way it did here — not a
-guess made in advance of one.
+**Both objections above turned out to be specific to those two
+mechanisms, not to multi-namespace support in general — a third option
+sidesteps both.** Revisited once a concrete third shape was proposed:
+let a Record's own prefix optionally carry a **namespace-pairing item**,
+a 2-element array `[namespace, typeId]`, instead of a bare typeID
+(spec §3.1). When present, it declares/overrides *that one Record's*
+namespace, independent of — and taking priority over — whatever the
+container discriminator declared as the ambient namespace. Every other
+Record in the container is unaffected.
+
+This avoids both prior objections directly:
+
+- **No stateful, position-dependent parsing.** A pairing item is
+  entirely local to the one Record whose prefix carries it — there is
+  no "current scope" a decoder has to track across the Sequence, and no
+  cross-code state either. Each Record is still parsed independently,
+  exactly like every other mechanism in this format.
+- **No mandatory selector on every namespace-scoped Record.** The
+  common case — one app, its own namespace, sibling Records that all
+  want it — pays nothing extra: those Records still use a bare typeID
+  and inherit the container's ambient namespace, exactly as before.
+  Only a Record that actually wants a *different* namespace than
+  ambient pays for a pairing item, and only that one Record.
+
+**Structural, not semantic, at the mandatory-core level.** The core
+needs exactly one new recognition rule — a definite-length 2-element
+array at a typeID-accumulation position is *also* a valid prefix-item
+shape — and pulls the array's second element in as an ordinary typeID
+candidate. It never learns what the first element *means*; it's exposed
+raw (`Record.localNamespace` in the Node prototype;
+`Record::local_namespace()` in `rust/qdef-core`), the same "core exposes
+it, an interpretation layer decides what it means" split the container
+discriminator itself already uses. `header.js` gained one new function,
+`resolveLookupKeyForRecord`, that prefers a Record's own
+`localNamespace` over the container's ambient header when both are
+present — everything else about namespace *semantics* (even always
+global, odd requires a namespace, the "wrong match is worse than a
+clean miss" rule) is completely unchanged; only where the applicable
+namespace value comes from is new.
+
+**Not a cheaper way to get a decentralized ID — an opt-in override,
+verified against the actual encoder, not assumed.** Unlike the
+container discriminator (paid once, amortized across every Record in
+the container), a pairing item is paid fresh on every Record that uses
+it — there's no amortization. Cost of the prefix item alone (excluding
+the Record's own field Map, which every Record pays regardless of
+routing form):
+
+```
++-------------------------------------------------+-------+
+| Form                                             | bytes |
++-------------------------------------------------+-------+
+| [Allocated Namespace ID, scoped typeId]          |     4 |
+| [Decentralized Namespace ID (4B), scoped typeId] |     7 |
+| standalone decentralized Record ID (4B, today)   |     5 |
++-------------------------------------------------+-------+
+```
+
+A decentralized pairing costs *more* than a plain standalone
+decentralized Record ID (7 > 5) — it bundles a full namespace
+declaration onto the one Record using it. So this mechanism doesn't
+replace, and shouldn't be reached for instead of, either the container
+discriminator (the cheap, amortized, common-case path) or a standalone
+decentralized Record ID (§3.1, kept as-is, still the cheapest way to get
+one self-certifying global ID with no namespace involved at all). It
+answers a narrower question — "can this one Record use a namespace
+other than the container's ambient one" — that the two previously-
+rejected options couldn't answer without taxing everyone else.
+
+**An even (Allocated/global) typeId inside a pairing is vacuous.** The
+existing invariant — even uints are always globally interpreted,
+regardless of any declared namespace — is unchanged and unconditional;
+pairing a namespace with an even typeId has no effect on its lookup. The
+mechanism is only meaningful for odd (scoped) typeIds, which is its
+entire purpose.
+
+Prototyped in `prototype/src/core.js` (Phase 1 typeID accumulation
+recognizes the pairing shape, `encodeRecordBytes` takes an optional
+`localNamespace` parameter), `prototype/src/header.js`
+(`resolveLookupKeyForRecord`), `prototype/src/wrappers.js`
+(`resolveStack`'s terminal-Record resolution prefers a local override),
+and `prototype/test/record-namespace-pairing.test.js` — round-trip for
+both Allocated and Decentralized namespace forms, local-overrides-
+ambient and falls-back-to-ambient resolution, the even-typeId-is-vacuous
+case, backup-typeID interaction (the same promotion pattern §3.1 already
+uses, applied to a namespace-scoped primary), a `resolveStack` case
+where the Wrapper-resolved terminal Record carries its own override, and
+the byte-cost FINDING above.
+
+Cross-validated in `rust/qdef-core`: `parse_record`'s Phase 1 gained the
+identical structural recognition rule (a definite-length 2-element array
+is a valid prefix-item shape; its second element is pulled in as an
+ordinary typeID, its first is exposed raw via the new
+`Record::local_namespace()`), with zero namespace-semantic code added to
+the crate — matching the container discriminator's own precedent. Four
+new tests confirm the pairing round-trips for both namespace forms,
+degrades correctly when a Record carries no pairing item, and still
+accumulates an ordinary backup typeID alongside a pairing primary.
 
 ## Text string Type IDs — reserved for future use, but pinned enough to not repeat FINDINGS #21
 

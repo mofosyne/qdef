@@ -302,8 +302,10 @@ function resolveStack(codesBytesList, ctx, knownKeysRegistry) {
   // Throws if terminal.typeId is an odd/namespace-scoped uint with no
   // namespace found anywhere in the group -- the same correctness rule
   // §3.5 already defines, just reached via a resolved Wrapper stack instead
-  // of a plain sibling Record.
-  const key = header.resolveLookupKey(groupHeader, terminal.typeId);
+  // of a plain sibling Record. If the terminal Record itself declared a
+  // namespace-pairing prefix item (§3.1), that local override takes
+  // priority over the group's ambient discriminator-declared namespace.
+  const key = header.resolveLookupKeyForRecord(terminal, groupHeader);
   terminal.namespace = key.scope === 'namespace' ? key.namespace : undefined;
 
   return terminal;

@@ -139,10 +139,19 @@ impl<'a> Iterator for Records<'a> {
 /// `find_value`) to inspect further.
 pub struct Record<'a> {
     /// The accumulated typeID keys from the record prefix (up to
-    /// `MAX_TYPE_IDS`; extras are silently dropped).
+    /// `MAX_TYPE_IDS`; extras are silently dropped). A namespace-pairing
+    /// prefix item (see `parse_namespace_pairing`) contributes its
+    /// nested typeId here, indistinguishable from a bare one — routing
+    /// doesn't care which form produced it.
     type_ids_buf: [cbor::Key<'a>; MAX_TYPE_IDS],
     /// Number of valid entries in `type_ids_buf`.
     type_id_count: usize,
+    /// The namespace from this Record's own first namespace-pairing
+    /// prefix item, if it had one — raw, uninterpreted (same treatment
+    /// as `Container::discriminator()`). `None` means this Record
+    /// declared no override; interpretation-layer code falls back to
+    /// whatever ambient namespace the container discriminator declared.
+    local_namespace: Option<cbor::Key<'a>>,
     /// True if no typeID was found before the map — the record is
     /// unroutable and should be ignored by dispatch logic.
     pub ignored: bool,
@@ -165,15 +174,27 @@ impl<'a> Record<'a> {
     pub fn type_ids(&self) -> &[cbor::Key<'a>] {
         &self.type_ids_buf[..self.type_id_count]
     }
+
+    /// The raw namespace value from this Record's own namespace-pairing
+    /// prefix item, if any. This crate never interprets it (doesn't
+    /// know it means "namespace," doesn't check even/odd, doesn't
+    /// compare it against a container's ambient discriminator) — that's
+    /// entirely a Record-Type-interpretation-layer concern (see
+    /// header.js's `resolveLookupKeyForRecord` in the Node prototype).
+    pub fn local_namespace(&self) -> Option<cbor::Key<'a>> {
+        self.local_namespace
+    }
 }
 
 fn parse_record(buf: &[u8]) -> Result<(Record<'_>, usize), Error> {
     let mut pos = 0usize;
     let mut type_ids_buf = [cbor::Key::Uint(0); MAX_TYPE_IDS];
     let mut type_id_count = 0usize;
+    let mut local_namespace: Option<cbor::Key<'_>> = None;
 
-    // Phase 1: accumulate typeIDs — contiguous run of uint/byte-string/text-string
-    // at the start of the record.
+    // Phase 1: accumulate typeIDs — contiguous run of uint/byte-string/
+    // text-string items, and/or namespace-pairing arrays, at the start
+    // of the record.
     while pos < buf.len() {
         // Peek at the head to check major type before fully parsing.
         let head = cbor::read_head(&buf[pos..]).map_err(Error::Cbor)?;
@@ -185,6 +206,29 @@ fn parse_record(buf: &[u8]) -> Result<(Record<'_>, usize), Error> {
                 type_id_count += 1;
             }
             pos += len;
+        } else if head.major == 4 && !head.is_indefinite() && head.arg == 2 {
+            // Candidate namespace-pairing item: [namespace, typeId].
+            // Purely structural recognition — this crate never learns
+            // what a namespace means, only that this specific 2-element
+            // shape yields one more typeId candidate plus an opaque
+            // side value. If the two elements don't match the expected
+            // shape, this isn't a pairing after all; stop Phase 1 here
+            // (unchanged `pos`) and let Phase 2 skip the whole array
+            // generically, same as any other unrecognized item.
+            let elems_start = pos + head.head_len;
+            match parse_namespace_pairing(&buf[elems_start..]).map_err(Error::Cbor)? {
+                Some((ns, id, elems_len)) => {
+                    if local_namespace.is_none() {
+                        local_namespace = Some(ns);
+                    }
+                    if type_id_count < MAX_TYPE_IDS {
+                        type_ids_buf[type_id_count] = cbor::Key::Uint(id);
+                        type_id_count += 1;
+                    }
+                    pos = elems_start + elems_len;
+                }
+                None => break,
+            }
         } else {
             break;
         }
@@ -221,11 +265,54 @@ fn parse_record(buf: &[u8]) -> Result<(Record<'_>, usize), Error> {
         Record {
             type_ids_buf,
             type_id_count,
+            local_namespace,
             ignored,
             map_bytes,
         },
         pos,
     ))
+}
+
+/// Attempts to parse the two elements of a namespace-pairing array's
+/// contents (the slice starting right after the array's own head): a
+/// namespace (uint > 0, or a byte string — the same convention as the
+/// container discriminator's namespace value, §3.5) followed by a typeId
+/// (uint only — a namespace-pairing item never carries a byte-string
+/// typeId; decentralized Record IDs stay a separate, unpaired, always-
+/// global mechanism, §3.1).
+///
+/// Returns `Ok(None)` — not an error — when the two elements are
+/// well-formed CBOR but don't match this shape (e.g. the namespace slot
+/// holds a text string, or the typeId slot holds a byte string): that
+/// means this array isn't a namespace pairing after all, and the caller
+/// falls back to treating it as an ordinary unrecognized prefix item.
+/// Only a genuine decode failure (truncated/malformed bytes) propagates
+/// as `Err`.
+fn parse_namespace_pairing(buf: &[u8]) -> Result<Option<(cbor::Key<'_>, u64, usize)>, cbor::Error> {
+    let (ns_key, ns_len) = match cbor::read_key(buf) {
+        Ok(v) => v,
+        Err(_) => return Ok(None),
+    };
+    let ns_valid = match ns_key {
+        cbor::Key::Uint(n) => n > 0,
+        cbor::Key::ByteString(_) => true,
+        cbor::Key::TextString(_) => false,
+    };
+    if !ns_valid {
+        return Ok(None);
+    }
+
+    let rest = buf.get(ns_len..).ok_or(cbor::Error::UnexpectedEof)?;
+    let (id_key, id_len) = match cbor::read_key(rest) {
+        Ok(v) => v,
+        Err(_) => return Ok(None),
+    };
+    let id = match id_key {
+        cbor::Key::Uint(n) => n,
+        _ => return Ok(None),
+    };
+
+    Ok(Some((ns_key, id, ns_len + id_len)))
 }
 
 /// Applies the even/odd criticality rule (§3.2) to a Record's map bytes

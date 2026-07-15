@@ -1225,3 +1225,46 @@ what it was last regenerated against, and a decoder with intentionally
 no semantic knowledge of a wire-format detail (by design, here) can stay
 green on stale bytes indefinitely without ever really testing the new
 shape.
+
+### 27. "Multiple namespaces per container" was rejected for reasons specific to the two mechanisms considered, not to the goal itself — and the fix that avoids both isn't a cheaper decentralized ID either
+
+Revisiting "Multiple namespaces per container" (previously "considered,
+not built") after a concrete third design was proposed: a Record's own
+prefix can carry a **namespace-pairing item**, `[namespace, typeId]`,
+declaring/overriding that one Record's namespace independent of the
+container discriminator's ambient one. Checking it against the two
+previously-rejected mechanisms' actual objections — rather than assuming
+the rejection generalized to "multi-namespace support is a bad
+trade" — showed both objections were specific to those two shapes, not
+to the goal: position-based re-scoping was rejected for introducing
+stateful, order-dependent parsing (a pairing item needs none — it's
+local to one Record, no cross-Record state); a header-level namespace
+array with a per-Record selector was rejected for taxing *every*
+namespace-scoped Record with a mandatory field (a pairing item is
+opt-in, paid only by a Record that actually wants an override). Neither
+objection applies to a self-contained, per-Record array.
+
+**A related intuition needed checking too, and turned out wrong:**
+whether this pairing form could also replace standalone decentralized
+Record IDs (§3.1's byte string typeID), since a namespace + small odd
+uint had already been shown cheaper than a standalone decentralized ID
+*when amortized across multiple Records under one container-level
+discriminator* (a separate finding). Verified against the actual
+encoder rather than assumed: a per-Record pairing does **not**
+amortize — it's paid fresh on every Record that carries one — so
+`[decentralized namespace, scoped id]` costs 7 bytes bare versus 5 for a
+plain standalone decentralized Record ID. The pairing form is strictly
+worse for "I want one collision-safe global ID"; it only earns its cost
+for the narrower question "can this one Record use a namespace other
+than ambient." Caught before it was written into the spec as a
+replacement it isn't.
+
+Implemented identically in both languages, confirming the mandatory core
+stays free of namespace semantics a second time: `core.js`'s Phase 1 and
+`rust/qdef-core`'s `parse_record` each gained exactly one new
+structural-recognition rule (a definite-length 2-element array at a
+typeID position), with zero code anywhere in either mandatory core that
+knows what a namespace *is* — matching the container discriminator's own
+precedent (Finding #26) rather than needing a new pattern. See
+DESIGN.md's "Multiple namespaces per container" and spec §3.1's
+namespace-pairing prefix item.

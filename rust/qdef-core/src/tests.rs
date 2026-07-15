@@ -260,3 +260,65 @@ fn backup_type_ids_are_accumulated_and_accessible() {
         other => panic!("expected ByteString backup, got {:?}", other),
     }
 }
+
+#[test]
+fn namespace_pairing_prefix_item_yields_the_nested_typeid_and_the_raw_namespace() {
+    let container = Container::parse(NAMESPACE_PAIRING_CONTAINER).expect("valid container");
+    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
+    assert_eq!(records.len(), 1);
+    let rec = &records[0];
+    assert!(!rec.ignored);
+
+    // The pairing's second element becomes the routing typeId, exactly
+    // as if it had been a bare prefix item -- routing doesn't care which
+    // form produced it.
+    assert_eq!(rec.type_id(), Some(Key::Uint(1)));
+
+    // The pairing's first element is exposed raw, uninterpreted -- this
+    // crate doesn't know it's "a namespace," just that it came from a
+    // recognized 2-element array shape.
+    match rec.local_namespace() {
+        Some(Key::ByteString(bytes)) => assert_eq!(bytes, &[0xcd, 0xcd, 0xcd, 0xcd]),
+        other => panic!("expected ByteString local_namespace, got {:?}", other),
+    }
+}
+
+#[test]
+fn namespace_pairing_accepts_an_allocated_uint_namespace_too() {
+    let container =
+        Container::parse(ALLOCATED_NAMESPACE_PAIRING_CONTAINER).expect("valid container");
+    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
+    let rec = &records[0];
+    assert!(!rec.ignored);
+    assert_eq!(rec.type_id(), Some(Key::Uint(1)));
+    assert_eq!(rec.local_namespace(), Some(Key::Uint(100)));
+}
+
+#[test]
+fn a_record_with_no_pairing_item_has_no_local_namespace() {
+    let container = Container::parse(WIFI_CONTAINER).expect("valid container");
+    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
+    assert_eq!(records[0].local_namespace(), None);
+}
+
+#[test]
+fn a_namespace_pairing_primary_still_accumulates_an_ordinary_backup_typeid() {
+    let container =
+        Container::parse(NAMESPACE_PAIRING_WITH_BACKUP_CONTAINER).expect("valid container");
+    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
+    let rec = &records[0];
+    assert!(!rec.ignored);
+
+    assert_eq!(rec.type_id(), Some(Key::Uint(1)));
+    match rec.local_namespace() {
+        Some(Key::ByteString(bytes)) => assert_eq!(bytes, &[0xcd, 0xcd, 0xcd, 0xcd]),
+        other => panic!("expected ByteString local_namespace, got {:?}", other),
+    }
+
+    let ids = rec.type_ids();
+    assert_eq!(ids.len(), 2);
+    match ids[1] {
+        Key::ByteString(bytes) => assert_eq!(bytes, &[0xa7, 0xf9, 0x0b, 0x3c]),
+        other => panic!("expected ByteString backup, got {:?}", other),
+    }
+}
