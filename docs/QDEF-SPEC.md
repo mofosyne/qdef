@@ -119,6 +119,20 @@ any higher-level dispatch exists to tell it what it's looking at.
 decodes through the exact same Record-routing logic as the full
 container.)
 
+**The same is true for an application carrying QDEF content under its own
+URI scheme** (§1's "When QDEF earns its place"): the scheme prefix
+(`myapp:...`) already told the reader what it's looking at before any
+QDEF-specific parsing begins, doing the identical dispatch job magic
+exists to provide for an otherwise-unidentified byte-mode stream — a
+scanner recognizes `myapp:` and hands the remainder straight to that
+app's own decoder. The remainder is a bare CBOR Sequence of Records,
+decoded exactly the same way as the NDEF case above, via the same
+`decodeSequence` path. `mofosyne/tagdrop`'s own `tagdrop:<...>` scheme
+already does exactly this dispatch job for its own wire format today; an
+application in that position pays no magic-byte cost at all for adopting
+QDEF's Record shape underneath its existing scheme. (Validated in the
+prototype: `prototype/test/custom-scheme-carrier.test.js`.)
+
 **No version byte.** §3.2's even/odd criticality rule already provides
 local forward compatibility; see [DESIGN.md](DESIGN.md#container-framing-choices)
 for why an earlier draft's version byte was removed.
@@ -670,6 +684,25 @@ a container using only known, global Type IDs pays nothing at all for
 this mechanism — not even one byte — matching every other standard record type's
 Record's "unaware party pays nothing" property (§4).
 
+**An application whose carrier already isolates its content from every
+other QDEF-aware decoder generally has no need for this mechanism at
+all, for the same reason it has no need for §2's magic bytes.** Its own
+URI scheme, or an app-specific NDEF MIME type, already guarantees
+nothing but that application's own decoder will ever interpret its Type
+IDs — the cross-app collision-safety a declared namespace exists to buy
+isn't needed when there is no shared, generic dispatch context for other
+apps' Type IDs to collide within in the first place. Such an application
+can use a small, self-allocated even Type ID (the `32768`+ tier, §4) with
+no namespace, no Type `0` Record, and no per-code repetition cost —
+cheaper than namespace-scoping and just as collision-safe *in that
+application's own actual deployment*, even though the same ID would not
+be safe to assume collision-free in a shared, generic QDEF container.
+Namespace-scoping earns its cost specifically where that isolation
+doesn't already exist — a byte-mode QR or an NDEF payload with no
+app-specific MIME type, where genuinely unrelated apps' content might
+share one container. See DESIGN.md for the real, verified byte-cost
+comparison this recommendation is based on.
+
 **Format namespace values follow the same convention as Record Type IDs
 (§3.1): a uint or a byte string.** A uint namespace follows the same
 tiering convention as §3.1's uint Type IDs — a small span for
@@ -729,10 +762,14 @@ declared against. This is why no new numeric range is needed for the
 scoped tier itself: nothing is reinterpreting what `T` means in isolation,
 because `T` in isolation is no longer the lookup key at all once a
 namespace is present. An app with its own declared namespace can freely
-use small, sequential odd Type IDs (`32769`, `32771`, `32773`...) for as
-many Record Types as it needs — cheap on the wire and collision-free by
-construction, since collision safety now comes from the namespace, not
-from the ID's own width.
+use small, sequential odd Type IDs (`1`, `3`, `5`...) for as many Record
+Types as it needs — genuinely minimal on the wire (CBOR encodes any
+value `0`–`23` in a single byte, so odd IDs up to `23` cost nothing more
+than the smallest possible typeID) and collision-free by construction,
+since collision safety now comes from the namespace, not from the ID's
+own width. There is no magnitude floor on a namespace-scoped odd
+uint — parity alone determines scoping (§3.1), so there is nothing to
+be gained by picking a larger starting value.
 
 **Byte string Type IDs are always global regardless of any declared
 namespace.** Collision safety for byte string IDs comes from the byte

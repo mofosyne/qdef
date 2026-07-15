@@ -1094,6 +1094,25 @@ IDs' worth of per-code savings to turn it into a net win. This is exactly
 the kind of number this project checks rather than asserts — see
 FINDINGS.md.
 
+**Correction, found while chasing the same question further: `4 bytes
+bare` wasn't the cheapest legal odd uint, it was a leftover example
+value.** The `32769`-style examples used throughout this section (and,
+worse, in §3.5's own worked example) predate the parity-based redesign
+and were never actually the minimum — under the current rule there is no
+magnitude floor at all, only parity. A genuinely minimal odd uint (`1`,
+`3`, `5`...) costs **2 bytes bare**, not 4, since CBOR packs any value
+`0`–`23` into the initial byte with no argument bytes at all. Recomputed
+the breakeven with the real minimum: saving per shrunk ID against the
+same 10-byte decentralized baseline becomes 8 bytes, not 6 — meaning **a
+single repeating namespace-scoped ID already clears the 8-byte Type `0`
+tax on its own** (8 saved ≥ 8 spent), reversing the "need two IDs"
+conclusion above for the common case of small, hand-picked sequential
+IDs specifically. The "two IDs" framing still holds for the *specific*
+scenario it was computed for (Preview repeating + Body reassembled once,
+where Body's one-time saving doesn't stack with a per-code tax the way
+two *repeating* IDs would) — it just isn't the general rule this section
+implied. Fixed the stale examples in both places; see FINDINGS.md.
+
 Prototyped in `prototype/src/wrappers.js`'s `resolveStack` (extended to
 locate a Type `0` sibling per code, require agreement across every code
 that declares one, and apply it to the resolved terminal Record) and
@@ -1115,7 +1134,78 @@ section's wording (e.g. "standard record type") without updating its
 substance to match the parity-based redesign. Left as-is here rather than
 silently rewritten mid-unrelated-change; needs its own dedicated pass.
 
-## Negint (major type 1) as a typeID form — considered twice, left unclaimed both times
+## Own-URI-scheme carriers skip magic AND namespace-scoping — a real gap found by pushing TagDrop's cost question one step further
+
+Asked directly, once the corrected small-odd-uint numbers still left a
+real gap against TagDrop's own lean per-sector cost: how much of QDEF's
+remaining tax is actually necessary for an adopter in TagDrop's specific
+position, versus tax being paid for a guarantee that position doesn't
+need? Checking TagDrop's real SPEC.md (`mofosyne/tagdrop`, added to this
+session and read directly rather than assumed) rather than treating them
+as a hypothetical answered it: every one of their codes is
+`tagdrop:<base41-cbor-sequence>` — their own URI scheme, not byte-mode
+QR. §1 already has a rule for exactly this: an application with its own
+scheme should carry its envelope directly under that scheme, since the
+scheme prefix already does the recognition job magic bytes exist for.
+That rule was being stated but not actually being *applied* to the cost
+comparisons in this document, which had been including a 4-byte magic
+header per code the whole time.
+
+**Pushed one step further than "drop magic": does the same isolation
+argument also remove the need for namespace-scoping?** Yes, and for the
+identical reason. Namespace-scoping (§3.5) exists to let genuinely
+unrelated apps' small Type IDs coexist in one *shared, generic*
+container without central coordination. An application whose carrier
+already guarantees nothing but its own decoder will ever see these bytes
+— a URI scheme, or an app-specific NDEF MIME type — has already solved
+the problem namespace-scoping solves, by a different, pre-existing
+mechanism. Paying Type `0`'s repeated-per-code tax on top of that buys
+nothing: a small, self-allocated even Type ID (the `32768`+ First-Come
+tier, no registry needed, spec §4) is exactly as collision-safe *in that
+application's actual deployment* as a namespace-scoped one would be,
+since the two decoders that could theoretically disagree about what a
+given number means never both see the same bytes in the first place.
+
+**The corrected cost picture, verified against the real encoder at each
+step, not asserted:**
+
+```
++---------------------------------------------+-------+-------+
+| Approach (per group of N codes, N=4 shown)   | bytes | delta |
++---------------------------------------------+-------+-------+
+| TagDrop's own envelope (version + type)      |     8 |     — |
+| QDEF, magic + namespace-scoped (original)    |    68 |   +60 |
+| QDEF, no magic (own scheme dispatches)       |    42 |   +34 |
+| QDEF, no magic, no namespace (own scheme     |    20 |   +12 |
+|   also isolates -- self-allocated even ID)   |       |       |
++---------------------------------------------+-------+-------+
+```
+
+Each row is a real, previously-unapplied instance of a principle this
+document already stated, not a new mechanism — the fix was recognizing
+that "own URI scheme" and "own MIME type" already buy *two* things
+(dispatch AND isolation), and this project's own cost comparisons had
+only been crediting the first.
+
+**The remaining ~12–18 byte gap is not waste, and shouldn't be chased
+away.** It's the cost of a typeID being a self-describing, open-ended
+registry entry — meaningful to any future or generic reader, not just
+one application's own decoder — versus TagDrop's `type` byte, a closed,
+app-private 2-value enum. That's a genuinely different capability, not
+inefficiency, and this project's whole discipline has been to distinguish
+the two rather than reflexively minimize bytes without asking what a
+given cost is actually buying.
+
+**Gap found in the process, closed rather than left implied:** §2 stated
+the "own URI scheme, skip magic" principle but, unlike the NDEF case,
+never worked it out concretely or tested it — no example, no prototype
+coverage. Fixed: §2 now has a paragraph parallel to NDEF's, §3.5 gets the
+matching namespace-skip guidance connected to the same "already isolated"
+reasoning, and `prototype/test/custom-scheme-carrier.test.js` demonstrates
+both — a bare Sequence round-tripping via the same `decodeSequence` path
+NDEF already used, and the corrected byte counts verified directly against
+the encoder (`14` bytes shared-container path vs. `4` bytes own-scheme
+path, per occurrence).
 
 §3.1's form boundary excludes CBOR major type 1 (negative integer) from
 valid typeID prefix forms, alongside array/map/tag/simple for

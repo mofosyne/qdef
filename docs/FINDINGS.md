@@ -964,6 +964,68 @@ content recovery via parity), disagreeing codes across a group rejected
 outright, and the no-namespace-anywhere case aborting the same way the
 already-covered single-code case does.
 
+### 24. Two stale examples used a magnitude that stopped mattering once the redesign removed the floor — and the cost comparisons using them undercounted the real savings
+
+While working through finding #23's byte math further, checking whether
+TagDrop's real remaining gap could shrink more: the `32769`-style "small
+odd uint" examples used throughout §3.5 and DESIGN.md's namespace entry
+were never actually the minimum. They're leftover from the pre-redesign
+spec, where `32768` was a hard floor; the current parity-based rule has
+no floor at all. A genuinely minimal odd uint (`1`, `3`, `5`...) costs
+**2 bytes bare**, not 4 — CBOR packs `0`–`23` into the initial byte with
+no argument bytes. Recomputed the breakeven with the real number:
+per-ID saving against a 10-byte decentralized baseline is 8 bytes, not
+6, meaning a *single* repeating namespace-scoped ID already clears the
+8-byte Type `0` tax on its own, reversing the "need two IDs" framing for
+the common case of small, hand-picked sequential IDs. Fixed both the
+`§3.5` worked example and the DESIGN.md cost claim; the earlier "two
+IDs" conclusion is kept as a correctly-scoped special case (Preview
+repeating + Body reassembled once specifically), not a general rule.
+
+### 25. `§2`'s "own URI scheme, skip magic" principle was asserted but never worked out — and pushing it one step further removes namespace-scoping's cost too, for the same reason
+
+Checking `mofosyne/tagdrop`'s real SPEC.md directly (added to this
+session, read rather than assumed) to answer whether their field
+encoding was maps or arrays surfaced something more consequential: every
+one of their codes is `tagdrop:<base41-cbor-sequence>` — their own URI
+scheme, not byte-mode QR. Every cost comparison in this document up to
+that point had been charging a 4-byte magic header per code, even though
+§1/§2 already say an app with its own scheme shouldn't pay that cost.
+The principle existed; it just hadn't been applied.
+
+Pushed one step further, checking rather than assuming it stopped there:
+does the same isolation that removes the need for magic also remove the
+need for a declared namespace? Yes — namespace-scoping exists to let
+unrelated apps' Type IDs coexist in a *shared, generic* container, and
+an app whose carrier already guarantees nothing but its own decoder ever
+sees these bytes has already solved that problem by a different,
+pre-existing mechanism. A small self-allocated even Type ID (`32768`+,
+no registry) is exactly as collision-safe in that deployment as a
+namespace-scoped one, at a fraction of the cost.
+
+**Verified against the real encoder, not estimated:** for a 4-code
+group, the original comparison (magic + namespace-scoped) cost 68 bytes
+against TagDrop's own 8-byte envelope; dropping magic alone brings it to
+42; dropping namespace-scoping too (self-allocated even ID) brings it to
+20 — a 48-byte reduction from the original estimate, achieved entirely
+by applying principles this document already stated rather than by
+building anything new. The remaining ~12-byte gap reflects a real
+capability difference (an open-ended, self-describing typeID vs.
+TagDrop's closed 2-value enum), not waste, and is called out as such
+rather than framed as more overhead to eliminate.
+
+Fixed the actual gap this exposed: §2 had NDEF's magic-skip case fully
+worked out (paragraph, example, prototype test) but nothing equivalent
+for the URI-scheme case despite stating the same principle applies.
+Added the matching paragraph, connected §3.5's namespace-skip guidance
+to the same reasoning, and added
+`prototype/test/custom-scheme-carrier.test.js`: a bare Sequence
+round-tripping via the same `decodeSequence` path NDEF already
+validated, `resolveLookupKey` confirming a self-allocated even ID needs
+no namespace to resolve correctly with or without one declared, and the
+corrected byte counts (14 vs. 4 per occurrence) asserted directly against
+the encoder rather than left as a comment.
+
 ## Confirmed working as designed (no fix needed)
 
 - **Magic + CBOR-Sequence-of-Records** round-trips exactly as
