@@ -14,7 +14,7 @@ node scripts/gen-type-id.js com.example.myapp/route
 # 2. Validate it
 node scripts/validate-type-id.js com.example.myapp/route "h'216e6add'"
 
-# 3. Use it in a Type 0 header (see below)
+# 3. Use it as a Record's prefix typeID (see below)
 ```
 
 ## Full Walkthrough
@@ -55,8 +55,9 @@ Derivation:  SHA-256(UTF-8("com.example.myapp/route"))
     Value (hex): h'216e6add56100127'
 ```
 
-The 4-byte value `h'216e6add'` is your Type ID. It goes into a Record's
-key `0` as a byte string.
+The 4-byte value `h'216e6add'` is your Type ID. It goes as a prefix
+item before your Record's field Map (spec §3.1) — a byte string, not a
+map key.
 
 **Width choice:**
 
@@ -107,46 +108,17 @@ language. This goes into the registry submission as `Variable Name`:
 
 See `registry-submission-template.md` for the full submission format.
 
-### Step 4: Use in a Type 0 Container Header
+### Step 4: Use as a standalone global Type ID, or under a declared namespace
 
-The first Record in a QDEF Sequence is the Type 0 header. When you use
-a byte string Type ID, the container declares a namespace:
-
-```
-Type 0: {                            // Container Header (standard record type)
-  0: 0,                              // CRITICAL: key 0 is always 0,
-                                      //   value 0 means "this is the header"
-  3: h'3cf2360e',                    // OPTIONAL: namespace ID (byte string, 4+ bytes)
-  5: "com.example/myapp-paper"       // OPTIONAL: human-readable name
-}
-```
-
-**Key points:**
-
-- Key `0` is always the uint `0` — it identifies the record as Type 0
-- Key `3` (namespace) is a byte string — this scopes all other Records
-  in the Sequence to that namespace. Namespace IDs MUST be at least 4
-  bytes because they are the global root of trust for all scoped IDs
-- Key `5` (hint) is a human-readable recovery name for the namespace
-
-A decoder seeing `key 3 = h'3cf2360e'` knows that odd-numbered Type IDs in
-this container are namespace-local, not globally registered.
-
-### Step 5: Use in a Regular Record
-
-Once the container has a namespace header, your records use the byte string
-Type ID directly in key `0`:
+A byte string Type ID is always global (spec §3.1) — it doesn't need a
+declared namespace to be collision-safe, since collision safety comes
+from the byte length you chose, not from a registry or a namespace. You
+can use it directly:
 
 ```
-Type 0: {                            // Container Header
-  0: 0,                              //   CRITICAL: fixed
-  3: h'3cf2360e',                    //   OPTIONAL: namespace (4+ bytes)
-  5: "com.example/myapp-paper"       //   OPTIONAL: name
-}
-
-{                                     // Your record
-  0: h'216e6add',                    //   CRITICAL: byte string Type ID
-  1: "route data here",              //   ... your fields ...
+// prefix typeID: h'216e6add'
+{
+  1: "route data here",              // ... your fields ...
 }
 ```
 
@@ -154,6 +126,54 @@ The byte string Type ID is self-describing: a decoder that recognizes
 the name `com.example.myapp/route` can verify the ID by re-deriving
 the hash. A decoder that doesn't recognize the name gracefully skips
 the record — no hard failure.
+
+**A declared namespace is a separate, container-level mechanism**
+(spec §3.5) — it doesn't change how a byte string Type ID like this one
+is looked up (still global, still bare), but it does let you use much
+cheaper *namespace-scoped odd uint* Type IDs instead, once you have more
+than one Record Type to define. See "Namespace ID," below.
+
+### Step 5: (optional) Declare a namespace for cheap, namespace-scoped Type IDs
+
+If you're defining more than one Record Type, it's cheaper to declare a
+decentralized namespace once and use small odd uint Type IDs inside it,
+rather than a full byte string Type ID per Record Type. The namespace
+goes in the **container discriminator** (spec §3.5) — the mandatory
+CBOR item immediately after the container's magic bytes, not an ordinary
+Record:
+
+```
+h'3cf2360e'                          // discriminator: bare decentralized
+                                      //   namespace, no hint (cheapest form)
+
+// prefix typeID: 1                  // your first Record, namespace-scoped
+{
+  1: "route data here",              // ... your fields ...
+}
+```
+
+To also carry a recoverable name for the namespace, use the array or map
+discriminator form instead of the bare byte string:
+
+```
+[h'3cf2360e', "com.example/myapp-paper"]     // array form: [namespace, hint]
+
+{ 1: h'3cf2360e', 3: "com.example/myapp-paper" }   // map form (extensible)
+```
+
+**Key points:**
+
+- The discriminator is not a Record — it has no typeID prefix and isn't
+  Map-shaped by itself; it's just whichever single well-formed CBOR item
+  comes right after magic, dispatched by its own CBOR major type
+- A bare byte string discriminator declares a decentralized namespace
+  with no hint. Namespace IDs MUST be at least 4 bytes because they are
+  the global root of trust for every scoped ID in the container
+- Once a namespace is declared, odd uint Type IDs become namespace-local
+  (compound key `(namespace, TypeID)`) instead of global — small,
+  sequential values (`1`, `3`, `5`...) are genuinely minimal on the wire
+  and collision-free by construction, since collision safety now comes
+  from the namespace rather than the ID's own width
 
 ### Step 6: Verify on the Wire (optional)
 
@@ -170,9 +190,9 @@ distinguishes a byte string Type ID from a uint Type ID on the wire.
 
 ## Namespace ID (same algorithm, different use)
 
-For the Type 0 header's key `3` (namespace ID), use `--namespace` with
-`--width 4` (minimum for namespace IDs — they are the global root of
-trust for all scoped IDs within a container):
+For the container discriminator's namespace value, use `--namespace`
+with `--width 4` (minimum for namespace IDs — they are the global root
+of trust for all scoped IDs within a container):
 
 ```bash
 node scripts/gen-type-id.js --namespace --width 4 com.example/myapp-paper
@@ -183,15 +203,22 @@ Output:
 ```
 Name:        com.example/myapp-paper
 Derivation:  SHA-256(UTF-8("com.example/myapp-paper")) → first 4 bytes
-Value (hex): h'3cf2360e'
-CBOR wire:   443cf2360e
 
-Note: 4-byte minimum for namespace IDs (global root of trust).
-  Use 8 bytes for maximum safety.
+  Full SHA-256:
+    h'3cf2360eb5e7d190c46324525d13f1031a47b02f642cf14f3ad1413ffc4d1f31'
 
-Usage in wire format: first Record in Sequence is Type 0, with
-  key 3 (Namespace ID) = h'3cf2360e' (byte string)
-  key 5 (name)         = "com.example/myapp-paper"
+  Truncated to 4 bytes:
+    Value (hex): h'3cf2360e'
+    CBOR wire:   443cf2360e
+
+Usage in wire format: the container discriminator (spec §3.5),
+the mandatory CBOR item right after magic. Cheapest form is the
+bare byte string itself:
+  h'<value above>'                          // decentralized namespace, no hint
+
+To also carry a recoverable name, use the array or map form:
+  [h'<value above>', "<name>"]              // array form
+  { 1: h'<value above>', 3: "<name>" }      // map form
 ```
 
 Namespace IDs MUST be at least 4 bytes because they are the global root
