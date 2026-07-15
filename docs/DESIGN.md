@@ -1031,6 +1031,136 @@ to end — verified real byte counts, not claimed ones: an existing
 scoped small ID (`32768`, the current floor) costs 5, the same as it
 would have cost at the old `1000` floor.
 
+## Negint (major type 1) as a typeID form — considered twice, left unclaimed both times
+
+§3.1's form boundary excludes CBOR major type 1 (negative integer) from
+valid typeID prefix forms, alongside array/map/tag/simple for
+skip-safety and sense-as-an-identifier reasons. Negint is different from
+those: it's a scalar, exactly as skip-safe as uint, and structurally
+available — checked directly against the actual parser
+(`prototype/src/core.js`'s `isTypeId`/`parseRecords`), not just the
+prose, that an unrecognized negint prefix item is already silently
+skipped as forward-compat padding today, and a Record relying solely on
+it for identity already degrades to `ignored: true` cleanly. That makes
+it the one remaining major type a future revision could assign a
+typeID-adjacent meaning to without a version bump — genuinely reserved
+space, not merely unused space.
+
+Two candidate uses were raised for it and both were set aside:
+
+**Split the standard/scoped distinction across uint vs. negint, instead
+of even/odd-on-uint.** Would remove one real hazard — an implementer
+who forgets to force a scoped ID's parity odd, or a truncated/hashed ID
+that randomly lands on the wrong parity, silently becoming "standard
+global" instead of erroring. But even/odd-on-uint already shipped and
+works, and CBOR negint costs a value-transform tax most host languages'
+CBOR libraries impose (`index = -1 - value`) for no corresponding wire
+or safety benefit over what a parity check in the generate/validate
+tooling would already catch more cheaply. Not worth the churn.
+
+**Reserve negint for a future back-reference/pointer typeID, resolving
+"Type ID inheritance" and "Reference/value-sharing tags," both above,
+without their original version-bump blocker.** This one is worth
+recording in more detail, because it changes what actually blocked
+those two backlog entries. Both were shelved specifically because their
+original shape — redefining "no prefix typeID present" to mean "inherit
+the previous Record's" — silently changes the meaning of already-shipped
+bytes: an old decoder and a new decoder would read the identical Record
+differently. An *explicit* negint-form back-reference item doesn't have
+that problem: checked against `isTypeId`/`parseRecords` directly, an old
+decoder sees a well-formed CBOR item it doesn't recognize as a typeID
+form, skips it as padding (same as any other future extension), and
+falls back to whatever recognized backup typeID (if any) rides alongside
+it — never a silent reinterpretation, never corruption. So the
+version-bump objection that shelved both ideas does not actually apply
+to this specific shape. Worth writing down since it may matter if either
+backlog item is revisited later.
+
+That said, the concrete case both ideas exist to solve —
+`IMPLEMENTATION-NOTES.md`'s repeated-calendar-event Records, Option B —
+is already solved today, for free, by namespace-scoping: declare a
+namespace once, use a cheap sequential odd uint per repeated Record, and
+the "wide ID repeated N times" cost this would compact never happens in
+the first place. That leaves only a narrower residual case (an
+*unnamespaced* container with many repeated wide byte-string IDs) where
+a back-reference would still add anything — real, but not the load-
+bearing motivation it first looked like, and not enough on its own to
+justify committing the one remaining major type to a specific future
+shape today.
+
+**Resolution: leave negint excluded, not formally reserved for
+anything.** The wire behavior is identical either way — an old decoder
+skips an unrecognized negint as padding whether or not the spec has
+pre-announced what it's for. The only thing "reserve" would buy over
+"exclude" is an advance promise about future meaning, and this project's
+own pattern (App Route, namespace-scoping, both left unbuilt until a
+real adopter had a concrete want) argues against making that promise
+before a real need identifies what it should actually say. If one shows
+up, it picks from whatever's still unclaimed then — including negint,
+still available, exactly as it is today.
+
+## Text string Type IDs — reserved for future use, but pinned enough to not repeat FINDINGS #21
+
+§3.1 reserves text string (major type 3) as a future "Named ID" typeID
+form, with no registration scheme defined yet — deliberately, the same
+"don't build it until a real need exists" posture as everything else
+left open in this document. Raised directly: is an entirely bare
+reservation the right amount of caution here, given a text string is
+different in kind from a reserved numeric range? A number carries no
+meaning until one is assigned, so nothing tempts an implementer to
+start using reserved numeric space informally. A text string already
+*looks* usable the moment it exists — nothing stops an implementer from
+writing `"wifi-config"` into that prefix position today, years before
+any registration scheme exists, and once real content ships against
+whatever ad hoc convention emerges first, the eventual real scheme
+inherits a much harder compatibility problem than if a few structural
+rules had existed from day one.
+
+Checked the actual spec text rather than assuming the gap was real:
+confirmed genuinely bare — "a parser MUST treat them as valid prefix
+items... but no registration scheme for them is defined yet," nothing
+else. Compare the byte string form, which already has a real caution
+paragraph (definite-length required, minimum byte length, recommended
+lengths by context). Text string had no equivalent.
+
+**Three concrete, closeable gaps, not a vague call for "more scrutiny":**
+
+1. **No definite-length requirement stated**, even though the identical
+   skip-safety hazard byte string's rule exists to prevent (an
+   indefinite-length string can only be measured by walking its chunks)
+   applies identically to text strings.
+2. **No comparison rule** — byte-for-byte, or some implied Unicode
+   normalization/case-folding? Left silent, two implementations can
+   disagree about whether two strings that "look the same" actually
+   match. This is exactly the failure shape FINDINGS.md #21 already
+   found the hard way: §3.1's own hash-derivation algorithm shipped
+   without a pinned comparison/derivation rule and produced a real,
+   silently-wrong verification bug before two independent
+   implementations were actually checked against each other. Pinning a
+   comparison rule for text string Type IDs now, before any have
+   shipped in real content, is the same fix applied pre-emptively
+   instead of after the fact.
+3. **No collision-safety guidance**, even though §3.1 already has
+   exactly the applicable guidance (reverse-domain qualification for
+   hash-derived names) sitting a few paragraphs away, just not
+   cross-referenced to this case. A bare text string Type ID has the
+   identical bare-generic-word collision hazard as a bare
+   hash-derivation name, for the identical reason, and text string
+   Type IDs are always global — nothing else protects them.
+
+**Resolution: added a placeholder-grade caution paragraph to §3.1,
+closing exactly those three gaps, without building the registration
+scheme itself.** Definite-length required (mirrors the byte string
+rule); exact raw-UTF-8-byte comparison, no normalization; a
+cross-reference tying bare text string Type IDs into the existing
+reverse-domain naming guidance; and an explicit "not yet safe for
+guaranteed cross-implementer uniqueness" caveat, since "reserved for
+future use" doesn't say that outright on its own. No code change
+needed — the parser's existing forward-compat padding skip already
+handles an unrecognized or malformed text string prefix item the same
+way it handles any other unrecognized item; this is a constraint on
+what a conformant *encoder* may emit, not a new decoder behavior.
+
 ## The hash-derivation algorithm was never actually pinned — a real bug, not just a documentation gap
 
 Three separate mechanisms (Type Hint, §3.1; App Route's decentralized
