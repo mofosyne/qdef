@@ -1273,6 +1273,72 @@ before a real need identifies what it should actually say. If one shows
 up, it picks from whatever's still unclaimed then — including negint,
 still available, exactly as it is today.
 
+## Multiple namespaces per container — considered, not built, because the common case doesn't need it and the rare case is already served differently
+
+Asked directly: should one container support declaring more than one
+namespace, so a single physical code could mix content from several
+genuinely unrelated apps, each with its own compact, namespace-scoped
+Type IDs? Framed against a stated assumption worth checking first: one
+code tends to belong to one application, which relies on common
+community standards *plus* its own extension.
+
+**That framing already describes exactly what the existing single-
+namespace design provides, without needing a second namespace at all.**
+"Community standards" already live in the always-global even tier
+(standard record types, common-vocabulary registrations) — interpretable
+unconditionally, regardless of whether any namespace is declared.
+Declaring a namespace doesn't consume or compete with that tier; it only
+adds a second, compact lookup space for the *one* app's own odd Type
+IDs. So "one app, its own extension, plus shared standards" is already
+fully served by Type `0`'s existing single-declaration design — there is
+nothing in that scenario a second namespace would add.
+
+**The scenario that would actually need a second namespace is a
+different one: two genuinely unrelated apps, in the same code, both
+wanting their own compact namespace-scoped IDs simultaneously.** That's
+real in principle, but it isn't unserved today — any number of unrelated
+apps can already share one physical code as sibling Records, each
+dispatched by its own distinct *global* Type ID (common-vocabulary or
+self-allocated, `32768`+, no registry needed — see "Own-URI-scheme
+carriers," above, for the same tier used a different way). What multiple
+apps sharing a code can't both get is the compact, namespace-scoped
+small-ID discount at the same time — that stays reserved for whichever
+one app owns the code's single Type `0` slot, the same way it always
+has.
+
+**Both ways to build actual multi-namespace support cost real
+compactness for the common case, in exchange for a rarer one nobody has
+asked for:**
+
+- *Multiple Type `0`-shaped Records, position-based* (a second one starts
+  a new scope for whatever follows it) reintroduces stateful,
+  order-dependent parsing this project has deliberately kept out of
+  every other mechanism — there is no cross-code Record continuity
+  anywhere else in the format (see "Type ID inheritance," "Reference/
+  value-sharing tags," above, both rejected partly for the identical
+  reason), and nesting order elsewhere is a documented convention, never
+  something a decoder is required to track. A decoder would need to
+  track "which segment of the Sequence am I currently scoped under"
+  instead of the flat, order-independent lookup every other Type ID
+  gets.
+- *Type `0` carries an array of namespaces, each scoped Record selects
+  one explicitly* adds a mandatory selector field to *every*
+  namespace-scoped Record, not just the header — directly undermining
+  namespace-scoping's entire value proposition, which is "pay once at
+  the header, every subsequent small ID is free." Making every
+  subsequent Record pay again defeats the reason to reach for this
+  mechanism in the first place.
+
+**Not built.** TagDrop, the one real adopter whose concrete want drove
+namespace-scoping's existence at all, only ever wanted exactly one
+namespace. Building either option above would cost the common,
+already-motivated case to serve a hypothetical one, the same trade this
+project has consistently declined elsewhere (App Route, the negint
+reservation, the first-come-first-served tier). If a real adopter with a
+genuine multiple-unrelated-apps-in-one-code want shows up, the actual
+shape of their need should drive the design the way it did here — not a
+guess made in advance of one.
+
 ## Text string Type IDs — reserved for future use, but pinned enough to not repeat FINDINGS #21
 
 §3.1 reserves text string (major type 3) as a future "Named ID" typeID
