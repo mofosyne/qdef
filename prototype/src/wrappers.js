@@ -243,12 +243,11 @@ function decodeAndCheck(bytes, knownKeysRegistry) {
  *
  * Per spec §3.5: each physical code is its own independent container, with
  * no cross-code state -- so a namespace declared for the group MUST repeat,
- * identically, as a Type 0 sibling on every code, not just one. A code
- * whose first Record is Type 0 is routed starting from its *second* Record
- * instead; every code's declared namespace (if any) must agree, and that
- * namespace applies to the terminal Record this whole stack resolves to --
- * including one only reachable after full Split reassembly, which is
- * exactly the case a lone per-code declaration couldn't reach at all.
+ * identically, in every code's discriminator, not just one. Every code's
+ * declared namespace (if any) must agree, and that namespace applies to
+ * the terminal Record this whole stack resolves to -- including one only
+ * reachable after full Split reassembly, which is exactly the case a lone
+ * per-code declaration couldn't reach at all.
  *
  * @param {Buffer[]} codesBytesList
  * @param {{aesKey?: Buffer}} ctx
@@ -261,9 +260,8 @@ function resolveStack(codesBytesList, ctx, knownKeysRegistry) {
   let groupHeader; // {namespace, hint} agreed across every code that declares one
 
   for (const codeBytes of codesBytesList) {
-    const { records } = core.decodeContainer(codeBytes);
-    const codeHeader = header.extractHeader(records);
-    const startIndex = codeHeader ? 1 : 0;
+    const { discriminator, records } = core.decodeContainer(codeBytes);
+    const codeHeader = header.parseDiscriminator(discriminator);
     if (codeHeader) {
       if (groupHeader === undefined) {
         groupHeader = codeHeader;
@@ -272,8 +270,8 @@ function resolveStack(codesBytesList, ctx, knownKeysRegistry) {
       }
     }
 
-    const record = records[startIndex];
-    if (!record) throw new Error('code has no routable Record after its Type 0 header');
+    const record = records[0];
+    if (!record) throw new Error('code has no routable Record');
     const knownKeys = knownKeysRegistry.get(record.typeId) ?? new Set();
     let rec = core.applyCriticality(record, knownKeys);
     if (rec.aborted) throw new Error(`record type ${rec.typeId} aborted: ${rec.abortReason}`);

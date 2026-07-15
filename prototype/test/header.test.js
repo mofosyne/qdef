@@ -1,99 +1,124 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const crypto = require('crypto');
 
 const core = require('../src/core');
 const header = require('../src/header');
 
 // ---------------------------------------------------------------------
-// Record Type 0: reserved container-level metadata (format namespace +
-// optional Hint name), landed after collapsing what had been a separate
-// fixed/positional header concept into "just another Record" -- no
-// version byte, no non-Record header structure at all.
+// Container discriminator (§3.5): the mandatory first CBOR item after
+// magic, replacing what used to be an optional Type 0 Record. Making it
+// unconditionally present resolves a real ambiguity a bare namespace
+// value would otherwise have (indistinguishable from a backup typeID of
+// the next real Record) without reopening CBOR-tag-based routing.
 // ---------------------------------------------------------------------
 
-test('a Type 0 header record round-trips namespace and hint', () => {
-  const container = core.encodeContainer([
-    { typeIds: [header.HEADER_TYPE], fields: new Map([[1, 12271745624591856273n], [3, 'com.example/tagdrop-paper']]) },
-    { typeIds: [100], fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) },
-  ]);
+test('a decentralized-namespace discriminator (byte string) round-trips, no hint', () => {
+  const namespace = Buffer.from('663c1cf2', 'hex');
+  const container = core.encodeContainer(
+    [{ typeIds: [100], fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) }],
+    namespace,
+  );
 
-  const { records } = core.decodeContainer(container);
-  const h = header.extractHeader(records);
+  const { discriminator } = core.decodeContainer(container);
+  const h = header.parseDiscriminator(discriminator);
 
-  assert.equal(h.namespace, 12271745624591856273n);
-  assert.equal(h.hint, 'com.example/tagdrop-paper');
-});
-
-test('both namespace and hint are independently optional -- a bare Type 0 record is valid', () => {
-  const container = core.encodeContainer([
-    { typeIds: [header.HEADER_TYPE], fields: new Map() },
-    { typeIds: [100], fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) },
-  ]);
-
-  const { records } = core.decodeContainer(container);
-  const h = header.extractHeader(records);
-
-  assert.ok(h);
-  assert.equal(h.namespace, undefined);
+  assert.deepEqual(h.namespace, namespace);
   assert.equal(h.hint, undefined);
 });
 
-test('no Type 0 record present at all is a valid, unnamespaced container', () => {
+test('an allocated-namespace discriminator (small uint) round-trips', () => {
+  const container = core.encodeContainer(
+    [{ typeIds: [100], fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) }],
+    500,
+  );
+
+  const { discriminator } = core.decodeContainer(container);
+  const h = header.parseDiscriminator(discriminator);
+
+  assert.equal(h.namespace, 500);
+});
+
+test('the default discriminator (bare uint 0) means no namespace declared', () => {
   const container = core.encodeContainer([
     { typeIds: [100], fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) },
   ]);
 
-  const { records } = core.decodeContainer(container);
-  assert.equal(header.extractHeader(records), undefined);
+  const { discriminator, records } = core.decodeContainer(container);
+  assert.equal(discriminator, 0);
+  assert.equal(header.parseDiscriminator(discriminator), undefined);
+  // Records are unaffected -- the discriminator is a structurally
+  // separate item, not something a caller has to skip over manually.
+  assert.equal(records[0].typeId, 100);
 });
 
-test('a Type 0 record anywhere but first is not treated as the header', () => {
+test('array [Allocated Namespace ID, Decentralized Namespace backup] discriminator round-trips', () => {
+  const decentralizedBackup = Buffer.from('a1b2c3d4', 'hex');
+  const container = core.encodeContainer([], [500, decentralizedBackup]);
+
+  const { discriminator } = core.decodeContainer(container);
+  const h = header.parseDiscriminator(discriminator);
+
+  assert.equal(h.namespace, 500);
+  assert.deepEqual(h.decentralizedBackup, decentralizedBackup);
+});
+
+test('array [Decentralized Namespace ID, Namespace Name hint] discriminator round-trips', () => {
+  const namespace = Buffer.from('663c1cf2', 'hex');
+  const container = core.encodeContainer([], [namespace, 'com.example/tagdrop-paper']);
+
+  const { discriminator } = core.decodeContainer(container);
+  const h = header.parseDiscriminator(discriminator);
+
+  assert.deepEqual(h.namespace, namespace);
+  assert.equal(h.hint, 'com.example/tagdrop-paper');
+});
+
+test('the full map-form discriminator round-trips namespace and hint, for cases needing more than a bare id/hint pair', () => {
+  const namespace = 12271745624591856273n;
+  const fullForm = new Map([
+    [header.HEADER_NAMESPACE_KEY, namespace],
+    [header.HEADER_NAMESPACE_HINT_KEY, 'com.example/tagdrop-paper'],
+  ]);
+  const container = core.encodeContainer([], fullForm);
+
+  const { discriminator } = core.decodeContainer(container);
+  const h = header.parseDiscriminator(discriminator);
+
+  assert.equal(h.namespace, namespace);
+  assert.equal(h.hint, 'com.example/tagdrop-paper');
+});
+
+test('an unrecognized discriminator shape (e.g. a bare text string) degrades to no namespace, never a hard failure', () => {
+  // Text string is not currently a defined discriminator form -- same
+  // graceful degrade an absent or malformed header already had.
+  const container = core.encodeContainer(
+    [{ typeIds: [100], fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) }],
+    'not-a-defined-shape',
+  );
+
+  const { discriminator, records } = core.decodeContainer(container);
+  assert.equal(header.parseDiscriminator(discriminator), undefined);
+  assert.equal(records[0].typeId, 100); // Records after it are unaffected
+});
+
+test('a container with no Records at all is still valid -- just the mandatory discriminator', () => {
+  const container = core.encodeContainer([], Buffer.from('663c1cf2', 'hex'));
+  const { discriminator, records } = core.decodeContainer(container);
+
+  assert.equal(records.length, 0);
+  assert.ok(header.parseDiscriminator(discriminator));
+});
+
+test('the container is exactly magic + discriminator + CBOR Sequence, no version byte', () => {
   const container = core.encodeContainer([
     { typeIds: [100], fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) },
-    { typeIds: [header.HEADER_TYPE], fields: new Map([[1, 42]]) },
-  ]);
-
-  const { records } = core.decodeContainer(container);
-  assert.equal(header.extractHeader(records), undefined);
-  assert.equal(records[1].typeId, 0);
-});
-
-test('a Type 0 record is not confused with "missing typeID" (typeId 0 vs null)', () => {
-  const container = core.encodeContainer([
-    { typeIds: [header.HEADER_TYPE], fields: new Map([[1, 1]]) },
-  ]);
-
-  const { records } = core.decodeContainer(container);
-  assert.equal(records[0].ignored, false);
-  assert.equal(records[0].typeId, 0);
-  assert.notEqual(records[0].typeId, null);
-  assert.equal(records[0].typeId === 0, true);
-  assert.equal(Boolean(records[0].typeId), false); // confirms the falsy trap exists
-});
-
-test('an unrecognized odd key on a Type 0 record is ignored, not aborting', () => {
-  const container = core.encodeContainer([
-    { typeIds: [header.HEADER_TYPE], fields: new Map([[1, 42], [7, 'future-field']]) },
-  ]);
-
-  const { records } = core.decodeContainer(container);
-  const checked = core.applyCriticality(records[0], header.HEADER_KNOWN_KEYS);
-
-  assert.equal(checked.aborted, false);
-  assert.deepEqual(checked.ignoredKeys, [7]);
-  assert.equal(checked.map.get(1), 42);
-});
-
-test('the container is exactly magic + CBOR Sequence, no version byte', () => {
-  const container = core.encodeContainer([
-    { typeIds: [header.HEADER_TYPE], fields: new Map([[1, 1]]) },
   ]);
 
   assert.deepEqual(container.subarray(0, 4), core.MAGIC);
-  // Byte immediately after magic is the start of the typeID (uint, major type 0).
-  assert.equal(container[4] >> 5, 0);
+  // Byte immediately after magic is the discriminator's own CBOR head --
+  // the default (bare uint 0) encodes as a single byte, 0x00.
+  assert.equal(container[4], 0x00);
 });
 
 // ---------------------------------------------------------------------
@@ -160,25 +185,25 @@ test("TagDrop's migration case: old global byte string ID keeps working, new nam
   const oldStyleContainer = core.encodeContainer([
     { typeIds: [OLD_GLOBAL_TYPE_ID], fields: new Map([[0, 'legacy payload']]) },
   ]);
-  const newStyleContainer = core.encodeContainer([
-    { typeIds: [header.HEADER_TYPE], fields: new Map([[1, TAGDROP_NAMESPACE]]) },
-    { typeIds: [NEW_NAMESPACE_LOCAL_ID], fields: new Map([[0, 'new payload']]) },
-  ]);
+  const newStyleContainer = core.encodeContainer(
+    [{ typeIds: [NEW_NAMESPACE_LOCAL_ID], fields: new Map([[0, 'new payload']]) }],
+    TAGDROP_NAMESPACE,
+  );
 
-  const oldRecords = core.decodeContainer(oldStyleContainer).records;
+  const oldDecoded = core.decodeContainer(oldStyleContainer);
   assert.equal(
-    header.resolveLookupKey(header.extractHeader(oldRecords), oldRecords[0].typeId).scope,
+    header.resolveLookupKey(header.parseDiscriminator(oldDecoded.discriminator), oldDecoded.records[0].typeId).scope,
     'global',
   );
 
-  const newRecords = core.decodeContainer(newStyleContainer).records;
-  const newHeader = header.extractHeader(newRecords);
-  const newKey = header.resolveLookupKey(newHeader, newRecords[1].typeId);
+  const newDecoded = core.decodeContainer(newStyleContainer);
+  const newHeader = header.parseDiscriminator(newDecoded.discriminator);
+  const newKey = header.resolveLookupKey(newHeader, newDecoded.records[0].typeId);
   assert.deepEqual(newKey, {
     scope: 'namespace',
     namespace: TAGDROP_NAMESPACE,
     typeId: NEW_NAMESPACE_LOCAL_ID,
   });
 
-  assert.notEqual(oldRecords[0].typeId, newKey.typeId);
+  assert.notEqual(oldDecoded.records[0].typeId, newKey.typeId);
 });

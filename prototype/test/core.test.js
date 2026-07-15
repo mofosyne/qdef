@@ -16,10 +16,12 @@ const rt = require('../src/recordTypes');
 
 test('a record with no typeID before the map is ignored (not routed)', () => {
   // A bare map with no preceding typeID items — the parser finds no
-  // typeID and marks the record as ignored.
+  // typeID and marks the record as ignored. The mandatory discriminator
+  // (§3.5) still comes first; this tests the Record right after it.
+  const discBytes = cbor.encodeCanonical(0); // no namespace
   const map = new Map([[0, 'SSID']]);
   const bytes = cbor.encode(map);
-  const container = Buffer.concat([core.MAGIC, bytes]);
+  const container = Buffer.concat([core.MAGIC, discBytes, bytes]);
 
   const { records } = core.decodeContainer(container);
   assert.equal(records[0].ignored, true);
@@ -113,11 +115,12 @@ test('backup typeIDs are accumulated and accessible via typeIds array', () => {
 test('unknown items between typeIDs and map are skipped transparently', () => {
   // Manually construct a Record with an unknown item (e.g. a future
   // QDEF version marker) between the typeID and the map.
+  const discBytes = cbor.encodeCanonical(0); // no namespace
   const typeBytes = cbor.encodeCanonical(100);
   const futureMarker = cbor.encodeCanonical(-1); // negative int = unknown item
   const mapBytes = cbor.encodeCanonical(new Map([[0, 'SSID']]));
   const recordBytes = Buffer.concat([typeBytes, futureMarker, mapBytes]);
-  const container = Buffer.concat([core.MAGIC, recordBytes]);
+  const container = Buffer.concat([core.MAGIC, discBytes, recordBytes]);
 
   const { records } = core.decodeContainer(container);
   assert.equal(records[0].typeId, 100);

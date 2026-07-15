@@ -1,8 +1,8 @@
 'use strict';
-// QDEF core: magic framing, CBOR-Sequence-of-Records, typeID-prefix
-// routing, even/odd unknown-key criticality. Deliberately has no
-// knowledge of any specific Record Type, compression, or reassembly
-// (see docs/QDEF-SPEC.md §3.3).
+// QDEF core: magic framing, a mandatory container discriminator,
+// CBOR-Sequence-of-Records, typeID-prefix routing, even/odd unknown-key
+// criticality. Deliberately has no knowledge of any specific Record
+// Type, compression, or reassembly (see docs/QDEF-SPEC.md §3.3).
 //
 // Every Record is a sequence of CBOR items terminating in a CBOR Map:
 // one or more typeID items (uint or byte string) followed by zero or
@@ -10,24 +10,36 @@
 // the record delimiter. The parser accumulates typeIDs in a contiguous
 // run at the start, skips unknown items, and stops at the first Map.
 //
-// No version byte: the container is just magic + a CBOR Sequence of
-// Records, full stop. Container-level metadata (a format namespace)
-// lives inside the Sequence itself, as a Record with the reserved Type
-// ID 0 (see header.js) — reusing the same even/odd extensibility every
-// other Record already has, rather than a second, parallel
-// extensibility mechanism for the header alone.
+// No version byte: local forward compatibility is §3.2's even/odd rule.
+// Container-level metadata (a format namespace) lives in a single
+// mandatory discriminator item, always the first CBOR item after magic
+// -- not an ordinary Record the way it used to be. Making it
+// unconditionally present resolves a real ambiguity a bare, unwrapped
+// namespace value would otherwise have (indistinguishable from a
+// backup typeID belonging to the next real Record) without needing a
+// CBOR-tag marker (see docs/DESIGN.md#cbor-tag-routing--removed for why
+// that route is already closed). See header.js for the shapes it can
+// take and what each one means; core.js only needs to know how to
+// split it off the front, never how to interpret it.
 
 const cbor = require('cbor');
 
 const MAGIC = Buffer.from([0x51, 0x44, 0x45, 0x46]); // "QDEF"
 
 /**
- * Encode a QDEF container from a list of records.
+ * Encode a QDEF container from a list of records, prefixed by magic and
+ * the mandatory discriminator item.
+ *
  * @param {Array<{typeIds: Array<number|bigint|Buffer>, fields: Map<number, any>}>} records
+ * @param {number|bigint|Buffer|Array|Map} [discriminator] - the
+ *   container-level discriminator item (see header.js for its shapes).
+ *   Omitted defaults to the bare uint `0`, meaning "no namespace" --
+ *   the cheapest legal form, 1 byte.
  */
-function encodeContainer(records) {
+function encodeContainer(records, discriminator) {
+  const discItem = cbor.encodeCanonical(discriminator === undefined ? 0 : discriminator);
   const parts = records.map(encodeRecordBytes);
-  return Buffer.concat([MAGIC, ...parts]);
+  return Buffer.concat([MAGIC, discItem, ...parts]);
 }
 
 /**
@@ -45,8 +57,12 @@ function encodeRecordBytes({ typeIds, fields }) {
 }
 
 /**
- * Decode a QDEF container down to raw routed records: no even/odd
- * criticality applied yet (that's per-Record-Type, see applyCriticality).
+ * Decode a QDEF container down to the raw discriminator item and
+ * routed records: no even/odd criticality applied yet (that's
+ * per-Record-Type, see applyCriticality), and the discriminator is
+ * returned exactly as decoded, uninterpreted -- header.js normalizes
+ * it into {namespace, hint}. core.js only knows there is always
+ * exactly one such item and where it ends, never what it means.
  */
 function decodeContainer(buf) {
   if (buf.length < 4) throw new Error('QDEF container too short for magic');
@@ -55,13 +71,21 @@ function decodeContainer(buf) {
     throw new Error(`bad magic: ${magic.toString('hex')}`);
   }
   const seq = buf.subarray(4);
-  return { records: decodeSequence(seq) };
+  const items = cbor.decodeAllSync(seq);
+  if (items.length === 0) {
+    throw new Error('QDEF container missing its mandatory discriminator item');
+  }
+  const [discriminator, ...rest] = items;
+  return { discriminator, records: parseRecords(rest) };
 }
 
 /**
- * Decode a bare CBOR Sequence of Records with no magic prefix — the
- * NDEF path (§2), where the outer NDEF record's MIME type
- * (application/vnd.qdef) already identifies the format.
+ * Decode a bare CBOR Sequence of Records with no magic prefix and no
+ * discriminator item — the NDEF/own-URI-scheme path (§2), where the
+ * carrier (an NDEF MIME type, or an app's own scheme prefix) already
+ * identifies the format *and* already isolates this content from every
+ * other QDEF-aware decoder, so neither magic nor a discriminator buys
+ * anything here (§3.5). Every item is an ordinary Record, full stop.
  */
 function decodeSequence(seq) {
   const items = cbor.decodeAllSync(seq);

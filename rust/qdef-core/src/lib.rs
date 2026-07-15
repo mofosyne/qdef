@@ -10,13 +10,15 @@
 //! the record delimiter. The parser accumulates typeIDs in a contiguous
 //! run at the start, skips unknown items, and stops at the first Map.
 //!
-//! No version byte: the container is magic + a CBOR Sequence of Records,
-//! full stop. Container-level metadata (a format namespace) lives inside
-//! the Sequence itself, as a Record with the reserved Type ID 0 (see
-//! header.js in the Node prototype) — an ordinary Record, not a distinct
-//! wire structure. The mandatory core has no per-Type schema knowledge at
-//! all; Type 0 is routed and walked by the exact same machinery as any
-//! other Record.
+//! No version byte: the container is magic, a mandatory discriminator
+//! item, then a CBOR Sequence of Records. Container-level metadata (a
+//! format namespace) lives in that discriminator, always the first CBOR
+//! item after magic (see header.js in the Node prototype for its
+//! shapes and what each one means) — the mandatory core here only knows
+//! how to split it off the front, via `cbor::skip_any_item`, never how
+//! to interpret it. That interpretation is Record-Type-interpretation-
+//! specific handling, entirely outside this crate's scope, same as
+//! every other optional mechanism.
 //!
 //! `no_std`, zero heap allocation, zero dependencies, and — thanks to
 //! §3.2's field-value-shape rule (Record field values are always a scalar
@@ -52,9 +54,11 @@ enum ControlFlow {
     Stop,
 }
 
-/// A parsed QDEF container: valid magic, wrapping the CBOR Sequence of
-/// Records that follows.
+/// A parsed QDEF container: valid magic, its mandatory discriminator
+/// item (raw, uninterpreted — see the crate-level doc comment), and the
+/// CBOR Sequence of Records that follows it.
 pub struct Container<'a> {
+    discriminator: &'a [u8],
     seq: &'a [u8],
 }
 
@@ -66,7 +70,20 @@ impl<'a> Container<'a> {
         if buf[0..4] != MAGIC {
             return Err(Error::BadMagic);
         }
-        Ok(Container { seq: &buf[4..] })
+        let rest = &buf[4..];
+        let disc_len = cbor::skip_any_item(rest).map_err(Error::Cbor)?;
+        Ok(Container {
+            discriminator: &rest[..disc_len],
+            seq: &rest[disc_len..],
+        })
+    }
+
+    /// The raw, uninterpreted bytes of the mandatory discriminator item.
+    /// This crate never inspects its shape or meaning — that's an
+    /// optional, Record-Type-interpretation-layer concern (see
+    /// header.js in the Node prototype for the equivalent).
+    pub fn discriminator(&self) -> &'a [u8] {
+        self.discriminator
     }
 
     pub fn records(&self) -> Records<'a> {

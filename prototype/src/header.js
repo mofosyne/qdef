@@ -1,49 +1,108 @@
 'use strict';
-// Record Type 0: reserved for container-level metadata (a format
-// namespace) — an ordinary Record, not a distinct header structure.
-// Reuses the exact same even/odd extensibility and prefix typeID
-// routing every other Record already has.
+// Container discriminator (spec §3.5): the mandatory first CBOR item
+// after magic, dispatched by its own CBOR major type into one of
+// several shapes. core.js only knows how to split it off the front and
+// where it ends -- this module interprets what it means. Record-Type-
+// interpretation-specific handling (spec §3.3's optional tier), never a
+// mandatory-core concern: core.decodeContainer needs zero knowledge of
+// namespaces to do its job.
 //
-// Must be the first Record in the Sequence to serve its purpose (early,
-// cheap identification without scanning the whole container). Absent,
-// or found anywhere but first, the container is simply treated as
-// unnamespaced — a safe, graceful degrade, never a hard failure.
-//
-// Type 0 is the one, permanent header Record Type — it does not get
-// "versioned" by minting new Type IDs. No dedicated "version" field
-// either — even/odd extensibility already is the version mechanism,
-// for free: a genuinely incompatible future change to Type 0 itself is
-// just a new even/critical key, whenever it's actually needed.
+// Shapes, in the order a decoder checks them:
+//   uint 0                      -> no namespace declared (the common case,
+//                                  1 byte total, cheaper than the
+//                                  previous "no Type 0 present" convention
+//                                  cost -- 0 bytes -- ever was NOT: this
+//                                  trades that free case for an
+//                                  unconditionally unambiguous one; see
+//                                  DESIGN.md for why that trade was made)
+//   uint N > 0                  -> Allocated Namespace ID = N (registered,
+//                                  common-vocabulary style)
+//   byte string                 -> Decentralized Namespace ID
+//                                  (self-certifying, no registry needed)
+//   array [uint, byte string]   -> [Allocated Namespace ID,
+//                                  Decentralized Namespace ID backup] --
+//                                  a promotion/transition pair, the same
+//                                  backup-typeID convention Records
+//                                  already use (§3.1), applied to
+//                                  namespace promotion
+//   array [byte string, text]   -> [Decentralized Namespace ID,
+//                                  Namespace Name hint] -- the
+//                                  self-certifying id+recoverable-name
+//                                  pair
+//   map                         -> full extensible form, matching what
+//                                  used to be the Type 0 Record's own
+//                                  map: {1: namespace (uint|bstr),
+//                                  3: hint (tstr), ...future even/odd
+//                                  keys}. For cases needing more than a
+//                                  bare id/hint pair.
+//   anything else                -> unrecognized shape, degrades to "no
+//                                  namespace" -- the same graceful
+//                                  degrade an absent or aborted Type 0
+//                                  Record already had, never a hard
+//                                  failure.
 
-const core = require('./core');
-
-const HEADER_TYPE = 0;
-const HEADER_NAMESPACE_KEY = 1; // odd/optional: format namespace (uint or byte string)
-const HEADER_NAMESPACE_HINT_KEY = 3; // odd/optional: recoverable name for it
-const HEADER_KNOWN_KEYS = new Set([HEADER_NAMESPACE_KEY, HEADER_NAMESPACE_HINT_KEY]);
+const HEADER_NAMESPACE_KEY = 1; // map form only: namespace (uint|bstr)
+const HEADER_NAMESPACE_HINT_KEY = 3; // map form only: recoverable name for it
 
 /**
- * Peek at a decoded record list for a valid Type 0 header. Returns
- * undefined if none is present, not first, or ignored — callers get a
- * plain "no header" result for all three cases, since they mean the
- * same thing: fall back to unnamespaced, global Type ID interpretation.
+ * Normalize the raw discriminator value returned by core.decodeContainer
+ * into {namespace, hint} (hint possibly undefined), or undefined if no
+ * namespace is declared. Absent, the "uint 0" sentinel, and an
+ * unrecognized future shape all mean exactly the same thing to a
+ * caller: interpret every Record's Type ID globally, as if this
+ * mechanism didn't exist for this container.
  */
-function extractHeader(records) {
-  const first = records[0];
-  if (!first || first.ignored || first.typeId !== HEADER_TYPE) {
-    return undefined;
+function parseDiscriminator(discriminator) {
+  if (discriminator === undefined) return undefined;
+
+  if (typeof discriminator === 'number' || typeof discriminator === 'bigint') {
+    return BigInt(discriminator) === 0n ? undefined : { namespace: discriminator };
   }
-  const checked = core.applyCriticality(first, HEADER_KNOWN_KEYS);
-  if (checked.aborted) return undefined;
-  return {
-    namespace: checked.map.get(HEADER_NAMESPACE_KEY),
-    hint: checked.map.get(HEADER_NAMESPACE_HINT_KEY),
-  };
+
+  if (Buffer.isBuffer(discriminator)) {
+    return { namespace: discriminator };
+  }
+
+  if (Array.isArray(discriminator) && discriminator.length === 2) {
+    const [a, b] = discriminator;
+    if ((typeof a === 'number' || typeof a === 'bigint') && Buffer.isBuffer(b)) {
+      return { namespace: a, decentralizedBackup: b };
+    }
+    if (Buffer.isBuffer(a) && typeof b === 'string') {
+      return { namespace: a, hint: b };
+    }
+    return undefined; // unrecognized array shape
+  }
+
+  if (isMapLike(discriminator)) {
+    const namespace = mapGet(discriminator, HEADER_NAMESPACE_KEY);
+    if (namespace === undefined) return undefined;
+    return { namespace, hint: mapGet(discriminator, HEADER_NAMESPACE_HINT_KEY) };
+  }
+
+  // Text string, or any other shape: not currently a defined
+  // discriminator form.
+  return undefined;
+}
+
+function isMapLike(item) {
+  if (item instanceof Map) return true;
+  return (
+    item !== null &&
+    typeof item === 'object' &&
+    !Buffer.isBuffer(item) &&
+    !Array.isArray(item)
+  );
+}
+
+function mapGet(mapLike, key) {
+  return mapLike instanceof Map ? mapLike.get(key) : mapLike[key];
 }
 
 /**
  * Resolves the correct lookup key for a Record's Type ID, given the
- * container's header (as returned by extractHeader, or undefined).
+ * container's normalized header (as returned by parseDiscriminator, or
+ * undefined).
  *
  * Classification (spec §3.1):
  * - Byte string IDs are always global (collision safety from byte length)
@@ -72,10 +131,8 @@ function resolveLookupKey(header, typeId) {
 }
 
 module.exports = {
-  HEADER_TYPE,
-  HEADER_KNOWN_KEYS,
   HEADER_NAMESPACE_KEY,
   HEADER_NAMESPACE_HINT_KEY,
-  extractHeader,
+  parseDiscriminator,
   resolveLookupKey,
 };
