@@ -7,6 +7,7 @@ const crypto = require('crypto');
 const zlib = require('zlib');
 const cbor = require('cbor');
 const core = require('./core');
+const header = require('./header');
 
 const SPLIT_TYPE = 2;
 const COMPRESS_TYPE = 8;
@@ -240,6 +241,15 @@ function decodeAndCheck(bytes, knownKeysRegistry) {
  * QR/NFC tag) down to the terminal (non-wrapper) application Record,
  * regardless of what order Split/Compress/Encrypt wrappers were nested in.
  *
+ * Per spec §3.5: each physical code is its own independent container, with
+ * no cross-code state -- so a namespace declared for the group MUST repeat,
+ * identically, as a Type 0 sibling on every code, not just one. A code
+ * whose first Record is Type 0 is routed starting from its *second* Record
+ * instead; every code's declared namespace (if any) must agree, and that
+ * namespace applies to the terminal Record this whole stack resolves to --
+ * including one only reachable after full Split reassembly, which is
+ * exactly the case a lone per-code declaration couldn't reach at all.
+ *
  * @param {Buffer[]} codesBytesList
  * @param {{aesKey?: Buffer}} ctx
  * @param {Map<number, Set<number>>} knownKeysRegistry - typeId -> known keys,
@@ -248,11 +258,24 @@ function decodeAndCheck(bytes, knownKeysRegistry) {
 function resolveStack(codesBytesList, ctx, knownKeysRegistry) {
   const pendingSplitFragments = [];
   let terminal = null;
+  let groupHeader; // {namespace, hint} agreed across every code that declares one
 
   for (const codeBytes of codesBytesList) {
     const { records } = core.decodeContainer(codeBytes);
-    const knownKeys = knownKeysRegistry.get(records[0].typeId) ?? new Set();
-    let rec = core.applyCriticality(records[0], knownKeys);
+    const codeHeader = header.extractHeader(records);
+    const startIndex = codeHeader ? 1 : 0;
+    if (codeHeader) {
+      if (groupHeader === undefined) {
+        groupHeader = codeHeader;
+      } else if (groupHeader.namespace !== codeHeader.namespace) {
+        throw new Error('codes in this group declare inconsistent namespaces');
+      }
+    }
+
+    const record = records[startIndex];
+    if (!record) throw new Error('code has no routable Record after its Type 0 header');
+    const knownKeys = knownKeysRegistry.get(record.typeId) ?? new Set();
+    let rec = core.applyCriticality(record, knownKeys);
     if (rec.aborted) throw new Error(`record type ${rec.typeId} aborted: ${rec.abortReason}`);
     while (WRAPPER_TYPES.has(rec.typeId) && rec.typeId !== SPLIT_TYPE) {
       const bytes = unwrapSingle(rec.typeId, rec.map, ctx);
@@ -277,6 +300,13 @@ function resolveStack(codesBytesList, ctx, knownKeysRegistry) {
     }
     terminal = rec;
   }
+
+  // Throws if terminal.typeId is an odd/namespace-scoped uint with no
+  // namespace found anywhere in the group -- the same correctness rule
+  // §3.5 already defines, just reached via a resolved Wrapper stack instead
+  // of a plain sibling Record.
+  const key = header.resolveLookupKey(groupHeader, terminal.typeId);
+  terminal.namespace = key.scope === 'namespace' ? key.namespace : undefined;
 
   return terminal;
 }

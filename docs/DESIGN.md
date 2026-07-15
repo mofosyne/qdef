@@ -1031,6 +1031,90 @@ to end — verified real byte counts, not claimed ones: an existing
 scoped small ID (`32768`, the current floor) costs 5, the same as it
 would have cost at the old `1000` floor.
 
+## Namespace repetition across a multi-code Split group — TagDrop asked before committing, not after shipping it wrong
+
+Once §3.5's namespace mechanism landed, TagDrop asked directly whether a
+Type `0` declaration needs to repeat on every physical code of a
+multi-code Split group, or can appear once — before adopting it for real,
+specifically because the answer changes their byte-cost math a lot
+either way. Worth answering by tracing the actual mechanics, not by
+analogy alone.
+
+**It must repeat on every code, for the same reason Preview and App
+Route's decentralized form already do.** Each physical code is parsed as
+its own independent container, from a blank slate, with no cross-code
+state — already established, for a different reason, in "Type ID
+inheritance within a Sequence" and "Reference/value-sharing tags," above.
+A decoder holding one code out of a group has no way to learn a namespace
+declared on some other code it hasn't seen.
+
+**The harder part, and the reason this needed real thought rather than a
+quick "yes": does a namespace even reach a Type ID that's only
+discoverable after a Wrapper stack fully resolves, at all?** Checked the
+actual mechanics rather than assuming: `§4.1`'s Wrapper resolution always
+re-parses fully reassembled bytes as one standalone Record, decoupled
+from whatever Sequence the outer Wrapper Record came from — and the
+prototype's own resolver (`resolveStack`) only ever inspected `records[0]`
+of each code, with no defined behavior at all for a Type `0` sibling
+coexisting with a Wrapper Record in the same code's Sequence. This wasn't
+a design choice anyone made; it was simply never asked before. Resolved
+by extending the same namespace to cover both cases uniformly: a
+namespace declared by a Type `0` sibling in a code's Sequence applies to
+every other Record in that Sequence *and* to whatever a Wrapper stack in
+that Sequence ultimately resolves to.
+
+**Considered and rejected: a weaker rule where a Wrapper-reachable Type
+ID only needs the namespace on *some* code contributing to reassembly,
+not literally every code.** Tempting at first, since full reassembly
+already requires having scanned enough codes to gather every fragment (or
+enough with `parity_scheme`), so a namespace on any one of those already-
+scanned codes would, in principle, already be in hand by the time
+reassembly finishes. Rejected once the actual robustness story was
+checked: `parity_scheme` recovers a missing *fragment's bytes*, but a
+Type `0` Record is a whole sibling Record living outside the Split
+group's own fragment data — losing the one code that happened to carry it
+loses the namespace outright, with nothing to recover it, even while the
+Split-protected *content* itself is fully intact via parity. Accepting
+"content is loss-tolerant, but the namespace needed to interpret it isn't"
+would have been a real, inconsistent robustness story and a genuine
+regression from what a plain sibling like Preview already guarantees.
+Requiring literal per-code repetition, uniformly, avoids that asymmetry
+entirely and needs no special-casing between "plain sibling" and
+"Wrapper-reachable" namespace-scoped Type IDs.
+
+**The wire-cost answer TagDrop actually needed, verified against the real
+encoder rather than estimated:** shrinking one namespace-scoped Type ID
+from a decentralized byte string (10 bytes bare) to a small odd uint (4
+bytes bare) saves 6 bytes; the cheapest legal repeated Type `0` header (a
+4-byte byte string namespace, no Hint name) costs 8 bytes *per code*. A
+single namespace-scoped ID repeating alone nets **+2 bytes/code — a
+regression**, confirming TagDrop's own worry that the header's overhead
+could offset the savings; it takes at least two namespace-scoped Type
+IDs' worth of per-code savings to turn it into a net win. This is exactly
+the kind of number this project checks rather than asserts — see
+FINDINGS.md.
+
+Prototyped in `prototype/src/wrappers.js`'s `resolveStack` (extended to
+locate a Type `0` sibling per code, require agreement across every code
+that declares one, and apply it to the resolved terminal Record) and
+`prototype/test/multi-code-namespace.test.js`: the repeated case
+resolving correctly through full Split reassembly, the single-point-of-
+failure case reproduced directly (a namespace declared on only one code
+survives while that code is present and aborts the instant it's the one
+dropped, even though parity fully recovers the content regardless),
+disagreeing codes rejected outright, and the no-namespace-anywhere case
+aborting the same as the already-covered single-code case.
+
+**Stale-content note, found while locating where to add this entry.** The
+"Namespace-scoped Type IDs (32768+)" section immediately below describes
+the *pre-redesign* mechanism — a magnitude-based `GLOBAL_TIER_CEILING`
+floor (`1000`, later `32768`) that no longer exists in the current spec,
+which classifies by parity (even uint = always global, odd uint =
+namespace-scoped) instead. A terminology pass evidently touched that
+section's wording (e.g. "standard record type") without updating its
+substance to match the parity-based redesign. Left as-is here rather than
+silently rewritten mid-unrelated-change; needs its own dedicated pass.
+
 ## Negint (major type 1) as a typeID form — considered twice, left unclaimed both times
 
 §3.1's form boundary excludes CBOR major type 1 (negative integer) from

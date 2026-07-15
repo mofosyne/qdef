@@ -913,6 +913,57 @@ Prototyped in `prototype/test/type-hint.test.js`: two unrelated
 (the hazard, demonstrated), and the same two projects qualifying by a
 domain they each control do not collide.
 
+### 23. `resolveStack` had no defined behavior for a Type `0` header coexisting with a Wrapper Record — TagDrop's multi-code question exposed it before it shipped wrong
+
+TagDrop asked directly whether a namespace declaration needs to repeat
+on every physical code of a multi-code Split group before adopting
+namespace-scoping for real. Tracing the actual mechanics to answer it
+precisely (not by analogy to Preview/App Route alone) found a real gap:
+`prototype/src/wrappers.js`'s `resolveStack` only ever inspected
+`records[0]` of each code, with no path at all for a Type `0` sibling to
+coexist with a Split/Compress/Encrypt Wrapper Record in the same code's
+Sequence — and no defined rule for whether a namespace declared that way
+even reaches a Record only discoverable after full Wrapper resolution.
+Neither was a deliberate scope decision; the interaction had simply
+never been asked about before.
+
+**Fixed on both counts.** `resolveStack` now locates a Type `0` sibling
+per code (routing from the *second* Record instead of the first when one
+is present), requires every code that declares a namespace to agree, and
+applies the agreed namespace to whatever Record the stack ultimately
+resolves to — including one only reachable after full Split reassembly.
+Throws via the same `resolveLookupKey` check §3.5 already defines for
+the plain-sibling case if the terminal Record's Type ID is namespace-
+scoped and no namespace was found anywhere in the group.
+
+**The harder finding: repetition isn't just a cost question, it's a
+robustness asymmetry that already-shipped machinery doesn't cover.**
+`parity_scheme` recovers a missing *fragment's bytes*; a Type `0` Record
+is a whole sibling Record, entirely outside the Split group's own
+fragment data, so parity gives it no protection at all. Demonstrated
+directly rather than argued: a namespace declared on exactly one code,
+with that code then dropped, aborts the namespace-scoped Type ID even
+though XOR parity fully recovers the Split-protected content from the
+remaining codes. Requiring uniform per-code repetition — the same rule
+Preview and App Route's decentralized form already follow — closes this
+rather than leaving Split-protected content more fragile in namespace
+terms than in content terms.
+
+**Real, sometimes negative, wire cost — verified against the actual
+encoder:** shrinking one namespace-scoped Type ID (10-byte decentralized
+byte string → 4-byte small odd uint) saves 6 bytes; the cheapest legal
+repeated Type `0` header costs 8 bytes/code. One shrunk ID alone is a net
++2 bytes/code regression; breakeven needs at least two namespace-scoped
+Type IDs' worth of savings sharing the same code's header cost.
+
+Prototyped in `prototype/test/multi-code-namespace.test.js`: the
+repeated case resolving correctly through full Split reassembly, the
+single-point-of-failure case reproduced directly (survives while its
+code is present, aborts the instant that code is dropped, despite full
+content recovery via parity), disagreeing codes across a group rejected
+outright, and the no-namespace-anywhere case aborting the same way the
+already-covered single-code case does.
+
 ## Confirmed working as designed (no fix needed)
 
 - **Magic + CBOR-Sequence-of-Records** round-trips exactly as
