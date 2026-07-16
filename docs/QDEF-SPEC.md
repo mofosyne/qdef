@@ -819,11 +819,15 @@ recognize all eight.
 not a self-certifying one — worth being precise about the difference.**
 §3.1's hash-derivation strengthening only applies to byte string values,
 since a small uint can't be reconstructed from hashing a name the way a
-truncated digest can. An Allocated ID's hint is still useful — a
-human-readable label for debugging or inference without a registry
-lookup, the same job Type Hint (§3.1) does elsewhere — it just can't be
-independently verified against the ID the way a Decentralized namespace's
-hint can.
+truncated digest can. What it buys instead is concrete and specific:
+**reverse-engineering.** Anyone examining a QDEF container found in the
+wild — without access to whatever registry eventually governs the
+Allocated tier, or looking at content from before one existed — can read
+the namespace's own name straight off the wire instead of having to
+guess or look one up externally. The same job Type Hint (§3.1) already
+does for Record Type IDs, just one level up; it can't be independently
+verified against the ID the way a Decentralized namespace's hint can,
+but "recoverable without a registry" was already the actual goal.
 
 **Unrecognized shape degrades gracefully, exactly like `uint 0`.** A
 discriminator item that is well-formed CBOR but doesn't match any of the

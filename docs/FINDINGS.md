@@ -1422,3 +1422,14 @@ Record-Type-interpretation layer, exactly as every other discriminator
 shape already was. `rust/qdef-core` needed nothing at all, since it
 never interprets the discriminator's contents in the first place
 (Finding #26).
+
+**The actual motivation for an Allocated ID's hint, stated plainly:
+reverse-engineering, not verification.** A uint can't be hash-derived
+from a name the way a byte string can, so unlike a Decentralized
+namespace's hint, an Allocated one's hint is never self-certifying — it
+was worth being explicit about why it's still useful anyway. Anyone
+examining a QDEF container found in the wild, without access to
+whichever registry eventually governs the Allocated tier (or looking at
+older content predating one), can read the namespace's own name straight
+off the wire instead of guessing or needing external lookup. Same job
+Type Hint (§3.1) already does for Record Type IDs, one level up.
