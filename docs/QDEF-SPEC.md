@@ -746,22 +746,27 @@ discriminator unconditionally present — always exactly one item, always
 first, no exceptions — so a decoder never has to guess which case it's
 looking at.
 
-**Six recognized shapes**, dispatched purely by the discriminator
-item's own CBOR major type:
+**Eight recognized shapes**, dispatched purely by the discriminator
+item's own CBOR major type and, for arrays, its element count:
 
 ```
-+---------------------------------+--------------------------------------------------------------+
-| Discriminator shape              | Meaning                                                       |
-+---------------------------------+--------------------------------------------------------------+
-| uint 0                           | No namespace declared (cheapest legal container: 1 byte)     |
-| uint N > 0                       | Allocated Namespace ID = N (registered/common-vocabulary)    |
-| byte string                      | Decentralized Namespace ID (self-certifying, no registry)    |
-| array [uint, byte string]        | [Allocated Namespace ID, Decentralized backup] — promotion/  |
-|                                   | transition pair, mirrors §3.1's backup-typeID convention     |
-| array [byte string, text string] | [Decentralized Namespace ID, Namespace Name hint]            |
-| map                              | Full extensible form: {1: namespace, 3: hint, ...}           |
-| anything else (unrecognized)     | Degrades to "no namespace" — same graceful degrade as uint 0 |
-+---------------------------------+--------------------------------------------------------------+
++-----------------------------------+------------------------------------------------------------+
+| Discriminator shape                | Meaning                                                     |
++-----------------------------------+------------------------------------------------------------+
+| uint 0                             | No namespace declared (cheapest legal container: 1 byte)   |
+| uint N > 0                         | Allocated Namespace ID = N (registered/common-vocabulary)  |
+| byte string                        | Decentralized Namespace ID (self-certifying, no registry)  |
+| array [uint, byte string]          | [Allocated Namespace ID, Decentralized backup] — promotion/|
+|                                     | transition pair, mirrors §3.1's backup-typeID convention   |
+| array [id, text string]            | [Namespace ID (Allocated or Decentralized), Namespace Name |
+|                                     | hint] — one shape covering both, disambiguated purely by   |
+|                                     | id's own major type                                        |
+| array [uint, byte string, text]    | [Allocated Namespace ID, Decentralized backup, Namespace   |
+|                                     | Name hint] — all three together                            |
+| map                                | Full extensible form: {1: namespace, 3: hint, 5: backup,   |
+|                                     | ...}                                                        |
+| anything else (unrecognized)       | Degrades to "no namespace" — same graceful degrade as uint 0|
++-----------------------------------+------------------------------------------------------------+
 ```
 
 ```
@@ -776,23 +781,49 @@ h'a9d6e1f30b7c4482'                    // bare decentralized namespace, no hint
                                         // decentralized namespace with a
                                         //   recoverable Hint name
 
+[100, "com.example/tagdrop-paper"]     // allocated ID 100, with a plain
+                                        //   recoverable Hint name (not
+                                        //   self-certifying — a uint can't
+                                        //   be hash-derived from a name —
+                                        //   just recoverable)
+
+[100, h'a7f90b3c', "com.example/tagdrop-paper"]
+                                        // allocated ID 100, decentralized
+                                        //   backup, AND a hint, all together
+
 {                                       // full extensible form
   1: h'a9d6e1f30b7c4482',              // namespace: uint or byte string,
                                         //   same convention as §3.1's Type IDs
-  3: "com.example/tagdrop-paper"       // OPTIONAL: recoverable Hint name,
+  3: "com.example/tagdrop-paper",      // OPTIONAL: recoverable Hint name,
                                         //   same pattern as §3.1's hash-
                                         //   derivation hint
+  5: h'a7f90b3c'                       // OPTIONAL: decentralized backup ID
+                                        //   for older decoders (same role as
+                                        //   the array forms' backup slot)
 }
 ```
 
-The bare-array forms exist purely for compactness in the two most common
-non-trivial cases (a promoted allocated ID that still wants a backup, and
-a decentralized ID that wants a hint); the map form is the fully
-extensible fallback for anything future revisions need beyond keys `1`
-and `3`, using the identical even/odd key convention (§3.2) as every
-other Record's field Map. An encoder picks whichever of the six shapes
-is cheapest for what it actually needs to say; a decoder MUST recognize
-all six.
+The array forms exist purely for compactness in the common non-trivial
+cases (a promoted allocated ID that still wants a backup, a namespace ID
+of either kind that wants a hint, or a promotion in progress that wants
+both); the map form is the fully extensible fallback for anything future
+revisions need beyond keys `1`, `3`, and `5`, using the identical
+even/odd key convention (§3.2) as every other Record's field Map. Array
+length disambiguates the 2-element and 3-element forms from each other
+before any element is even inspected — a decoder never has to guess
+which one it's looking at. An encoder picks whichever of the eight
+shapes is cheapest for what it actually needs to say; a decoder MUST
+recognize all eight.
+
+**A hint on an Allocated (uint) namespace ID is a plain recovery name,
+not a self-certifying one — worth being precise about the difference.**
+§3.1's hash-derivation strengthening only applies to byte string values,
+since a small uint can't be reconstructed from hashing a name the way a
+truncated digest can. An Allocated ID's hint is still useful — a
+human-readable label for debugging or inference without a registry
+lookup, the same job Type Hint (§3.1) does elsewhere — it just can't be
+independently verified against the ID the way a Decentralized namespace's
+hint can.
 
 **Unrecognized shape degrades gracefully, exactly like `uint 0`.** A
 discriminator item that is well-formed CBOR but doesn't match any of the

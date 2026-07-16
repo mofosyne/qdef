@@ -1378,3 +1378,47 @@ actual property needed. No wire-format change — both mechanisms already
 existed and worked exactly as specified; this is a recommendation
 correction, driven by a real adopter's actual implementation being
 checked rather than assumed.
+
+### 30. The discriminator's hint-carrying array shape only covered Decentralized namespace IDs — a real asymmetry, closed by generalizing one existing check rather than adding a parallel one
+
+Noticed while discussing whether an Allocated (uint) namespace ID
+deserved its own compact hint-carrying array shape, the way a
+Decentralized (byte string) one already had (`[byte string, text
+string]`): there was no principled reason for the asymmetry. Checked the
+actual byte cost of adding a dedicated new shape for it first, rather
+than assuming it was worth it — `[uint, text string]` vs. the
+equivalent map form saved only 2 bytes (32 → 30), and a further
+3-element form adding a Decentralized backup on top saved only 3 bytes
+(42 → 39) over the map form. Neither clears the bar this project has
+held elsewhere for adding shape-recognition surface (the same reasoning
+that killed the old first-come-first-served tier and the header-array-
+with-selector design) — on cost alone, neither looked worth it.
+
+**What changed the calculus: the existing `[byte string, text string]`
+shape's recognition rule already checks "is element 1 a text string,"
+independent of element 0's type — supporting an Allocated ID here isn't
+a new code path, it's loosening one existing guard from "element 0 must
+be a byte string" to "element 0 must be a uint or a byte string."**
+Once framed that way, the actual marginal implementation cost is closer
+to zero than "one more shape to recognize," so the earlier byte-cost
+objection stopped being the deciding factor. Generalized `[byte string,
+text string]` into `[namespace ID (uint or byte string), text string]`
+— one shape, disambiguated purely by the ID's own major type, covering
+both an Allocated hint (plain, not self-certifying — a uint can't be
+hash-derived from a name) and a Decentralized hint (self-certifying) —
+and this project chose to be comprehensive about the whole shape family
+rather than stopping at just the 2-element generalization: added the
+3-element `[uint, byte string, text string]` form (Allocated +
+Decentralized backup + hint together) despite it genuinely needing a new
+length-based branch (not a widened guard) and the map form's own
+key `5` for the same combination, so all three of the discriminator's
+extensible forms (2-element, 3-element, map) can now express the same
+set of {namespace, hint, backup} combinations, with array length
+disambiguating shapes before any element is even inspected.
+
+No mandatory-core changes — this is entirely within
+`prototype/src/header.js`'s `parseDiscriminator`, the
+Record-Type-interpretation layer, exactly as every other discriminator
+shape already was. `rust/qdef-core` needed nothing at all, since it
+never interprets the discriminator's contents in the first place
+(Finding #26).

@@ -946,7 +946,7 @@ universally meaningful piece of self-description every container
 benefits from having answered cheaply and unambiguously, the same job
 RIFF's own form-type byte does immediately after RIFF's own magic.
 
-**What it buys back.** The discriminator's six recognized shapes (spec
+**What it buys back.** The discriminator's recognized shapes (spec
 §3.5) are each individually cheaper than the old Type `0` Record shape,
 since none of them pay for a typeID prefix item plus a Map wrapper the
 way an ordinary Record does. Verified against the actual encoder: a bare
@@ -983,7 +983,7 @@ migration path.
 
 Prototyped end to end: `prototype/src/core.js` (`encodeContainer`/
 `decodeContainer` split off exactly one discriminator item),
-`prototype/src/header.js` (`parseDiscriminator`, all six shapes),
+`prototype/src/header.js` (`parseDiscriminator`, all recognized shapes),
 `prototype/src/wrappers.js` (`resolveStack` reads each code's
 discriminator via `parseDiscriminator` instead of scanning
 `records[0]`), and `rust/qdef-core` (`Container::discriminator()`,

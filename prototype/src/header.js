@@ -8,49 +8,60 @@
 // namespaces to do its job.
 //
 // Shapes, in the order a decoder checks them:
-//   uint 0                      -> no namespace declared (the common case,
-//                                  1 byte total, cheaper than the
-//                                  previous "no Type 0 present" convention
-//                                  cost -- 0 bytes -- ever was NOT: this
-//                                  trades that free case for an
-//                                  unconditionally unambiguous one; see
-//                                  DESIGN.md for why that trade was made)
-//   uint N > 0                  -> Allocated Namespace ID = N (registered,
-//                                  common-vocabulary style)
-//   byte string                 -> Decentralized Namespace ID
-//                                  (self-certifying, no registry needed)
-//   array [uint, byte string]   -> [Allocated Namespace ID,
-//                                  Decentralized Namespace ID backup] --
-//                                  a promotion/transition pair, the same
-//                                  backup-typeID convention Records
-//                                  already use (§3.1), applied to
-//                                  namespace promotion
-//   array [byte string, text]   -> [Decentralized Namespace ID,
-//                                  Namespace Name hint] -- the
-//                                  self-certifying id+recoverable-name
-//                                  pair
-//   map                         -> full extensible form, matching what
-//                                  used to be the Type 0 Record's own
-//                                  map: {1: namespace (uint|bstr),
-//                                  3: hint (tstr), ...future even/odd
-//                                  keys}. For cases needing more than a
-//                                  bare id/hint pair.
-//   anything else                -> unrecognized shape, degrades to "no
-//                                  namespace" -- the same graceful
-//                                  degrade an absent or aborted Type 0
-//                                  Record already had, never a hard
-//                                  failure.
+//   uint 0                        -> no namespace declared (the common case,
+//                                    1 byte total, cheaper than the
+//                                    previous "no Type 0 present" convention
+//                                    cost -- 0 bytes -- ever was NOT: this
+//                                    trades that free case for an
+//                                    unconditionally unambiguous one; see
+//                                    DESIGN.md for why that trade was made)
+//   uint N > 0                    -> Allocated Namespace ID = N (registered,
+//                                    common-vocabulary style)
+//   byte string                   -> Decentralized Namespace ID
+//                                    (self-certifying, no registry needed)
+//   array [uint, byte string]     -> [Allocated Namespace ID,
+//                                    Decentralized Namespace ID backup] --
+//                                    a promotion/transition pair, the same
+//                                    backup-typeID convention Records
+//                                    already use (§3.1), applied to
+//                                    namespace promotion
+//   array [id, text]              -> [Namespace ID (uint or byte string),
+//                                    Namespace Name hint] -- one shape
+//                                    covering both an Allocated ID with a
+//                                    plain recovery hint and a Decentralized
+//                                    ID with a self-certifying one;
+//                                    disambiguated purely by id's own major
+//                                    type, same recognition rule either way
+//                                    (element[1] is a text string)
+//   array [uint, byte string, text] -> [Allocated Namespace ID,
+//                                    Decentralized Namespace ID backup,
+//                                    Namespace Name hint] -- all three
+//                                    together, for a promotion in progress
+//                                    that also wants a hint
+//   map                           -> full extensible form, matching what
+//                                    used to be the Type 0 Record's own
+//                                    map: {1: namespace (uint|bstr),
+//                                    3: hint (tstr), 5: decentralized
+//                                    backup (bstr), ...future even/odd
+//                                    keys}. For cases needing more than
+//                                    the bare/pair/triple forms above.
+//   anything else                  -> unrecognized shape, degrades to "no
+//                                    namespace" -- the same graceful
+//                                    degrade an absent or aborted Type 0
+//                                    Record already had, never a hard
+//                                    failure.
 
 const HEADER_NAMESPACE_KEY = 1; // map form only: namespace (uint|bstr)
 const HEADER_NAMESPACE_HINT_KEY = 3; // map form only: recoverable name for it
+const HEADER_NAMESPACE_BACKUP_KEY = 5; // map form only: decentralized backup (bstr)
 
 /**
  * Normalize the raw discriminator value returned by core.decodeContainer
- * into {namespace, hint} (hint possibly undefined), or undefined if no
- * namespace is declared. Absent, the "uint 0" sentinel, and an
- * unrecognized future shape all mean exactly the same thing to a
- * caller: interpret every Record's Type ID globally, as if this
- * mechanism didn't exist for this container.
+ * into {namespace, hint, decentralizedBackup} (hint/decentralizedBackup
+ * possibly undefined), or undefined if no namespace is declared. Absent,
+ * the "uint 0" sentinel, and an unrecognized future shape all mean
+ * exactly the same thing to a caller: interpret every Record's Type ID
+ * globally, as if this mechanism didn't exist for this container.
  */
 function parseDiscriminator(discriminator) {
   if (discriminator === undefined) return undefined;
@@ -63,21 +74,37 @@ function parseDiscriminator(discriminator) {
     return { namespace: discriminator };
   }
 
-  if (Array.isArray(discriminator) && discriminator.length === 2) {
-    const [a, b] = discriminator;
-    if ((typeof a === 'number' || typeof a === 'bigint') && Buffer.isBuffer(b)) {
-      return { namespace: a, decentralizedBackup: b };
+  if (Array.isArray(discriminator)) {
+    if (discriminator.length === 2) {
+      const [a, b] = discriminator;
+      const aIsId = typeof a === 'number' || typeof a === 'bigint' || Buffer.isBuffer(a);
+      if ((typeof a === 'number' || typeof a === 'bigint') && Buffer.isBuffer(b)) {
+        return { namespace: a, decentralizedBackup: b };
+      }
+      if (aIsId && typeof b === 'string') {
+        return { namespace: a, hint: b };
+      }
+      return undefined; // unrecognized array shape
     }
-    if (Buffer.isBuffer(a) && typeof b === 'string') {
-      return { namespace: a, hint: b };
+    if (discriminator.length === 3) {
+      const [a, b, c] = discriminator;
+      const aIsUint = typeof a === 'number' || typeof a === 'bigint';
+      if (aIsUint && Buffer.isBuffer(b) && typeof c === 'string') {
+        return { namespace: a, decentralizedBackup: b, hint: c };
+      }
+      return undefined; // unrecognized array shape
     }
-    return undefined; // unrecognized array shape
+    return undefined; // unrecognized array length
   }
 
   if (isMapLike(discriminator)) {
     const namespace = mapGet(discriminator, HEADER_NAMESPACE_KEY);
     if (namespace === undefined) return undefined;
-    return { namespace, hint: mapGet(discriminator, HEADER_NAMESPACE_HINT_KEY) };
+    return {
+      namespace,
+      hint: mapGet(discriminator, HEADER_NAMESPACE_HINT_KEY),
+      decentralizedBackup: mapGet(discriminator, HEADER_NAMESPACE_BACKUP_KEY),
+    };
   }
 
   // Text string, or any other shape: not currently a defined
@@ -158,6 +185,7 @@ function resolveLookupKeyForRecord(record, containerHeader) {
 module.exports = {
   HEADER_NAMESPACE_KEY,
   HEADER_NAMESPACE_HINT_KEY,
+  HEADER_NAMESPACE_BACKUP_KEY,
   parseDiscriminator,
   resolveLookupKey,
   resolveLookupKeyForRecord,

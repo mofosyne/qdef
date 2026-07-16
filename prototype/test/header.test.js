@@ -89,6 +89,54 @@ test('the full map-form discriminator round-trips namespace and hint, for cases 
   assert.equal(h.hint, 'com.example/tagdrop-paper');
 });
 
+test('array [Allocated Namespace ID, Namespace Name hint] discriminator round-trips -- the [id, hint] shape generalized to an Allocated id, not just Decentralized', () => {
+  const container = core.encodeContainer([], [500, 'com.example/tagdrop-paper']);
+
+  const { discriminator } = core.decodeContainer(container);
+  const h = header.parseDiscriminator(discriminator);
+
+  assert.equal(h.namespace, 500);
+  assert.equal(h.hint, 'com.example/tagdrop-paper');
+  assert.equal(h.decentralizedBackup, undefined);
+});
+
+test('array [Allocated Namespace ID, Decentralized backup, Namespace Name hint] discriminator round-trips -- all three together', () => {
+  const decentralizedBackup = Buffer.from('a1b2c3d4', 'hex');
+  const container = core.encodeContainer([], [500, decentralizedBackup, 'com.example/tagdrop-paper']);
+
+  const { discriminator } = core.decodeContainer(container);
+  const h = header.parseDiscriminator(discriminator);
+
+  assert.equal(h.namespace, 500);
+  assert.deepEqual(h.decentralizedBackup, decentralizedBackup);
+  assert.equal(h.hint, 'com.example/tagdrop-paper');
+});
+
+test('a 3-element array not matching [uint, byte string, text string] is an unrecognized shape, degrades to no namespace', () => {
+  const container = core.encodeContainer([], [500, 'not a byte string', 'hint']);
+
+  const { discriminator } = core.decodeContainer(container);
+  assert.equal(header.parseDiscriminator(discriminator), undefined);
+});
+
+test('the map form also carries the decentralized backup namespace (key 5), for the same all-three-together case as the 3-element array', () => {
+  const namespace = 500;
+  const decentralizedBackup = Buffer.from('a1b2c3d4', 'hex');
+  const fullForm = new Map([
+    [header.HEADER_NAMESPACE_KEY, namespace],
+    [header.HEADER_NAMESPACE_HINT_KEY, 'com.example/tagdrop-paper'],
+    [header.HEADER_NAMESPACE_BACKUP_KEY, decentralizedBackup],
+  ]);
+  const container = core.encodeContainer([], fullForm);
+
+  const { discriminator } = core.decodeContainer(container);
+  const h = header.parseDiscriminator(discriminator);
+
+  assert.equal(h.namespace, namespace);
+  assert.equal(h.hint, 'com.example/tagdrop-paper');
+  assert.deepEqual(h.decentralizedBackup, decentralizedBackup);
+});
+
 test('an unrecognized discriminator shape (e.g. a bare text string) degrades to no namespace, never a hard failure', () => {
   // Text string is not currently a defined discriminator form -- same
   // graceful degrade an absent or malformed header already had.
