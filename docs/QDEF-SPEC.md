@@ -243,6 +243,33 @@ usable the moment it exists — see the caution below for why that
 specifically calls for pinning a few rules now, ahead of the full
 registration scheme.
 
+**Byte string Type IDs are not the recommended default for "I want a
+cheap ID with no registry" — most adopters want a declared namespace
+plus a small odd uint instead.** A byte string Type ID pays a real,
+recurring width cost (4+ bytes, every single Record Type, forever); an
+odd uint inside a declared namespace can be as small as a single byte
+and stays collision-free by construction, since the namespace (not the
+ID's own width) is what protects it — the "cost" is that the namespace
+operator is responsible for not colliding with their own already-issued
+numbers, which is trivial bookkeeping for whoever controls one
+namespace. This holds regardless of whether that namespace itself is
+centrally allocated or fully decentralized (a self-chosen byte string,
+below) — either way, once a namespace exists, Record Type IDs inside it
+should almost always be small sequential odd uints, not byte strings.
+
+A byte string Type ID remains the right choice for one specific,
+narrower case a namespace-scoped uint structurally cannot cover: a
+single Type ID that needs to be **independently self-certifying** —
+verifiable against its own name by anyone, without trusting a registry,
+a namespace declaration, or a possibly-unreachable original author (see
+"Optional, self-certifying strengthening," below) — or a Record Type
+that's provisionally shipping ahead of a common-vocabulary registration
+existing yet (§8), with a clean promotion path to a low registered uint
+once one does (via the same backup-typeID mechanism used for any other
+promotion, above). Reach for a namespace first; reach for a byte string
+Type ID only when self-certification or pre-registry provisional
+identity is the actual property you need.
+
 **TypeID form boundary.** A bare typeID item is only ever CBOR major
 type 0, 2, or 3 — simple, self-delimiting items a parser can skip with
 zero recursion. Major types 1 (negative int), 5 (map), 6 (tag), and 7
@@ -829,6 +856,34 @@ by definition, choosing not to stay isolated — for that application,
 namespace-scoping or an eventual First Come First Served registry entry
 (§4) is the more robust choice, since either stays collision-safe
 regardless of which carrier the bytes travel through.
+
+**Recommended pattern for an isolated-carrier application: namespace-
+scoped odd Type IDs with the namespace *implied* by the carrier, never
+transmitted — not self-allocated even IDs.** An application whose
+carrier already isolates it (above) doesn't have to choose between
+"cheap but carrier-dependent" (a self-allocated even ID) and "safe but
+costs a transmitted discriminator" (an ordinary namespace declaration).
+It can have both: decide on a real namespace value once, and have its
+own decoder assume that fixed value applies to *any* content reaching it
+through *any* of its own carriers — the wire bytes never carry a
+discriminator at all (exactly as today, §2), but the decoder's own
+Record-Type-interpretation layer resolves odd Type IDs against that
+implied namespace instead of treating them as global. This costs nothing
+more than the even-ID pattern (odd uints as small as `1` byte, no
+discriminator transmitted) but gains real safety: an odd Type ID with no
+namespace present is a spec-mandated abort (above), so if the exact same
+bytes ever do reach an unisolated carrier, a reader fails *closed*
+instead of silently, successfully misinterpreting the ID the way an
+unprotected even ID would. It also leaves a clean, zero-renumbering path
+to genuine interoperability later — start transmitting that same
+namespace value explicitly, via an ordinary discriminator, on whichever
+carrier doesn't imply it; the Type IDs themselves never have to change.
+
+The one requirement this depends on: the implied namespace value MUST be
+identical across every one of the application's own carriers. Using
+different implied values for, say, a URI-scheme path and an NDEF path
+reintroduces exactly the cross-carrier inconsistency this pattern exists
+to avoid.
 
 **Format namespace values follow the same convention as Record Type IDs
 (§3.1): a uint or a byte string.** A uint namespace follows the exact

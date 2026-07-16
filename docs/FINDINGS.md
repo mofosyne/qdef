@@ -1314,3 +1314,67 @@ binary internals across carriers must verify *every* reachable carrier
 provides isolation, not just the primary one) rather than leaving it
 implied. See DESIGN.md's "Own-URI-scheme carriers skip magic AND
 namespace-scoping" for the full writeup.
+
+### 29. A namespace can be implied by an isolated carrier instead of transmitted — strictly better than self-allocated even IDs at the same cost, and it resolves whether decentralized Record IDs still need to be the general "cheap ID" recommendation
+
+Asked TagDrop directly what their own decoder does internally with
+content that arrives via a carrier implying isolation (their `tagdrop:`
+URI), rather than assuming the answer — Finding #28 had just established
+that isolation-based safety is carrier-dependent, so the natural
+follow-up was whether TagDrop's actual implementation had already found
+a way around that. It had, without necessarily naming it as such:
+TagDrop "reinserts" a container discriminator internally whenever
+content arrives via its own scheme, and the reinserted value is a *real*
+namespace, not a placeholder.
+
+That fact generalizes into a genuinely better pattern than the one spec
+§3.5 originally recommended for isolated-carrier applications. Instead
+of choosing between self-allocated even IDs (cheap, but safety is
+entirely carrier-contingent, per Finding #28) and an ordinary
+transmitted namespace declaration (safe, but costs a discriminator on
+the wire), an application can fix a real namespace value once and have
+its own decoder assume it applies to any content reaching it through any
+of its own carriers, without ever transmitting it. This costs exactly
+what the even-ID pattern costs (a bare uint, no discriminator, as small
+as one byte) but inherits namespace-scoping's fail-*closed* property: an
+odd Type ID with no namespace present is a spec-mandated abort (§3.5),
+so bytes that leak into an unisolated carrier get correctly refused
+instead of silently, successfully misrouted the way an unprotected even
+ID would be. It also converts to genuine, transmitted-namespace
+interoperability later at zero cost to the Type IDs themselves — only
+the carrier's dispatch changes, not the numbers. The one discipline it
+requires: the implied value must be identical across every one of the
+application's own carriers, or the safety collapses back to the even-ID
+case.
+
+**Second-order consequence, reached by asking the next obvious
+question rather than stopping at the first answer: if namespace-scoped
+odd uints are now the better default even for an isolated, single-app
+carrier, does decentralized (byte string) Record Type IDs still need to
+be the general "cheap ID with no registry" recommendation at all?** No —
+checked against the actual numbers, not asserted. A byte string Type ID
+costs 4+ bytes per Record Type, forever; a namespace-scoped odd uint
+costs as little as 1 byte and is collision-free once a namespace exists,
+regardless of whether that namespace itself is centrally allocated or
+self-chosen. The "cost" — the namespace operator must not reuse a
+number they've already issued — is trivial local bookkeeping for anyone
+running one namespace. This holds whether the namespace is community-run
+or centrally controlled, which is exactly the choice a byte string
+*namespace* value still exists to provide (§3.5, "Governed vs.
+ungoverned") — the decentralized byte-string mechanism's real, load-
+bearing job turns out to live one level up from where it was originally
+recommended: namespace governance, not per-Record-Type identity. A byte
+string Type ID keeps exactly one job nothing else can do: standing alone
+as an independently self-certifying identity, verifiable against its own
+name with no namespace, registry, or reachable-author trust needed at
+all — real and worth keeping, but a narrow, specific justification, not
+the general-purpose "decentralized" recommendation it read as before.
+
+Re-scoped spec §3.1's guidance and DESIGN.md's Registry governance
+section to state this plainly: reach for a namespace first, reach for a
+byte string Type ID only when self-certification (or pre-registry
+provisional identity ahead of a common-vocabulary allocation, §8) is the
+actual property needed. No wire-format change — both mechanisms already
+existed and worked exactly as specified; this is a recommendation
+correction, driven by a real adopter's actual implementation being
+checked rather than assumed.

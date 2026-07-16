@@ -3,6 +3,18 @@
 A step-by-step walkthrough of generating, validating, and using a
 hash-derived byte string Record Type ID in a QDEF container.
 
+**Before reaching for this:** a decentralized byte string Type ID is not
+the recommended default for "I want a cheap ID with no registry" — a
+declared namespace plus a small odd uint is cheaper (as little as 1
+byte vs. 4+) and just as coordination-free (spec §3.1/§3.5). This
+walkthrough is for the narrower case a namespace-scoped uint can't
+cover: a single Type ID that needs to be independently self-certifying
+(verifiable against its own name, with no namespace or registry
+involved at all), or one shipping provisionally ahead of a
+common-vocabulary registration existing yet. If you just want a cheap
+ID for your own app's Record Types, see the "Namespace ID" section
+below instead, and use small sequential odd uints under it.
+
 ## Quick Start
 
 ```bash

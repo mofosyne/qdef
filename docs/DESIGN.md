@@ -81,11 +81,26 @@ on:
   come from somewhere else — Type Hint's hash-derivation (§3.1), a
   declared namespace (§3.5), or App Route (§4.4), not a lookup table. It's
   only viable at all because the wire format never fixed Type IDs to a
-  small byte-width field. (Once a namespace is declared, §3.5, odd uints
-  become cheap *and* collision-free too, without needing any self-chosen
-  width at all — see "Namespace-scoped Type IDs," below — a second,
-  independent way to get a decentralized-feeling ID that isn't this byte
-  string mechanism at all.)
+  small byte-width field.
+
+  **Not the recommended default for "cheap ID, no registry," though —
+  resolved after checking the actual numbers, not assumed.** Once a
+  namespace is declared (§3.5), odd uints become cheap *and*
+  collision-free too, without needing any self-chosen width at all, and
+  do so at a fraction of a byte string's per-ID cost (1 byte vs. 4+,
+  every Record Type, forever) — see "Namespace-scoped Type IDs," below.
+  The "cost" is that the namespace operator has to not reuse a number
+  they've already issued themselves, which is trivial for whoever
+  controls one namespace. This holds regardless of whether the namespace
+  itself is centrally allocated or self-chosen/decentralized — that
+  choice is what a byte string namespace value is actually for now (see
+  "Governed vs. ungoverned," below); it's a namespace-operator-governance
+  lever, not a per-Record-Type identity mechanism, once a real adopter's
+  actual practice (TagDrop) was checked against it. A byte string
+  *Type ID* keeps exactly one job a namespace-scoped uint structurally
+  can't do: standing alone as an independently self-certifying identity,
+  verifiable against its own name with no namespace, registry, or
+  reachable-author trust required at all (Finding #29).
 - **An older, narrower "first-come-first-served" tier (`1000`–`0xFFFF`,
   registered but with no review gate) was considered and dropped — a
   different mechanism from the `32768`+ tier above, despite the shared
@@ -1482,6 +1497,40 @@ just the primary one, and an application whose actual goal includes
 interoperability should treat this tier's isolation story as an argument
 *against* using it, not for it. See FINDINGS.md for the full story of
 how this surfaced.
+
+**A better pattern than either self-allocated-even or transmitted-
+namespace, surfaced by asking TagDrop directly what their own decoder
+actually does internally, not assumed from the outside.** TagDrop's own
+implementation already "reinserts" a container discriminator internally
+when content arrives via a carrier that implies it (their `tagdrop:`
+URI) — even though the transmitted bytes never carry one, matching §2's
+guidance. Asked what value gets reinserted: a *real* namespace value,
+not a placeholder, whenever the content genuinely came from their own
+scheme.
+
+That's the key fact that makes a stronger pattern available: an
+isolated-carrier application doesn't have to pick between "cheap but
+carrier-dependent" (self-allocated even IDs, the original guidance) and
+"safe but the discriminator costs bytes" (an ordinary namespace
+declaration). It can fix a real namespace value once and have its own
+decoder assume that value applies to anything reaching it through any of
+its own carriers, without ever transmitting it — odd, namespace-scoped
+Type IDs at the identical wire cost as the even-ID pattern (a bare uint,
+no discriminator), but with the fail-*closed* property namespace-scoping
+always has (§3.5: an odd Type ID with no namespace present MUST abort)
+instead of the fail-*open* exposure an unprotected even ID has if it
+ever reaches an unisolated carrier. It also converts to real,
+transmitted-namespace interoperability later at zero cost to the Type
+IDs themselves — only the carrier changes, not the numbers.
+
+Added to spec §3.5 as the now-recommended pattern for any isolated-
+carrier application, superseding the plain self-allocated-even
+recommendation as the default suggestion (self-allocated even IDs are
+still valid, just no longer the first thing to reach for). Requires
+exactly one discipline the spec now states plainly: the implied
+namespace value must be identical across every one of the application's
+own carriers, or the pattern's safety collapses back to the even-ID
+case. See FINDINGS.md #29.
 
 §3.1's form boundary excludes CBOR major type 1 (negative integer) from
 valid typeID prefix forms, alongside array/map/tag/simple for
