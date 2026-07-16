@@ -137,7 +137,11 @@ own `tagdrop:<...>` scheme already does exactly this dispatch job for its
 own wire format today; an application in that position pays no
 magic-byte or discriminator-byte cost at all for adopting QDEF's Record
 shape underneath its existing scheme. (Validated in the prototype:
-`prototype/test/custom-scheme-carrier.test.js`.)
+`prototype/test/custom-scheme-carrier.test.js`.) This dispatch-based
+isolation is what §3.5's even-Type-ID guidance leans on for collision
+safety — see that section's caution on why the same bytes reaching a
+second, unisolated carrier (e.g. a shared MIME type, or a raw byte-mode
+form with no distinguishing wrapper) silently forfeits it.
 
 **No version byte.** §3.2's even/odd criticality rule already provides
 local forward compatibility; see [DESIGN.md](DESIGN.md#container-framing-choices)
@@ -239,13 +243,46 @@ usable the moment it exists — see the caution below for why that
 specifically calls for pinning a few rules now, ahead of the full
 registration scheme.
 
-**TypeID form boundary.** Only CBOR major types 0, 2, and 3 are valid
-typeID forms — simple, self-delimiting items a parser can skip with zero
-recursion. Major types 1 (negative int), 4 (array), 5 (map), 6 (tag),
-and 7 (simple/float) are not valid typeIDs: they either lack a clear use
-case over the existing forms, violate the skip-safe principle, or don't
-make sense as identifiers. A future revision could only add a new major
-type if it preserved the zero-recursion skip guarantee.
+**Byte string Type IDs are not the recommended default for "I want a
+cheap ID with no registry" — most adopters want a declared namespace
+plus a small odd uint instead.** A byte string Type ID pays a real,
+recurring width cost (4+ bytes, every single Record Type, forever); an
+odd uint inside a declared namespace can be as small as a single byte
+and stays collision-free by construction, since the namespace (not the
+ID's own width) is what protects it — the "cost" is that the namespace
+operator is responsible for not colliding with their own already-issued
+numbers, which is trivial bookkeeping for whoever controls one
+namespace. This holds regardless of whether that namespace itself is
+centrally allocated or fully decentralized (a self-chosen byte string,
+below) — either way, once a namespace exists, Record Type IDs inside it
+should almost always be small sequential odd uints, not byte strings.
+
+A byte string Type ID remains the right choice for one specific,
+narrower case a namespace-scoped uint structurally cannot cover: a
+single Type ID that needs to be **independently self-certifying** —
+verifiable against its own name by anyone, without trusting a registry,
+a namespace declaration, or a possibly-unreachable original author (see
+"Optional, self-certifying strengthening," below) — or a Record Type
+that's provisionally shipping ahead of a common-vocabulary registration
+existing yet (§8), with a clean promotion path to a low registered uint
+once one does (via the same backup-typeID mechanism used for any other
+promotion, above). Reach for a namespace first; reach for a byte string
+Type ID only when self-certification or pre-registry provisional
+identity is the actual property you need.
+
+**TypeID form boundary.** A bare typeID item is only ever CBOR major
+type 0, 2, or 3 — simple, self-delimiting items a parser can skip with
+zero recursion. Major types 1 (negative int), 5 (map), 6 (tag), and 7
+(simple/float) are never valid at a typeID-accumulation position: they
+either lack a clear use case over the existing forms, violate the
+skip-safe principle, or don't make sense as identifiers. Major type 4
+(array) is valid at a typeID-accumulation position in exactly one
+specific, structurally-recognized shape — a definite-length 2-element
+namespace-pairing item (below) — never as a general-purpose typeID form;
+an array of any other shape at that position is not a typeID and falls
+through to Phase 2's forward-compat skip like anything else unrecognized
+there. A future revision could only add a new major type, or a new array
+shape, if it preserved the same bounded, zero-recursion skip guarantee.
 
 **Note on even/odd vocabulary reuse.** The even/odd convention also
 appears in §3.2 for map *keys* (critical vs. optional). The two
@@ -277,6 +314,63 @@ Prefix: 100, h'A7F90B3C'    // primary uint 100 + backup byte string
 
 A Record never needs more than a handful of prefix typeIDs; the parser
 silently drops any beyond `MAX_TYPE_IDS` (recommended: 4).
+
+**Namespace-pairing prefix item: a Record MAY declare or override its
+own namespace inline, independent of the container discriminator's
+ambient one (§3.5).** Any position in a Record's contiguous prefix run
+that would otherwise hold a bare typeID item MAY instead hold a
+**namespace-pairing item**: a definite-length CBOR array of exactly 2
+elements, `[namespace, typeId]`, where `namespace` is a valid Namespace
+ID (a uint greater than 0, or a byte string — the same convention as
+the container discriminator's own namespace value, §3.5) and `typeId` is
+a uint (never a byte string — decentralized Record IDs stay a separate,
+unpaired, always-global mechanism; see below for why pairing one would
+not actually help). When present, the array's second element becomes
+the ordinary routing typeID at that prefix position (primary if first,
+backup if not); the array's first element declares the namespace that
+specific typeID is scoped against, taking priority over the container's
+ambient namespace for this one Record. Every other Record in the same
+container is unaffected — this is a purely local override.
+
+```
+Prefix: [h'a9d6e1f30b7c4482', 1]    // this Record's own namespace,
+                                     //   paired with a scoped typeID
+```
+
+An even (Allocated/global) `typeId` inside a pairing is vacuous: §3.5's
+invariant that even uints are always globally interpreted, regardless of
+any declared namespace, is unconditional and unaffected by pairing — a
+paired namespace only has an effect on an odd (Scoped) `typeId`. Pairing
+is not a way to give an even typeID a namespace-flavored meaning; it
+exists solely so an odd typeID can be scoped to something other than
+whatever the container's discriminator ambiently declares.
+
+**This is not a cheaper way to obtain a decentralized ID — it is a
+narrow, opt-in override, and is more expensive per use than either
+alternative it might be confused with.** Unlike the container
+discriminator (paid once, amortized across every Record in the
+container), a namespace-pairing item is paid fresh on every Record that
+carries one — there is no amortization. A Record that wants a
+collision-safe global ID with no namespace involved at all should still
+use a plain, unpaired byte string Type ID (above); a Record that's happy
+with the container's ambient namespace should still use a bare typeID.
+Namespace-pairing exists to answer one specific question — "can this one
+Record use a namespace other than the container's ambient one" — enabling
+more than one namespace to coexist within a single container without
+taxing the common single-namespace case: every Record that doesn't need
+an override still costs exactly what it always did. See DESIGN.md's
+"Multiple namespaces per container" for the verified byte-cost
+comparison and the two previously-considered mechanisms this one
+replaces.
+
+**Purely structural for the mandatory core (§3.3): recognizing the
+2-element-array shape and extracting its nested typeId is all the core
+does — it never learns what a namespace is, never compares it against
+anything, never applies even/odd scoping logic.** That interpretation
+(preferring a Record's own paired namespace over the container's
+ambient one when resolving an odd typeID's scope) is
+Record-Type-interpretation-specific handling, the same optional tier
+§3.5's namespace semantics already live in.
 
 **Implementer caution for byte string Type IDs:** a byte string Type ID
 MUST be a definite-length CBOR byte string (major type 2), never
@@ -652,22 +746,27 @@ discriminator unconditionally present — always exactly one item, always
 first, no exceptions — so a decoder never has to guess which case it's
 looking at.
 
-**Six recognized shapes**, dispatched purely by the discriminator
-item's own CBOR major type:
+**Eight recognized shapes**, dispatched purely by the discriminator
+item's own CBOR major type and, for arrays, its element count:
 
 ```
-+---------------------------------+--------------------------------------------------------------+
-| Discriminator shape              | Meaning                                                       |
-+---------------------------------+--------------------------------------------------------------+
-| uint 0                           | No namespace declared (cheapest legal container: 1 byte)     |
-| uint N > 0                       | Allocated Namespace ID = N (registered/common-vocabulary)    |
-| byte string                      | Decentralized Namespace ID (self-certifying, no registry)    |
-| array [uint, byte string]        | [Allocated Namespace ID, Decentralized backup] — promotion/  |
-|                                   | transition pair, mirrors §3.1's backup-typeID convention     |
-| array [byte string, text string] | [Decentralized Namespace ID, Namespace Name hint]            |
-| map                              | Full extensible form: {1: namespace, 3: hint, ...}           |
-| anything else (unrecognized)     | Degrades to "no namespace" — same graceful degrade as uint 0 |
-+---------------------------------+--------------------------------------------------------------+
++-----------------------------------+------------------------------------------------------------+
+| Discriminator shape                | Meaning                                                     |
++-----------------------------------+------------------------------------------------------------+
+| uint 0                             | No namespace declared (cheapest legal container: 1 byte)   |
+| uint N > 0                         | Allocated Namespace ID = N (registered/common-vocabulary)  |
+| byte string                        | Decentralized Namespace ID (self-certifying, no registry)  |
+| array [uint, byte string]          | [Allocated Namespace ID, Decentralized backup] — promotion/|
+|                                     | transition pair, mirrors §3.1's backup-typeID convention   |
+| array [id, text string]            | [Namespace ID (Allocated or Decentralized), Namespace Name |
+|                                     | hint] — one shape covering both, disambiguated purely by   |
+|                                     | id's own major type                                        |
+| array [uint, byte string, text]    | [Allocated Namespace ID, Decentralized backup, Namespace   |
+|                                     | Name hint] — all three together                            |
+| map                                | Full extensible form: {1: namespace, 3: hint, 5: backup,   |
+|                                     | ...}                                                        |
+| anything else (unrecognized)       | Degrades to "no namespace" — same graceful degrade as uint 0|
++-----------------------------------+------------------------------------------------------------+
 ```
 
 ```
@@ -682,23 +781,53 @@ h'a9d6e1f30b7c4482'                    // bare decentralized namespace, no hint
                                         // decentralized namespace with a
                                         //   recoverable Hint name
 
+[100, "com.example/tagdrop-paper"]     // allocated ID 100, with a plain
+                                        //   recoverable Hint name (not
+                                        //   self-certifying — a uint can't
+                                        //   be hash-derived from a name —
+                                        //   just recoverable)
+
+[100, h'a7f90b3c', "com.example/tagdrop-paper"]
+                                        // allocated ID 100, decentralized
+                                        //   backup, AND a hint, all together
+
 {                                       // full extensible form
   1: h'a9d6e1f30b7c4482',              // namespace: uint or byte string,
                                         //   same convention as §3.1's Type IDs
-  3: "com.example/tagdrop-paper"       // OPTIONAL: recoverable Hint name,
+  3: "com.example/tagdrop-paper",      // OPTIONAL: recoverable Hint name,
                                         //   same pattern as §3.1's hash-
                                         //   derivation hint
+  5: h'a7f90b3c'                       // OPTIONAL: decentralized backup ID
+                                        //   for older decoders (same role as
+                                        //   the array forms' backup slot)
 }
 ```
 
-The bare-array forms exist purely for compactness in the two most common
-non-trivial cases (a promoted allocated ID that still wants a backup, and
-a decentralized ID that wants a hint); the map form is the fully
-extensible fallback for anything future revisions need beyond keys `1`
-and `3`, using the identical even/odd key convention (§3.2) as every
-other Record's field Map. An encoder picks whichever of the six shapes
-is cheapest for what it actually needs to say; a decoder MUST recognize
-all six.
+The array forms exist purely for compactness in the common non-trivial
+cases (a promoted allocated ID that still wants a backup, a namespace ID
+of either kind that wants a hint, or a promotion in progress that wants
+both); the map form is the fully extensible fallback for anything future
+revisions need beyond keys `1`, `3`, and `5`, using the identical
+even/odd key convention (§3.2) as every other Record's field Map. Array
+length disambiguates the 2-element and 3-element forms from each other
+before any element is even inspected — a decoder never has to guess
+which one it's looking at. An encoder picks whichever of the eight
+shapes is cheapest for what it actually needs to say; a decoder MUST
+recognize all eight.
+
+**A hint on an Allocated (uint) namespace ID is a plain recovery name,
+not a self-certifying one — worth being precise about the difference.**
+§3.1's hash-derivation strengthening only applies to byte string values,
+since a small uint can't be reconstructed from hashing a name the way a
+truncated digest can. What it buys instead is concrete and specific:
+**reverse-engineering.** Anyone examining a QDEF container found in the
+wild — without access to whatever registry eventually governs the
+Allocated tier, or looking at content from before one existed — can read
+the namespace's own name straight off the wire instead of having to
+guess or look one up externally. The same job Type Hint (§3.1) already
+does for Record Type IDs, just one level up; it can't be independently
+verified against the ID the way a Decentralized namespace's hint can,
+but "recoverable without a registry" was already the actual goal.
 
 **Unrecognized shape degrades gracefully, exactly like `uint 0`.** A
 discriminator item that is well-formed CBOR but doesn't match any of the
@@ -741,13 +870,67 @@ type, where genuinely unrelated apps' content might share one container.
 See DESIGN.md for the real, verified byte-cost comparison this
 recommendation is based on.
 
+**Caution: this safety is a property of the carrier at the point of
+consumption, not of the bytes themselves — it does not survive reuse
+across carriers that don't all provide equivalent isolation.** Even
+Type IDs carry zero self-protection of their own (§3.1); "isolated" and
+"unisolated" byte sequences are bit-for-bit identical, and nothing in
+the wire format marks which one a given blob is. An implementer who
+reuses the identical CBOR-sequence bytes across multiple carriers for
+implementation simplicity — e.g. the same bytes underlying both an own
+URI scheme and a raw NDEF record — MUST verify *every* carrier those
+bytes can reach provides isolation, not just the primary one; a single
+future carrier added without an equivalently exclusive dispatch
+mechanism (a shared/generic MIME type, a bare byte-mode QR with no
+distinguishing wrapper) silently reintroduces full collision exposure
+for every even Type ID already in use, with no wire-level signal that
+anything changed. More fundamentally, this mechanism is in direct
+tension with wanting broader interoperability: an application that
+wants its content recognizable by tools other than its own decoder is,
+by definition, choosing not to stay isolated — for that application,
+namespace-scoping or an eventual First Come First Served registry entry
+(§4) is the more robust choice, since either stays collision-safe
+regardless of which carrier the bytes travel through.
+
+**Recommended pattern for an isolated-carrier application: namespace-
+scoped odd Type IDs with the namespace *implied* by the carrier, never
+transmitted — not self-allocated even IDs.** An application whose
+carrier already isolates it (above) doesn't have to choose between
+"cheap but carrier-dependent" (a self-allocated even ID) and "safe but
+costs a transmitted discriminator" (an ordinary namespace declaration).
+It can have both: decide on a real namespace value once, and have its
+own decoder assume that fixed value applies to *any* content reaching it
+through *any* of its own carriers — the wire bytes never carry a
+discriminator at all (exactly as today, §2), but the decoder's own
+Record-Type-interpretation layer resolves odd Type IDs against that
+implied namespace instead of treating them as global. This costs nothing
+more than the even-ID pattern (odd uints as small as `1` byte, no
+discriminator transmitted) but gains real safety: an odd Type ID with no
+namespace present is a spec-mandated abort (above), so if the exact same
+bytes ever do reach an unisolated carrier, a reader fails *closed*
+instead of silently, successfully misinterpreting the ID the way an
+unprotected even ID would. It also leaves a clean, zero-renumbering path
+to genuine interoperability later — start transmitting that same
+namespace value explicitly, via an ordinary discriminator, on whichever
+carrier doesn't imply it; the Type IDs themselves never have to change.
+
+The one requirement this depends on: the implied namespace value MUST be
+identical across every one of the application's own carriers. Using
+different implied values for, say, a URI-scheme path and an NDEF path
+reintroduces exactly the cross-carrier inconsistency this pattern exists
+to avoid.
+
 **Format namespace values follow the same convention as Record Type IDs
-(§3.1): a uint or a byte string.** A uint namespace follows the same
-tiering convention as §3.1's uint Type IDs — a small span for
-reviewed/common formats, and an open span of even uints with no
-allocation authority needed. A byte string namespace follows §3.1's
-decentralized convention — collision safety from the byte length the
-developer chose. However, namespace IDs are the global root of trust:
+(§3.1): a uint or a byte string.** A uint namespace follows the exact
+same tiering as §3.1's uint Type IDs, including the same governed/
+ungoverned line — a small span for reviewed/common formats
+(Specification Required), an open First Come First Served span above
+it (self-allocate freely, recorded but not reviewed once a registry
+authority exists), and no allocation authority needed at all for a byte
+string namespace, which follows §3.1's decentralized convention —
+collision safety from the byte length the developer chose, never
+registry-tracked, by design. However, namespace IDs are the global root
+of trust:
 two unrelated namespaces with the same byte string ID would cause all
 their scoped Type IDs to collide. Byte string namespace IDs MUST
 therefore be at least 4 bytes; 8 bytes is recommended for maximum
@@ -804,6 +987,13 @@ since collision safety now comes from the namespace, not from the ID's
 own width. There is no magnitude floor on a namespace-scoped odd
 uint — parity alone determines scoping (§3.1), so there is nothing to
 be gained by picking a larger starting value.
+
+`N` here is normally the container discriminator's own ambient
+namespace, but a specific Record MAY instead pair its own typeID with a
+different namespace inline (§3.1's namespace-pairing prefix item),
+overriding `N` for that one Record only — the mechanism that lets more
+than one namespace coexist within a single container without taxing the
+common single-namespace case.
 
 **Byte string Type IDs are always global regardless of any declared
 namespace.** Collision safety for byte string IDs comes from the byte
@@ -952,6 +1142,21 @@ Byte string IDs are always global regardless of number; they provide
 collision safety from byte length, not from registry position. Text
 string IDs are recognized as valid prefix items by parsers but have no
 registration scheme defined yet.
+
+**"Governed" and "review-gated" are independent properties, not the
+same axis — this is the actual line between the tiers above.** Every
+tier's collision-safety comes from exactly one of three sources:
+curation (a registry that both records *and* reviews an allocation
+before granting it), recording (a registry that tracks who claimed
+what, first-come, with no review gate), or self-certification (the ID's
+own width/derivation, with no registry involved at all, ever). Standards
+Action and Specification Required both sit in the first category
+(reviewed); First Come First Served sits in the second (recorded, not
+reviewed); byte string IDs sit in the third (no registry, by design,
+permanently — not merely "not yet registered"). No registry authority
+exists today for *any* uint tier (§8) — that's a separate, current-state
+fact from which of these three collision-safety models a given tier is
+*intended* to use once one does.
 
 ### 4.1 Wrapper Records (optional)
 

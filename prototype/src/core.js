@@ -5,10 +5,14 @@
 // Type, compression, or reassembly (see docs/QDEF-SPEC.md §3.3).
 //
 // Every Record is a sequence of CBOR items terminating in a CBOR Map:
-// one or more typeID items (uint or byte string) followed by zero or
-// more unknown items (forward-compat padding), then the field Map as
-// the record delimiter. The parser accumulates typeIDs in a contiguous
-// run at the start, skips unknown items, and stops at the first Map.
+// one or more typeID items (uint or byte string), OR a namespace-pairing
+// array ([namespace, typeId] — a Record declaring/overriding its own
+// namespace inline, independent of the container's ambient one, see
+// isNamespacePairing below), followed by zero or more unknown items
+// (forward-compat padding), then the field Map as the record delimiter.
+// The parser accumulates typeIDs (unpacking any pairing item's nested
+// typeId) in a contiguous run at the start, skips unknown items, and
+// stops at the first Map.
 //
 // No version byte: local forward compatibility is §3.2's even/odd rule.
 // Container-level metadata (a format namespace) lives in a single
@@ -46,13 +50,26 @@ function encodeContainer(records, discriminator) {
  * Encode a single Record as CBOR bytes: [typeId1][typeId2]...[fieldMap].
  * typeIds is an array — the first element is the primary typeID, the
  * rest are backup typeIDs for transitional routing.
+ *
+ * @param {Object} record
+ * @param {Array<number|bigint|Buffer>} record.typeIds
+ * @param {Map<number, any>} [record.fields]
+ * @param {number|bigint|Buffer} [record.localNamespace] - if given, wraps
+ *   the primary typeID (typeIds[0]) in a namespace-pairing prefix item
+ *   ([localNamespace, typeIds[0]]) instead of encoding it bare. See
+ *   isNamespacePairing below. Backup typeIDs (typeIds[1+]) are always
+ *   encoded bare.
  */
-function encodeRecordBytes({ typeIds, fields }) {
+function encodeRecordBytes({ typeIds, fields, localNamespace }) {
   if (!typeIds || typeIds.length === 0) {
     throw new Error('typeIds must be a non-empty array');
   }
   const mapBytes = cbor.encodeCanonical(fields || new Map());
-  const typeItems = typeIds.map((id) => cbor.encodeCanonical(id));
+  const typeItems = typeIds.map((id, idx) =>
+    idx === 0 && localNamespace !== undefined
+      ? cbor.encodeCanonical([localNamespace, id])
+      : cbor.encodeCanonical(id),
+  );
   return Buffer.concat([...typeItems, mapBytes]);
 }
 
@@ -96,8 +113,9 @@ function decodeSequence(seq) {
  * Parse an array of decoded CBOR items into Records.
  *
  * Two-phase loop per Record:
- *   Phase 1: accumulate typeIDs (contiguous run of uint/byte-string
- *            at the start — the routing mechanism)
+ *   Phase 1: accumulate typeIDs (contiguous run of uint/byte-string, or
+ *            a namespace-pairing array, at the start — the routing
+ *            mechanism)
  *   Phase 2: skip non-map items until the map delimiter
  *
  * If no typeID is found before the map, the Record is ignored. If the
@@ -109,11 +127,26 @@ function parseRecords(items) {
   let i = 0;
 
   while (i < items.length) {
-    // Phase 1: accumulate typeIDs — contiguous run of uint/byte-string
+    // Phase 1: accumulate typeIDs — contiguous run of bare typeID items
+    // and/or namespace-pairing arrays.
     const typeIds = [];
-    while (i < items.length && isTypeId(items[i])) {
-      typeIds.push(items[i]);
-      i++;
+    let localNamespace; // raw, uninterpreted — from this Record's own
+    // first pairing item, if any. Same "core exposes it raw, never
+    // interprets it" treatment as the container discriminator.
+    while (i < items.length) {
+      if (isTypeId(items[i])) {
+        typeIds.push(items[i]);
+        i++;
+        continue;
+      }
+      if (isNamespacePairing(items[i])) {
+        const [ns, id] = items[i];
+        typeIds.push(id);
+        if (localNamespace === undefined) localNamespace = ns;
+        i++;
+        continue;
+      }
+      break;
     }
 
     // Phase 2: skip non-map items until the map delimiter
@@ -135,6 +168,7 @@ function parseRecords(items) {
     records.push({
       typeIds,
       typeId: typeIds[0] ?? null,
+      localNamespace,
       map,
       ignored: typeIds.length === 0,
     });
@@ -162,6 +196,38 @@ function isTypeId(item) {
     return true;
   }
   return false;
+}
+
+/**
+ * Check if a decoded CBOR item is a namespace-pairing prefix item: a
+ * definite-length array of exactly 2 elements, [namespace, typeId],
+ * where namespace is a valid Namespace ID (uint > 0, or byte string —
+ * same convention as the container discriminator's namespace value,
+ * §3.5) and typeId is a uint (even = Allocated/global, odd = Scoped to
+ * this specific namespace, overriding any container-level ambient
+ * namespace for this one Record).
+ *
+ * Purely structural: this function does not interpret what a namespace
+ * IS or how it affects lookup — it only recognizes the shape so Phase 1
+ * can pull the nested typeId out for routing. Interpretation (whether
+ * the paired namespace actually scopes this typeId, and resolving
+ * "local override vs. container-ambient") is header.js's job. A byte
+ * string is deliberately never valid as the *typeId* half of a pairing
+ * — decentralized Record IDs stay a separate, unpaired, always-global
+ * mechanism (§3.1); pairing exists only to let a uint Record ID declare
+ * or override its namespace inline.
+ */
+function isNamespacePairing(item) {
+  if (!Array.isArray(item) || item.length !== 2) return false;
+  const [ns, id] = item;
+  const nsValid =
+    (typeof ns === 'number' && Number.isInteger(ns) && ns > 0) ||
+    (typeof ns === 'bigint' && ns > 0n) ||
+    Buffer.isBuffer(ns);
+  const idValid =
+    (typeof id === 'number' && Number.isInteger(id) && id >= 0) ||
+    (typeof id === 'bigint' && id >= 0n);
+  return nsValid && idValid;
 }
 
 /**

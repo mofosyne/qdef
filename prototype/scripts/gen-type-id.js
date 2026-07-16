@@ -16,9 +16,11 @@
 // for collision-safety — see spec §3.1 and DESIGN.md's "Pinning the algorithm"
 // section. Unqualified names are accepted with a warning.
 //
-// Without --namespace: derives a Record Type ID.
+// Without --namespace: derives a Record Type ID (a prefix item before a
+//   Record's field Map, spec §3.1).
 // With --namespace:    derives a Namespace ID (same algorithm, different
-//   intended use — the value goes into Type 0's key 3, not a Record's key 0).
+//   intended use — the value goes into the container discriminator,
+//   spec §3.5, not a Record's own prefix typeID).
 //
 // --width lets you pick the output byte width. Without it, 4 and 8 are shown.
 
@@ -133,7 +135,11 @@ if (forcedWidth) {
 }
 
 if (asNamespace) {
-  console.log('\nUsage in wire format: first Record in Sequence is Type 0, with');
-  console.log('  key 3 (Namespace ID) = h\'<value above>\' (byte string)');
-  console.log(`  key 5 (name)         = "${name}"`);
+  console.log('\nUsage in wire format: the container discriminator (spec §3.5),');
+  console.log('the mandatory CBOR item right after magic. Cheapest form is the');
+  console.log('bare byte string itself:');
+  console.log('  h\'<value above>\'                          // decentralized namespace, no hint');
+  console.log('\nTo also carry a recoverable name, use the array or map form:');
+  console.log('  [h\'<value above>\', "<name>"]              // array form');
+  console.log('  { 1: h\'<value above>\', 3: "<name>" }      // map form');
 }

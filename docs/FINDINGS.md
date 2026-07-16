@@ -1225,3 +1225,211 @@ what it was last regenerated against, and a decoder with intentionally
 no semantic knowledge of a wire-format detail (by design, here) can stay
 green on stale bytes indefinitely without ever really testing the new
 shape.
+
+### 27. "Multiple namespaces per container" was rejected for reasons specific to the two mechanisms considered, not to the goal itself — and the fix that avoids both isn't a cheaper decentralized ID either
+
+Revisiting "Multiple namespaces per container" (previously "considered,
+not built") after a concrete third design was proposed: a Record's own
+prefix can carry a **namespace-pairing item**, `[namespace, typeId]`,
+declaring/overriding that one Record's namespace independent of the
+container discriminator's ambient one. Checking it against the two
+previously-rejected mechanisms' actual objections — rather than assuming
+the rejection generalized to "multi-namespace support is a bad
+trade" — showed both objections were specific to those two shapes, not
+to the goal: position-based re-scoping was rejected for introducing
+stateful, order-dependent parsing (a pairing item needs none — it's
+local to one Record, no cross-Record state); a header-level namespace
+array with a per-Record selector was rejected for taxing *every*
+namespace-scoped Record with a mandatory field (a pairing item is
+opt-in, paid only by a Record that actually wants an override). Neither
+objection applies to a self-contained, per-Record array.
+
+**A related intuition needed checking too, and turned out wrong:**
+whether this pairing form could also replace standalone decentralized
+Record IDs (§3.1's byte string typeID), since a namespace + small odd
+uint had already been shown cheaper than a standalone decentralized ID
+*when amortized across multiple Records under one container-level
+discriminator* (a separate finding). Verified against the actual
+encoder rather than assumed: a per-Record pairing does **not**
+amortize — it's paid fresh on every Record that carries one — so
+`[decentralized namespace, scoped id]` costs 7 bytes bare versus 5 for a
+plain standalone decentralized Record ID. The pairing form is strictly
+worse for "I want one collision-safe global ID"; it only earns its cost
+for the narrower question "can this one Record use a namespace other
+than ambient." Caught before it was written into the spec as a
+replacement it isn't.
+
+Implemented identically in both languages, confirming the mandatory core
+stays free of namespace semantics a second time: `core.js`'s Phase 1 and
+`rust/qdef-core`'s `parse_record` each gained exactly one new
+structural-recognition rule (a definite-length 2-element array at a
+typeID position), with zero code anywhere in either mandatory core that
+knows what a namespace *is* — matching the container discriminator's own
+precedent (Finding #26) rather than needing a new pattern. See
+DESIGN.md's "Multiple namespaces per container" and spec §3.1's
+namespace-pairing prefix item.
+
+### 28. "Own-URI-scheme carriers skip magic AND namespace-scoping" understated a real risk — isolation is a carrier property, not a byte property, and doesn't survive being reused across carriers
+
+The guidance that an app whose carrier already isolates it (own URI
+scheme, own NDEF MIME type) can safely use a small, self-allocated even
+Type ID with no namespace (spec §3.5, Finding #25) was correct as far as
+it went, but understated what "isolated" actually depends on. Pressure-
+tested against TagDrop's real implementation practice rather than left
+as a theoretical concern: TagDrop deliberately reuses identical
+CBOR-sequence bytes across two carriers, for implementation
+simplicity — the same bytes get Base41-encoded into their `tagdrop:`
+URI and dropped raw into an NDEF record under their own
+`application/vnd.tagdrop` MIME type.
+
+Both of TagDrop's *current* carriers happen to preserve isolation
+(distinct scheme, distinct MIME type — neither is shared/generic
+dispatch), so nothing is broken today. But the underlying practice —
+one shared codepath, wrapped differently depending on transport — is
+exactly the shape of thing that stops being safe the moment a *third*
+carrier is added without equivalent exclusivity (a bare byte-mode QR
+with no distinguishing wrapper, or a shared/generic MIME type), and
+nothing at the wire level would notice: an even Type ID carries zero
+self-protection of its own, so "isolated" and "unisolated" copies of the
+identical bytes are bit-for-bit indistinguishable. Isolation is a
+property of the carrier at the point of consumption, never of the bytes
+themselves, and the original guidance didn't say so.
+
+**A deeper tension underneath the wire-format gap, not just a
+missing caveat.** An application that wants any degree of
+recognizability by tools other than its own decoder — presumably part
+of the point of adopting a shared Record format at all, rather than
+keeping a fully bespoke wire format — is, by definition, choosing not
+to stay permanently isolated. For that application, isolation-based
+collision safety for self-allocated even Type IDs works against its own
+goal: the more it wants broader interoperability, the less true "nothing
+else ever sees these bytes" actually is. Namespace-scoping, or an
+eventual First Come First Served registry entry, are the
+carrier-independent alternatives — either stays collision-safe
+regardless of which carrier the bytes travel through, which
+self-allocated-and-isolated even IDs structurally cannot offer.
+
+Added the caution directly to spec §2/§3.5 (an implementer reusing
+binary internals across carriers must verify *every* reachable carrier
+provides isolation, not just the primary one) rather than leaving it
+implied. See DESIGN.md's "Own-URI-scheme carriers skip magic AND
+namespace-scoping" for the full writeup.
+
+### 29. A namespace can be implied by an isolated carrier instead of transmitted — strictly better than self-allocated even IDs at the same cost, and it resolves whether decentralized Record IDs still need to be the general "cheap ID" recommendation
+
+Asked TagDrop directly what their own decoder does internally with
+content that arrives via a carrier implying isolation (their `tagdrop:`
+URI), rather than assuming the answer — Finding #28 had just established
+that isolation-based safety is carrier-dependent, so the natural
+follow-up was whether TagDrop's actual implementation had already found
+a way around that. It had, without necessarily naming it as such:
+TagDrop "reinserts" a container discriminator internally whenever
+content arrives via its own scheme, and the reinserted value is a *real*
+namespace, not a placeholder.
+
+That fact generalizes into a genuinely better pattern than the one spec
+§3.5 originally recommended for isolated-carrier applications. Instead
+of choosing between self-allocated even IDs (cheap, but safety is
+entirely carrier-contingent, per Finding #28) and an ordinary
+transmitted namespace declaration (safe, but costs a discriminator on
+the wire), an application can fix a real namespace value once and have
+its own decoder assume it applies to any content reaching it through any
+of its own carriers, without ever transmitting it. This costs exactly
+what the even-ID pattern costs (a bare uint, no discriminator, as small
+as one byte) but inherits namespace-scoping's fail-*closed* property: an
+odd Type ID with no namespace present is a spec-mandated abort (§3.5),
+so bytes that leak into an unisolated carrier get correctly refused
+instead of silently, successfully misrouted the way an unprotected even
+ID would be. It also converts to genuine, transmitted-namespace
+interoperability later at zero cost to the Type IDs themselves — only
+the carrier's dispatch changes, not the numbers. The one discipline it
+requires: the implied value must be identical across every one of the
+application's own carriers, or the safety collapses back to the even-ID
+case.
+
+**Second-order consequence, reached by asking the next obvious
+question rather than stopping at the first answer: if namespace-scoped
+odd uints are now the better default even for an isolated, single-app
+carrier, does decentralized (byte string) Record Type IDs still need to
+be the general "cheap ID with no registry" recommendation at all?** No —
+checked against the actual numbers, not asserted. A byte string Type ID
+costs 4+ bytes per Record Type, forever; a namespace-scoped odd uint
+costs as little as 1 byte and is collision-free once a namespace exists,
+regardless of whether that namespace itself is centrally allocated or
+self-chosen. The "cost" — the namespace operator must not reuse a
+number they've already issued — is trivial local bookkeeping for anyone
+running one namespace. This holds whether the namespace is community-run
+or centrally controlled, which is exactly the choice a byte string
+*namespace* value still exists to provide (§3.5, "Governed vs.
+ungoverned") — the decentralized byte-string mechanism's real, load-
+bearing job turns out to live one level up from where it was originally
+recommended: namespace governance, not per-Record-Type identity. A byte
+string Type ID keeps exactly one job nothing else can do: standing alone
+as an independently self-certifying identity, verifiable against its own
+name with no namespace, registry, or reachable-author trust needed at
+all — real and worth keeping, but a narrow, specific justification, not
+the general-purpose "decentralized" recommendation it read as before.
+
+Re-scoped spec §3.1's guidance and DESIGN.md's Registry governance
+section to state this plainly: reach for a namespace first, reach for a
+byte string Type ID only when self-certification (or pre-registry
+provisional identity ahead of a common-vocabulary allocation, §8) is the
+actual property needed. No wire-format change — both mechanisms already
+existed and worked exactly as specified; this is a recommendation
+correction, driven by a real adopter's actual implementation being
+checked rather than assumed.
+
+### 30. The discriminator's hint-carrying array shape only covered Decentralized namespace IDs — a real asymmetry, closed by generalizing one existing check rather than adding a parallel one
+
+Noticed while discussing whether an Allocated (uint) namespace ID
+deserved its own compact hint-carrying array shape, the way a
+Decentralized (byte string) one already had (`[byte string, text
+string]`): there was no principled reason for the asymmetry. Checked the
+actual byte cost of adding a dedicated new shape for it first, rather
+than assuming it was worth it — `[uint, text string]` vs. the
+equivalent map form saved only 2 bytes (32 → 30), and a further
+3-element form adding a Decentralized backup on top saved only 3 bytes
+(42 → 39) over the map form. Neither clears the bar this project has
+held elsewhere for adding shape-recognition surface (the same reasoning
+that killed the old first-come-first-served tier and the header-array-
+with-selector design) — on cost alone, neither looked worth it.
+
+**What changed the calculus: the existing `[byte string, text string]`
+shape's recognition rule already checks "is element 1 a text string,"
+independent of element 0's type — supporting an Allocated ID here isn't
+a new code path, it's loosening one existing guard from "element 0 must
+be a byte string" to "element 0 must be a uint or a byte string."**
+Once framed that way, the actual marginal implementation cost is closer
+to zero than "one more shape to recognize," so the earlier byte-cost
+objection stopped being the deciding factor. Generalized `[byte string,
+text string]` into `[namespace ID (uint or byte string), text string]`
+— one shape, disambiguated purely by the ID's own major type, covering
+both an Allocated hint (plain, not self-certifying — a uint can't be
+hash-derived from a name) and a Decentralized hint (self-certifying) —
+and this project chose to be comprehensive about the whole shape family
+rather than stopping at just the 2-element generalization: added the
+3-element `[uint, byte string, text string]` form (Allocated +
+Decentralized backup + hint together) despite it genuinely needing a new
+length-based branch (not a widened guard) and the map form's own
+key `5` for the same combination, so all three of the discriminator's
+extensible forms (2-element, 3-element, map) can now express the same
+set of {namespace, hint, backup} combinations, with array length
+disambiguating shapes before any element is even inspected.
+
+No mandatory-core changes — this is entirely within
+`prototype/src/header.js`'s `parseDiscriminator`, the
+Record-Type-interpretation layer, exactly as every other discriminator
+shape already was. `rust/qdef-core` needed nothing at all, since it
+never interprets the discriminator's contents in the first place
+(Finding #26).
+
+**The actual motivation for an Allocated ID's hint, stated plainly:
+reverse-engineering, not verification.** A uint can't be hash-derived
+from a name the way a byte string can, so unlike a Decentralized
+namespace's hint, an Allocated one's hint is never self-certifying — it
+was worth being explicit about why it's still useful anyway. Anyone
+examining a QDEF container found in the wild, without access to
+whichever registry eventually governs the Allocated tier (or looking at
+older content predating one), can read the namespace's own name straight
+off the wire instead of guessing or needing external lookup. Same job
+Type Hint (§3.1) already does for Record Type IDs, one level up.

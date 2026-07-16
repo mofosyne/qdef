@@ -9,7 +9,14 @@ in the Validation section.
 
 ---
 
-## Registration
+Pick **one** of the two ID patterns below, depending on whether your
+Record Type ID stands alone (a byte string, always global, spec §3.1)
+or is namespace-scoped (a small odd uint, requiring a declared namespace
+in the container discriminator, spec §3.5). Don't fill in both unless
+you're genuinely registering two different things.
+
+**Option A — standalone global Type ID** (byte string, no namespace
+needed):
 
 ```
 Record Type ID:             h'4b1f561b'
@@ -17,6 +24,17 @@ Record Type Name:           com.example.smartlight/status
 Variable Name:              Smart Light Status
 Full SHA-256:               h'4b1f561b8df976781a3d74c35eafbfb6483d4f511bae5573ab35ebba8f0e0333'
 
+Data item:                  map { 2: uint (on/off), 4: uint (brightness 0-100) }
+Semantics:                  Reports current state of a smart light fixture
+Point of contact:           <your email or URL>
+Reference:                  <link to spec/README defining this Type>
+```
+
+**Option B — namespace-scoped Type ID** (small odd uint, cheaper on the
+wire once you have more than one Record Type; requires the container
+discriminator to declare the namespace, spec §3.5):
+
+```
 Namespace ID:               h'c103df40'
 Namespace Name:             com.example.smartlight
 Variable Name:              Smart Light
@@ -88,16 +106,29 @@ One to three sentences is fine.>
 If you have a sample CBOR encoding of a Record using this Type ID,
 paste the hex dump or link to it here. Otherwise delete this section.
 
+A Record is a prefix typeID followed by a flat field Map (spec §3) — the
+typeID is never a map key:
+
 ```
-a2                              # map(2)
-   00                           # unsigned(0) — key: Type ID
-   44 4b1f561b                  # bytes(4) — value: h'4b1f561b'
-   02                           # unsigned(2) — key: payload
-   a2                           # map(2)
-      02                        # unsigned(2) — brightness
-      18 64                     # unsigned(100)
-      04                        # unsigned(4) — color temp
-      19 0fa0                   # unsigned(4000)
+44 4b1f561b                     # bytes(4) — prefix typeID: h'4b1f561b'
+a2                               # map(2) — the Record's field Map
+   02                            # unsigned(2) — brightness
+   18 64                         # unsigned(100)
+   04                            # unsigned(4) — color temp
+   19 0fa0                       # unsigned(4000)
+```
+
+If this Type ID is namespace-scoped (an odd uint, not a byte string),
+show the container discriminator (spec §3.5) that declares the
+namespace it's scoped under too:
+
+```
+44 c103df40                     # bytes(4) — discriminator: decentralized
+                                 #   namespace h'c103df40', bare form
+01                               # unsigned(1) — prefix typeID: 1 (namespace-scoped)
+a2                               # map(2) — the Record's field Map
+   02  18 64                     # brightness: 100
+   04  19 0fa0                   # color temp: 4000
 ```
 
 ---

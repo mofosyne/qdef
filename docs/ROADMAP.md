@@ -65,9 +65,13 @@ declaration — a genuine scope boundary, not a bug (FINDINGS.md #13).
   speculatively — the same discipline that's driven every other decision
   here.
 - **Registry governance authority.** No body currently allocates
-  application Type IDs (`100`+) officially; everything in the spec today
-  is an illustrative placeholder or uses the `0x10000`+ private-use tier,
-  which needs no authority at all. See "Where this is headed" below.
+  application Type IDs (`100`+) officially, for either the
+  Specification Required (`100`–`32767`) or First Come First Served
+  (`32768`+) tier; everything in the spec today is an illustrative
+  placeholder, or uses a decentralized byte string ID, which needs no
+  authority at all, ever, by design — see `DESIGN.md`'s "Governed vs.
+  ungoverned, made explicit" for the full breakdown of which tier needs
+  what. See "Where this is headed" below.
 - **Split's general per-code capacity flexibility.** Costs nothing
   against TagDrop's own design specifically; an adopter needing
   heterogeneous fragment sizes across physically different codes still

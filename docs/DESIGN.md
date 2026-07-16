@@ -42,46 +42,85 @@ on:
     for the full rationale — since that's conceptually the same
     distinction: this tier IS the "Specification Required" one,
     reviewed before allocation.
-  - `32768`+: **decentralized — self-allocated via a byte string ID, not
-    a registry** (once a namespace is declared, §3.5, odd uints become
-    cheap *and* collision-free without any self-allocated width at all —
-    see "Namespace-scoped Type IDs," below). Outside a namespace, an
-    implementer who picks a byte string ID with sufficient length (e.g.
-    4 or 8 bytes) gets collision avoidance from the sheer size of the
-    byte space, the same way a UUID does — not from anyone checking a
-    list. Call it "decentralized" if that's useful, but don't assume the
-    ID stays undisclosed or single-party: Unicode's Private Use Areas and
-    Bluetooth's private/random device addresses are both self-assigned
-    the same way, and neither implies the result is never published or
-    never recognized by an unrelated party. What actually distinguishes
-    this tier from registered types isn't visibility, it's *authority*:
-    no registry vouches for what a self-allocated ID means, so any
-    cross-implementer recognition has to come from somewhere else — Type
-    Hint's hash-derivation (§3.1), a declared namespace (§3.5), or App
-    Route (§4.4), not a lookup table. It's only viable at all because the
-    wire format never fixed Type IDs to a small byte-width field.
+  - `32768`+: **First Come First Served — self-allocate freely, recorded
+    once a registry authority exists, never reviewed.** This is a real,
+    distinct governance model, not "no governance" — the term is borrowed
+    verbatim from IANA's own CBOR tag registry, where it means exactly
+    this: an allocation authority still exists and still tracks every
+    assignment (so two implementers can't both silently claim the same
+    number once one is recorded), it just never gates *who* can request
+    one or reviews *what* it's for. Self-allocation is immediate and
+    free; recording (once an authority exists — none does today, see
+    below) is what actually prevents a collision, not the numeric width
+    or any inherent property of the ID itself. See "Governed vs.
+    ungoverned, made explicit," below, for why this tier would be
+    pointless if it meant permanently untracked instead — it would just
+    be a strictly worse version of a decentralized byte string ID (a
+    smaller ID space, same "nobody's tracking it" property).
   Exact boundaries remain a policy decision for whoever ends up running
   the registry, not a wire-format one.
-- **No separate "first-come-first-served" tier (considered, dropped).** An
-  earlier version of this range had a third band, `1000`–`0xFFFF`,
-  registered but with no review gate beyond "not already taken" — meant
-  to give a cheap small number to anyone who didn't want to wait for
-  common-vocabulary review. Dropped once namespace-scoped Type IDs
-  (§3.5) landed and made it redundant in principle, not just in practice:
-  collision-avoidance for a Type ID only ever comes from one of three
-  sources — registry curation, the ID's own numeric width, or a declared
-  namespace. The first-come tier tried to be cheap *and* uncoordinated
-  without picking any of the three, which is exactly why it never had a
-  viable governance model to begin with (the paragraph above already
-  says "no registry authority exists yet," and even the spec's own §6
-  worked example steers real adopters away from it and toward
-  decentralized byte string IDs instead, in practice). Anyone who wants a cheap
-  small ID with zero coordination can get one today by declaring their
-  own namespace — itself decentralized, since the namespace value can be
-  a byte string — and using small sequential odd uint IDs inside it. That
-  covers the first-come tier's entire use case with a mechanism that
-  already has a real governance story, so keeping a second, weaker
-  path to the same outcome added a distinction without a difference.
+- **Decentralized byte string IDs are a separate axis entirely, not a
+  continuation of the numeric range tiers above.** A byte string typeID
+  (§3.1, any width) sits outside the tiered-range system altogether —
+  it isn't "a fourth, higher range," it's a different CBOR major type
+  with a structurally different collision-safety story: an implementer
+  who picks a byte string ID with sufficient length (e.g. 4 or 8 bytes)
+  gets collision avoidance from the sheer size of the byte space, the
+  same way a UUID does, never from a registry recording or reviewing it.
+  This is the one tier that stays ungoverned *permanently, by design* —
+  not "no registry yet," but "no registry, ever, on purpose," since
+  self-certification (Type Hint's hash-derivation, §3.1) is what does
+  the collision-safety work instead. Call it "decentralized" if that's
+  useful, but don't assume the ID stays undisclosed or single-party:
+  Unicode's Private Use Areas and Bluetooth's private/random device
+  addresses are both self-assigned the same way, and neither implies the
+  result is never published or never recognized by an unrelated party.
+  What actually distinguishes this tier from every tier above isn't
+  visibility, it's *authority*: no registry vouches for what a
+  self-allocated ID means, so any cross-implementer recognition has to
+  come from somewhere else — Type Hint's hash-derivation (§3.1), a
+  declared namespace (§3.5), or App Route (§4.4), not a lookup table. It's
+  only viable at all because the wire format never fixed Type IDs to a
+  small byte-width field.
+
+  **Not the recommended default for "cheap ID, no registry," though —
+  resolved after checking the actual numbers, not assumed.** Once a
+  namespace is declared (§3.5), odd uints become cheap *and*
+  collision-free too, without needing any self-chosen width at all, and
+  do so at a fraction of a byte string's per-ID cost (1 byte vs. 4+,
+  every Record Type, forever) — see "Namespace-scoped Type IDs," below.
+  The "cost" is that the namespace operator has to not reuse a number
+  they've already issued themselves, which is trivial for whoever
+  controls one namespace. This holds regardless of whether the namespace
+  itself is centrally allocated or self-chosen/decentralized — that
+  choice is what a byte string namespace value is actually for now (see
+  "Governed vs. ungoverned," below); it's a namespace-operator-governance
+  lever, not a per-Record-Type identity mechanism, once a real adopter's
+  actual practice (TagDrop) was checked against it. A byte string
+  *Type ID* keeps exactly one job a namespace-scoped uint structurally
+  can't do: standing alone as an independently self-certifying identity,
+  verifiable against its own name with no namespace, registry, or
+  reachable-author trust required at all (Finding #29).
+- **An older, narrower "first-come-first-served" tier (`1000`–`0xFFFF`,
+  registered but with no review gate) was considered and dropped — a
+  different mechanism from the `32768`+ tier above, despite the shared
+  name, worth not confusing with it.** That older proposal predates the
+  even/odd parity redesign: it was meant to give a cheap small number to
+  anyone who didn't want to wait for common-vocabulary review, in a
+  world where "namespace-scoped" wasn't yet a distinct wire-format
+  concept. It was dropped once namespace-scoped Type IDs (§3.5) landed
+  and made it redundant: collision-avoidance for a Type ID only ever
+  comes from one of three sources — registry curation, registry
+  recording, or a declared namespace — and this older tier tried to be
+  cheap and uncoordinated without picking any of the three, which is
+  exactly why it never had a viable governance model. Anyone who wants a
+  cheap small ID with zero *upfront* coordination can get one today by
+  declaring their own namespace — itself decentralized, since the
+  namespace value can be a byte string — and using small sequential odd
+  uint IDs inside it. The *current* `32768`+ First Come First Served
+  tier is not a revival of this dropped mechanism: it's for an always-
+  global ID that needs no namespace machinery at all (see TagDrop's own
+  use of it, "Governed vs. ungoverned, made explicit," below).
 - **Even/odd for governance tier — adopted.** The even/odd convention on
   prefix typeIDs now determines governance scope: even uint = always-
   global standard record type, odd uint = namespace-scoped. This reuses
@@ -94,6 +133,83 @@ on:
   path for decentralized allocation that doesn't compete for uint numbers
   at all. See spec §3.1's note on even/odd vocabulary reuse for the full
   rationale.
+
+### Governed vs. ungoverned, made explicit
+
+TagDrop asked directly, after self-allocating four `32768`+ even Type
+IDs under §2/§3.5's own-URI-scheme-isolation guidance: does that tier
+eventually get a registry, or does it stay permanently uncoordinated
+like a decentralized byte string ID? Worth answering with a table
+instead of prose, since the confusion was real: an earlier version of
+this section's own `32768`+ bullet described *byte string* self-
+allocation under a heading about the *numeric* tier — conflating two
+different axes (CBOR major type vs. numeric range) that happen to both
+be "self-allocated, no review."
+
+**"Has a registry" and "requires review" are independent properties —
+that's the actual line, not tier width or magnitude:**
+
+```
++------------------------+------------------+-------------+-------------+
+| Tier                   | Collision-safety | Registry?   | Review?     |
+|                        | source            |             |             |
++------------------------+------------------+-------------+-------------+
+| Standards Action       | spec-maintained   | Yes         | Yes (spec   |
+| (uint even 0–22)       | curation          | (in-spec)   | change)     |
++------------------------+------------------+-------------+-------------+
+| Specification Required | curation          | Yes (once   | Yes         |
+| (uint even 24–98,      |                   | an authority|             |
+| 100–32767)             |                   | exists)     |             |
++------------------------+------------------+-------------+-------------+
+| First Come First       | recording (not    | Yes, light- | No          |
+| Served (uint even      | width, not review)| weight (once|             |
+| 32768+)                |                   | an authority|             |
+|                        |                   | exists)     |             |
++------------------------+------------------+-------------+-------------+
+| Namespace-scoped       | the declaring     | No —        | No          |
+| (uint odd, any value)  | namespace         | nothing to  |             |
+|                        |                   | register    |             |
++------------------------+------------------+-------------+-------------+
+| Decentralized          | ID width /        | No, ever,   | No          |
+| (byte string, any      | hash-derivation   | by design   |             |
+| width)                 |                   |             |             |
++------------------------+------------------+-------------+-------------+
+| Named (reserved)       | not yet defined   | TBD         | TBD         |
+| (text string)          |                   |             |             |
++------------------------+------------------+-------------+-------------+
+```
+
+Namespace IDs (§3.5) reuse this identical shape one level up, since they
+use the same uint/byte-string convention as Type IDs: an Allocated
+(uint) namespace inherits the same Specification-Required/First-Come
+split, a Decentralized (byte string) namespace is permanently ungoverned
+the same way a decentralized Type ID is.
+
+**Why First Come First Served has to mean "eventually recorded," not
+"permanently informal," or the tier is pointless.** If it meant the
+latter, it would be strictly dominated by a decentralized byte string
+ID: same "nobody's tracking it" property, but a *smaller* collision-safe
+ID space (a uint vs. an arbitrary-width byte string) — no reason to ever
+choose it. This is the identical reasoning that already killed the
+older, narrower first-come tier once before (above): a tier that's cheap
+*and* uncoordinated without picking one of the three real
+collision-safety sources never has a viable governance model. The
+`32768`+ tier only earns its place because it's the one that *will* get
+tracked, just not reviewed.
+
+**Nothing is registered today, for any tier — that's a separate fact
+from what each tier is intended to do once an authority exists.**
+`DESIGN.md`/`ROADMAP.md` have said "no registry authority exists yet"
+since before this table existed; TagDrop's four self-allocated values
+are exactly as safe today as they'll ever need to be for their own
+deployment, independent of how or when a registry eventually stands up —
+their own `tagdrop:` scheme already isolates them from every other
+QDEF-aware decoder (§2/§3.5), so no external collision is possible
+regardless of registry timing. Once NFCDAB (or whichever body) does
+stand up a `32768`+ recording registry, submitting already-in-use values
+opportunistically is good practice, not urgent — there's no retroactive
+protection to lose by waiting, since nothing is tracked yet for anyone
+to have raced against.
 
 **Guidance, not a requirement: structured composition within the
 decentralized byte string space.** [GitHub issue #10](https://github.com/mofosyne/qdef/issues/10)
@@ -830,7 +946,7 @@ universally meaningful piece of self-description every container
 benefits from having answered cheaply and unambiguously, the same job
 RIFF's own form-type byte does immediately after RIFF's own magic.
 
-**What it buys back.** The discriminator's six recognized shapes (spec
+**What it buys back.** The discriminator's recognized shapes (spec
 §3.5) are each individually cheaper than the old Type `0` Record shape,
 since none of them pay for a typeID prefix item plus a Map wrapper the
 way an ordinary Record does. Verified against the actual encoder: a bare
@@ -867,7 +983,7 @@ migration path.
 
 Prototyped end to end: `prototype/src/core.js` (`encodeContainer`/
 `decodeContainer` split off exactly one discriminator item),
-`prototype/src/header.js` (`parseDiscriminator`, all six shapes),
+`prototype/src/header.js` (`parseDiscriminator`, all recognized shapes),
 `prototype/src/wrappers.js` (`resolveStack` reads each code's
 discriminator via `parseDiscriminator` instead of scanning
 `records[0]`), and `rust/qdef-core` (`Container::discriminator()`,
@@ -1338,6 +1454,84 @@ path, per occurrence — the shared-container figure reflects the mandatory
 container discriminator, cheaper than the optional Type `0` Record header
 in place when this figure was first measured).
 
+**A real gap in the isolation argument, found by pressure-testing it
+against TagDrop's actual implementation practice, not a hypothetical.**
+Isolation-based collision safety for a self-allocated even Type ID
+(above) is a property of *the carrier at the point of consumption*, not
+of the bytes — nothing in an even Type ID's own encoding marks it as
+"only ever reachable through an isolating wrapper." Asked TagDrop
+directly whether that assumption actually holds for how they build
+things, rather than assuming it does because the spec says so: it
+doesn't, cleanly. TagDrop deliberately reuses the identical CBOR-
+sequence bytes across two carriers for implementation simplicity — the
+same bytes get Base41-encoded into their `tagdrop:` URI *and* dropped
+raw into an NDEF record under their own `application/vnd.tagdrop` MIME
+type. Both of TagDrop's *current* carriers happen to preserve isolation
+(distinct scheme, distinct MIME type — neither is a shared/generic
+dispatch context), so nothing is actually broken today. But the
+practice itself — one shared codepath producing bytes that get wrapped
+differently depending on transport — is exactly the shape of thing that
+silently stops being safe the moment a *third* carrier is added without
+equivalent exclusivity (a bare byte-mode QR with no distinguishing
+wrapper, or a shared/generic MIME type), since nothing at the wire level
+would notice or block it.
+
+**The deeper issue isn't a bug to fix, it's a real tension this
+mechanism has that the spec previously understated.** An application
+that wants any degree of recognizability by tools other than its own
+decoder — which is presumably *part of the point* of adopting QDEF's
+shared Record format at all, rather than keeping a fully bespoke
+private wire format — is, by definition, choosing not to stay
+permanently isolated. For that application, leaning on isolation as the
+collision-safety mechanism for its even Type IDs works against its own
+stated goal. Namespace-scoping (§3.5) or an eventual First Come First
+Served registry entry (§4, "Governed vs. ungoverned," above) are the
+carrier-independent alternatives — either stays collision-safe
+regardless of which carrier the bytes end up traveling through, which
+self-allocated-and-isolated even IDs structurally cannot offer.
+
+Added the caution directly to spec §2/§3.5 rather than leaving it
+implied — an implementer reusing binary internals across carriers needs
+to verify *every* carrier those bytes can reach provides isolation, not
+just the primary one, and an application whose actual goal includes
+interoperability should treat this tier's isolation story as an argument
+*against* using it, not for it. See FINDINGS.md for the full story of
+how this surfaced.
+
+**A better pattern than either self-allocated-even or transmitted-
+namespace, surfaced by asking TagDrop directly what their own decoder
+actually does internally, not assumed from the outside.** TagDrop's own
+implementation already "reinserts" a container discriminator internally
+when content arrives via a carrier that implies it (their `tagdrop:`
+URI) — even though the transmitted bytes never carry one, matching §2's
+guidance. Asked what value gets reinserted: a *real* namespace value,
+not a placeholder, whenever the content genuinely came from their own
+scheme.
+
+That's the key fact that makes a stronger pattern available: an
+isolated-carrier application doesn't have to pick between "cheap but
+carrier-dependent" (self-allocated even IDs, the original guidance) and
+"safe but the discriminator costs bytes" (an ordinary namespace
+declaration). It can fix a real namespace value once and have its own
+decoder assume that value applies to anything reaching it through any of
+its own carriers, without ever transmitting it — odd, namespace-scoped
+Type IDs at the identical wire cost as the even-ID pattern (a bare uint,
+no discriminator), but with the fail-*closed* property namespace-scoping
+always has (§3.5: an odd Type ID with no namespace present MUST abort)
+instead of the fail-*open* exposure an unprotected even ID has if it
+ever reaches an unisolated carrier. It also converts to real,
+transmitted-namespace interoperability later at zero cost to the Type
+IDs themselves — only the carrier changes, not the numbers.
+
+Added to spec §3.5 as the now-recommended pattern for any isolated-
+carrier application, superseding the plain self-allocated-even
+recommendation as the default suggestion (self-allocated even IDs are
+still valid, just no longer the first thing to reach for). Requires
+exactly one discipline the spec now states plainly: the implied
+namespace value must be identical across every one of the application's
+own carriers, or the pattern's safety collapses back to the even-ID
+case. See FINDINGS.md #29.
+
 §3.1's form boundary excludes CBOR major type 1 (negative integer) from
 valid typeID prefix forms, alongside array/map/tag/simple for
 skip-safety and sense-as-an-identifier reasons. Negint is different from
@@ -1404,7 +1598,7 @@ before a real need identifies what it should actually say. If one shows
 up, it picks from whatever's still unclaimed then — including negint,
 still available, exactly as it is today.
 
-## Multiple namespaces per container — considered, not built, because the common case doesn't need it and the rare case is already served differently
+## Multiple namespaces per container — built via a per-Record namespace-pairing prefix item
 
 Asked directly: should one container support declaring more than one
 namespace, so a single physical code could mix content from several
@@ -1460,15 +1654,104 @@ asked for:**
   subsequent Record pay again defeats the reason to reach for this
   mechanism in the first place.
 
-**Not built.** TagDrop, the one real adopter whose concrete want drove
-namespace-scoping's existence at all, only ever wanted exactly one
-namespace. Building either option above would cost the common,
-already-motivated case to serve a hypothetical one, the same trade this
-project has consistently declined elsewhere (App Route, the negint
-reservation, the first-come-first-served tier). If a real adopter with a
-genuine multiple-unrelated-apps-in-one-code want shows up, the actual
-shape of their need should drive the design the way it did here — not a
-guess made in advance of one.
+**Both objections above turned out to be specific to those two
+mechanisms, not to multi-namespace support in general — a third option
+sidesteps both.** Revisited once a concrete third shape was proposed:
+let a Record's own prefix optionally carry a **namespace-pairing item**,
+a 2-element array `[namespace, typeId]`, instead of a bare typeID
+(spec §3.1). When present, it declares/overrides *that one Record's*
+namespace, independent of — and taking priority over — whatever the
+container discriminator declared as the ambient namespace. Every other
+Record in the container is unaffected.
+
+This avoids both prior objections directly:
+
+- **No stateful, position-dependent parsing.** A pairing item is
+  entirely local to the one Record whose prefix carries it — there is
+  no "current scope" a decoder has to track across the Sequence, and no
+  cross-code state either. Each Record is still parsed independently,
+  exactly like every other mechanism in this format.
+- **No mandatory selector on every namespace-scoped Record.** The
+  common case — one app, its own namespace, sibling Records that all
+  want it — pays nothing extra: those Records still use a bare typeID
+  and inherit the container's ambient namespace, exactly as before.
+  Only a Record that actually wants a *different* namespace than
+  ambient pays for a pairing item, and only that one Record.
+
+**Structural, not semantic, at the mandatory-core level.** The core
+needs exactly one new recognition rule — a definite-length 2-element
+array at a typeID-accumulation position is *also* a valid prefix-item
+shape — and pulls the array's second element in as an ordinary typeID
+candidate. It never learns what the first element *means*; it's exposed
+raw (`Record.localNamespace` in the Node prototype;
+`Record::local_namespace()` in `rust/qdef-core`), the same "core exposes
+it, an interpretation layer decides what it means" split the container
+discriminator itself already uses. `header.js` gained one new function,
+`resolveLookupKeyForRecord`, that prefers a Record's own
+`localNamespace` over the container's ambient header when both are
+present — everything else about namespace *semantics* (even always
+global, odd requires a namespace, the "wrong match is worse than a
+clean miss" rule) is completely unchanged; only where the applicable
+namespace value comes from is new.
+
+**Not a cheaper way to get a decentralized ID — an opt-in override,
+verified against the actual encoder, not assumed.** Unlike the
+container discriminator (paid once, amortized across every Record in
+the container), a pairing item is paid fresh on every Record that uses
+it — there's no amortization. Cost of the prefix item alone (excluding
+the Record's own field Map, which every Record pays regardless of
+routing form):
+
+```
++-------------------------------------------------+-------+
+| Form                                             | bytes |
++-------------------------------------------------+-------+
+| [Allocated Namespace ID, scoped typeId]          |     4 |
+| [Decentralized Namespace ID (4B), scoped typeId] |     7 |
+| standalone decentralized Record ID (4B, today)   |     5 |
++-------------------------------------------------+-------+
+```
+
+A decentralized pairing costs *more* than a plain standalone
+decentralized Record ID (7 > 5) — it bundles a full namespace
+declaration onto the one Record using it. So this mechanism doesn't
+replace, and shouldn't be reached for instead of, either the container
+discriminator (the cheap, amortized, common-case path) or a standalone
+decentralized Record ID (§3.1, kept as-is, still the cheapest way to get
+one self-certifying global ID with no namespace involved at all). It
+answers a narrower question — "can this one Record use a namespace
+other than the container's ambient one" — that the two previously-
+rejected options couldn't answer without taxing everyone else.
+
+**An even (Allocated/global) typeId inside a pairing is vacuous.** The
+existing invariant — even uints are always globally interpreted,
+regardless of any declared namespace — is unchanged and unconditional;
+pairing a namespace with an even typeId has no effect on its lookup. The
+mechanism is only meaningful for odd (scoped) typeIds, which is its
+entire purpose.
+
+Prototyped in `prototype/src/core.js` (Phase 1 typeID accumulation
+recognizes the pairing shape, `encodeRecordBytes` takes an optional
+`localNamespace` parameter), `prototype/src/header.js`
+(`resolveLookupKeyForRecord`), `prototype/src/wrappers.js`
+(`resolveStack`'s terminal-Record resolution prefers a local override),
+and `prototype/test/record-namespace-pairing.test.js` — round-trip for
+both Allocated and Decentralized namespace forms, local-overrides-
+ambient and falls-back-to-ambient resolution, the even-typeId-is-vacuous
+case, backup-typeID interaction (the same promotion pattern §3.1 already
+uses, applied to a namespace-scoped primary), a `resolveStack` case
+where the Wrapper-resolved terminal Record carries its own override, and
+the byte-cost FINDING above.
+
+Cross-validated in `rust/qdef-core`: `parse_record`'s Phase 1 gained the
+identical structural recognition rule (a definite-length 2-element array
+is a valid prefix-item shape; its second element is pulled in as an
+ordinary typeID, its first is exposed raw via the new
+`Record::local_namespace()`), with zero namespace-semantic code added to
+the crate — matching the container discriminator's own precedent. Four
+new tests confirm the pairing round-trips for both namespace forms,
+degrades correctly when a Record carries no pairing item, and still
+accumulates an ordinary backup typeID alongside a pairing primary.
 
 ## Text string Type IDs — reserved for future use, but pinned enough to not repeat FINDINGS #21
 
