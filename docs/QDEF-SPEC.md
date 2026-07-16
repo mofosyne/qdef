@@ -805,12 +805,16 @@ See DESIGN.md for the real, verified byte-cost comparison this
 recommendation is based on.
 
 **Format namespace values follow the same convention as Record Type IDs
-(§3.1): a uint or a byte string.** A uint namespace follows the same
-tiering convention as §3.1's uint Type IDs — a small span for
-reviewed/common formats, and an open span of even uints with no
-allocation authority needed. A byte string namespace follows §3.1's
-decentralized convention — collision safety from the byte length the
-developer chose. However, namespace IDs are the global root of trust:
+(§3.1): a uint or a byte string.** A uint namespace follows the exact
+same tiering as §3.1's uint Type IDs, including the same governed/
+ungoverned line — a small span for reviewed/common formats
+(Specification Required), an open First Come First Served span above
+it (self-allocate freely, recorded but not reviewed once a registry
+authority exists), and no allocation authority needed at all for a byte
+string namespace, which follows §3.1's decentralized convention —
+collision safety from the byte length the developer chose, never
+registry-tracked, by design. However, namespace IDs are the global root
+of trust:
 two unrelated namespaces with the same byte string ID would cause all
 their scoped Type IDs to collide. Byte string namespace IDs MUST
 therefore be at least 4 bytes; 8 bytes is recommended for maximum
@@ -1022,6 +1026,21 @@ Byte string IDs are always global regardless of number; they provide
 collision safety from byte length, not from registry position. Text
 string IDs are recognized as valid prefix items by parsers but have no
 registration scheme defined yet.
+
+**"Governed" and "review-gated" are independent properties, not the
+same axis — this is the actual line between the tiers above.** Every
+tier's collision-safety comes from exactly one of three sources:
+curation (a registry that both records *and* reviews an allocation
+before granting it), recording (a registry that tracks who claimed
+what, first-come, with no review gate), or self-certification (the ID's
+own width/derivation, with no registry involved at all, ever). Standards
+Action and Specification Required both sit in the first category
+(reviewed); First Come First Served sits in the second (recorded, not
+reviewed); byte string IDs sit in the third (no registry, by design,
+permanently — not merely "not yet registered"). No registry authority
+exists today for *any* uint tier (§8) — that's a separate, current-state
+fact from which of these three collision-safety models a given tier is
+*intended* to use once one does.
 
 ### 4.1 Wrapper Records (optional)
 

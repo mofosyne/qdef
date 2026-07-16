@@ -42,46 +42,70 @@ on:
     for the full rationale — since that's conceptually the same
     distinction: this tier IS the "Specification Required" one,
     reviewed before allocation.
-  - `32768`+: **decentralized — self-allocated via a byte string ID, not
-    a registry** (once a namespace is declared, §3.5, odd uints become
-    cheap *and* collision-free without any self-allocated width at all —
-    see "Namespace-scoped Type IDs," below). Outside a namespace, an
-    implementer who picks a byte string ID with sufficient length (e.g.
-    4 or 8 bytes) gets collision avoidance from the sheer size of the
-    byte space, the same way a UUID does — not from anyone checking a
-    list. Call it "decentralized" if that's useful, but don't assume the
-    ID stays undisclosed or single-party: Unicode's Private Use Areas and
-    Bluetooth's private/random device addresses are both self-assigned
-    the same way, and neither implies the result is never published or
-    never recognized by an unrelated party. What actually distinguishes
-    this tier from registered types isn't visibility, it's *authority*:
-    no registry vouches for what a self-allocated ID means, so any
-    cross-implementer recognition has to come from somewhere else — Type
-    Hint's hash-derivation (§3.1), a declared namespace (§3.5), or App
-    Route (§4.4), not a lookup table. It's only viable at all because the
-    wire format never fixed Type IDs to a small byte-width field.
+  - `32768`+: **First Come First Served — self-allocate freely, recorded
+    once a registry authority exists, never reviewed.** This is a real,
+    distinct governance model, not "no governance" — the term is borrowed
+    verbatim from IANA's own CBOR tag registry, where it means exactly
+    this: an allocation authority still exists and still tracks every
+    assignment (so two implementers can't both silently claim the same
+    number once one is recorded), it just never gates *who* can request
+    one or reviews *what* it's for. Self-allocation is immediate and
+    free; recording (once an authority exists — none does today, see
+    below) is what actually prevents a collision, not the numeric width
+    or any inherent property of the ID itself. See "Governed vs.
+    ungoverned, made explicit," below, for why this tier would be
+    pointless if it meant permanently untracked instead — it would just
+    be a strictly worse version of a decentralized byte string ID (a
+    smaller ID space, same "nobody's tracking it" property).
   Exact boundaries remain a policy decision for whoever ends up running
   the registry, not a wire-format one.
-- **No separate "first-come-first-served" tier (considered, dropped).** An
-  earlier version of this range had a third band, `1000`–`0xFFFF`,
-  registered but with no review gate beyond "not already taken" — meant
-  to give a cheap small number to anyone who didn't want to wait for
-  common-vocabulary review. Dropped once namespace-scoped Type IDs
-  (§3.5) landed and made it redundant in principle, not just in practice:
-  collision-avoidance for a Type ID only ever comes from one of three
-  sources — registry curation, the ID's own numeric width, or a declared
-  namespace. The first-come tier tried to be cheap *and* uncoordinated
-  without picking any of the three, which is exactly why it never had a
-  viable governance model to begin with (the paragraph above already
-  says "no registry authority exists yet," and even the spec's own §6
-  worked example steers real adopters away from it and toward
-  decentralized byte string IDs instead, in practice). Anyone who wants a cheap
-  small ID with zero coordination can get one today by declaring their
-  own namespace — itself decentralized, since the namespace value can be
-  a byte string — and using small sequential odd uint IDs inside it. That
-  covers the first-come tier's entire use case with a mechanism that
-  already has a real governance story, so keeping a second, weaker
-  path to the same outcome added a distinction without a difference.
+- **Decentralized byte string IDs are a separate axis entirely, not a
+  continuation of the numeric range tiers above.** A byte string typeID
+  (§3.1, any width) sits outside the tiered-range system altogether —
+  it isn't "a fourth, higher range," it's a different CBOR major type
+  with a structurally different collision-safety story: an implementer
+  who picks a byte string ID with sufficient length (e.g. 4 or 8 bytes)
+  gets collision avoidance from the sheer size of the byte space, the
+  same way a UUID does, never from a registry recording or reviewing it.
+  This is the one tier that stays ungoverned *permanently, by design* —
+  not "no registry yet," but "no registry, ever, on purpose," since
+  self-certification (Type Hint's hash-derivation, §3.1) is what does
+  the collision-safety work instead. Call it "decentralized" if that's
+  useful, but don't assume the ID stays undisclosed or single-party:
+  Unicode's Private Use Areas and Bluetooth's private/random device
+  addresses are both self-assigned the same way, and neither implies the
+  result is never published or never recognized by an unrelated party.
+  What actually distinguishes this tier from every tier above isn't
+  visibility, it's *authority*: no registry vouches for what a
+  self-allocated ID means, so any cross-implementer recognition has to
+  come from somewhere else — Type Hint's hash-derivation (§3.1), a
+  declared namespace (§3.5), or App Route (§4.4), not a lookup table. It's
+  only viable at all because the wire format never fixed Type IDs to a
+  small byte-width field. (Once a namespace is declared, §3.5, odd uints
+  become cheap *and* collision-free too, without needing any self-chosen
+  width at all — see "Namespace-scoped Type IDs," below — a second,
+  independent way to get a decentralized-feeling ID that isn't this byte
+  string mechanism at all.)
+- **An older, narrower "first-come-first-served" tier (`1000`–`0xFFFF`,
+  registered but with no review gate) was considered and dropped — a
+  different mechanism from the `32768`+ tier above, despite the shared
+  name, worth not confusing with it.** That older proposal predates the
+  even/odd parity redesign: it was meant to give a cheap small number to
+  anyone who didn't want to wait for common-vocabulary review, in a
+  world where "namespace-scoped" wasn't yet a distinct wire-format
+  concept. It was dropped once namespace-scoped Type IDs (§3.5) landed
+  and made it redundant: collision-avoidance for a Type ID only ever
+  comes from one of three sources — registry curation, registry
+  recording, or a declared namespace — and this older tier tried to be
+  cheap and uncoordinated without picking any of the three, which is
+  exactly why it never had a viable governance model. Anyone who wants a
+  cheap small ID with zero *upfront* coordination can get one today by
+  declaring their own namespace — itself decentralized, since the
+  namespace value can be a byte string — and using small sequential odd
+  uint IDs inside it. The *current* `32768`+ First Come First Served
+  tier is not a revival of this dropped mechanism: it's for an always-
+  global ID that needs no namespace machinery at all (see TagDrop's own
+  use of it, "Governed vs. ungoverned, made explicit," below).
 - **Even/odd for governance tier — adopted.** The even/odd convention on
   prefix typeIDs now determines governance scope: even uint = always-
   global standard record type, odd uint = namespace-scoped. This reuses
@@ -94,6 +118,83 @@ on:
   path for decentralized allocation that doesn't compete for uint numbers
   at all. See spec §3.1's note on even/odd vocabulary reuse for the full
   rationale.
+
+### Governed vs. ungoverned, made explicit
+
+TagDrop asked directly, after self-allocating four `32768`+ even Type
+IDs under §2/§3.5's own-URI-scheme-isolation guidance: does that tier
+eventually get a registry, or does it stay permanently uncoordinated
+like a decentralized byte string ID? Worth answering with a table
+instead of prose, since the confusion was real: an earlier version of
+this section's own `32768`+ bullet described *byte string* self-
+allocation under a heading about the *numeric* tier — conflating two
+different axes (CBOR major type vs. numeric range) that happen to both
+be "self-allocated, no review."
+
+**"Has a registry" and "requires review" are independent properties —
+that's the actual line, not tier width or magnitude:**
+
+```
++------------------------+------------------+-------------+-------------+
+| Tier                   | Collision-safety | Registry?   | Review?     |
+|                        | source            |             |             |
++------------------------+------------------+-------------+-------------+
+| Standards Action       | spec-maintained   | Yes         | Yes (spec   |
+| (uint even 0–22)       | curation          | (in-spec)   | change)     |
++------------------------+------------------+-------------+-------------+
+| Specification Required | curation          | Yes (once   | Yes         |
+| (uint even 24–98,      |                   | an authority|             |
+| 100–32767)             |                   | exists)     |             |
++------------------------+------------------+-------------+-------------+
+| First Come First       | recording (not    | Yes, light- | No          |
+| Served (uint even      | width, not review)| weight (once|             |
+| 32768+)                |                   | an authority|             |
+|                        |                   | exists)     |             |
++------------------------+------------------+-------------+-------------+
+| Namespace-scoped       | the declaring     | No —        | No          |
+| (uint odd, any value)  | namespace         | nothing to  |             |
+|                        |                   | register    |             |
++------------------------+------------------+-------------+-------------+
+| Decentralized          | ID width /        | No, ever,   | No          |
+| (byte string, any      | hash-derivation   | by design   |             |
+| width)                 |                   |             |             |
++------------------------+------------------+-------------+-------------+
+| Named (reserved)       | not yet defined   | TBD         | TBD         |
+| (text string)          |                   |             |             |
++------------------------+------------------+-------------+-------------+
+```
+
+Namespace IDs (§3.5) reuse this identical shape one level up, since they
+use the same uint/byte-string convention as Type IDs: an Allocated
+(uint) namespace inherits the same Specification-Required/First-Come
+split, a Decentralized (byte string) namespace is permanently ungoverned
+the same way a decentralized Type ID is.
+
+**Why First Come First Served has to mean "eventually recorded," not
+"permanently informal," or the tier is pointless.** If it meant the
+latter, it would be strictly dominated by a decentralized byte string
+ID: same "nobody's tracking it" property, but a *smaller* collision-safe
+ID space (a uint vs. an arbitrary-width byte string) — no reason to ever
+choose it. This is the identical reasoning that already killed the
+older, narrower first-come tier once before (above): a tier that's cheap
+*and* uncoordinated without picking one of the three real
+collision-safety sources never has a viable governance model. The
+`32768`+ tier only earns its place because it's the one that *will* get
+tracked, just not reviewed.
+
+**Nothing is registered today, for any tier — that's a separate fact
+from what each tier is intended to do once an authority exists.**
+`DESIGN.md`/`ROADMAP.md` have said "no registry authority exists yet"
+since before this table existed; TagDrop's four self-allocated values
+are exactly as safe today as they'll ever need to be for their own
+deployment, independent of how or when a registry eventually stands up —
+their own `tagdrop:` scheme already isolates them from every other
+QDEF-aware decoder (§2/§3.5), so no external collision is possible
+regardless of registry timing. Once NFCDAB (or whichever body) does
+stand up a `32768`+ recording registry, submitting already-in-use values
+opportunistically is good practice, not urgent — there's no retroactive
+protection to lose by waiting, since nothing is tracked yet for anyone
+to have raced against.
 
 **Guidance, not a requirement: structured composition within the
 decentralized byte string space.** [GitHub issue #10](https://github.com/mofosyne/qdef/issues/10)
