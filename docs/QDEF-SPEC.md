@@ -137,7 +137,11 @@ own `tagdrop:<...>` scheme already does exactly this dispatch job for its
 own wire format today; an application in that position pays no
 magic-byte or discriminator-byte cost at all for adopting QDEF's Record
 shape underneath its existing scheme. (Validated in the prototype:
-`prototype/test/custom-scheme-carrier.test.js`.)
+`prototype/test/custom-scheme-carrier.test.js`.) This dispatch-based
+isolation is what §3.5's even-Type-ID guidance leans on for collision
+safety — see that section's caution on why the same bytes reaching a
+second, unisolated carrier (e.g. a shared MIME type, or a raw byte-mode
+form with no distinguishing wrapper) silently forfeits it.
 
 **No version byte.** §3.2's even/odd criticality rule already provides
 local forward compatibility; see [DESIGN.md](DESIGN.md#container-framing-choices)
@@ -803,6 +807,28 @@ exist — a byte-mode QR or an NDEF payload with no app-specific MIME
 type, where genuinely unrelated apps' content might share one container.
 See DESIGN.md for the real, verified byte-cost comparison this
 recommendation is based on.
+
+**Caution: this safety is a property of the carrier at the point of
+consumption, not of the bytes themselves — it does not survive reuse
+across carriers that don't all provide equivalent isolation.** Even
+Type IDs carry zero self-protection of their own (§3.1); "isolated" and
+"unisolated" byte sequences are bit-for-bit identical, and nothing in
+the wire format marks which one a given blob is. An implementer who
+reuses the identical CBOR-sequence bytes across multiple carriers for
+implementation simplicity — e.g. the same bytes underlying both an own
+URI scheme and a raw NDEF record — MUST verify *every* carrier those
+bytes can reach provides isolation, not just the primary one; a single
+future carrier added without an equivalently exclusive dispatch
+mechanism (a shared/generic MIME type, a bare byte-mode QR with no
+distinguishing wrapper) silently reintroduces full collision exposure
+for every even Type ID already in use, with no wire-level signal that
+anything changed. More fundamentally, this mechanism is in direct
+tension with wanting broader interoperability: an application that
+wants its content recognizable by tools other than its own decoder is,
+by definition, choosing not to stay isolated — for that application,
+namespace-scoping or an eventual First Come First Served registry entry
+(§4) is the more robust choice, since either stays collision-safe
+regardless of which carrier the bytes travel through.
 
 **Format namespace values follow the same convention as Record Type IDs
 (§3.1): a uint or a byte string.** A uint namespace follows the exact

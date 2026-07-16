@@ -1268,3 +1268,49 @@ knows what a namespace *is* — matching the container discriminator's own
 precedent (Finding #26) rather than needing a new pattern. See
 DESIGN.md's "Multiple namespaces per container" and spec §3.1's
 namespace-pairing prefix item.
+
+### 28. "Own-URI-scheme carriers skip magic AND namespace-scoping" understated a real risk — isolation is a carrier property, not a byte property, and doesn't survive being reused across carriers
+
+The guidance that an app whose carrier already isolates it (own URI
+scheme, own NDEF MIME type) can safely use a small, self-allocated even
+Type ID with no namespace (spec §3.5, Finding #25) was correct as far as
+it went, but understated what "isolated" actually depends on. Pressure-
+tested against TagDrop's real implementation practice rather than left
+as a theoretical concern: TagDrop deliberately reuses identical
+CBOR-sequence bytes across two carriers, for implementation
+simplicity — the same bytes get Base41-encoded into their `tagdrop:`
+URI and dropped raw into an NDEF record under their own
+`application/vnd.tagdrop` MIME type.
+
+Both of TagDrop's *current* carriers happen to preserve isolation
+(distinct scheme, distinct MIME type — neither is shared/generic
+dispatch), so nothing is broken today. But the underlying practice —
+one shared codepath, wrapped differently depending on transport — is
+exactly the shape of thing that stops being safe the moment a *third*
+carrier is added without equivalent exclusivity (a bare byte-mode QR
+with no distinguishing wrapper, or a shared/generic MIME type), and
+nothing at the wire level would notice: an even Type ID carries zero
+self-protection of its own, so "isolated" and "unisolated" copies of the
+identical bytes are bit-for-bit indistinguishable. Isolation is a
+property of the carrier at the point of consumption, never of the bytes
+themselves, and the original guidance didn't say so.
+
+**A deeper tension underneath the wire-format gap, not just a
+missing caveat.** An application that wants any degree of
+recognizability by tools other than its own decoder — presumably part
+of the point of adopting a shared Record format at all, rather than
+keeping a fully bespoke wire format — is, by definition, choosing not
+to stay permanently isolated. For that application, isolation-based
+collision safety for self-allocated even Type IDs works against its own
+goal: the more it wants broader interoperability, the less true "nothing
+else ever sees these bytes" actually is. Namespace-scoping, or an
+eventual First Come First Served registry entry, are the
+carrier-independent alternatives — either stays collision-safe
+regardless of which carrier the bytes travel through, which
+self-allocated-and-isolated even IDs structurally cannot offer.
+
+Added the caution directly to spec §2/§3.5 (an implementer reusing
+binary internals across carriers must verify *every* reachable carrier
+provides isolation, not just the primary one) rather than leaving it
+implied. See DESIGN.md's "Own-URI-scheme carriers skip magic AND
+namespace-scoping" for the full writeup.

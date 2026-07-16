@@ -1439,6 +1439,50 @@ path, per occurrence — the shared-container figure reflects the mandatory
 container discriminator, cheaper than the optional Type `0` Record header
 in place when this figure was first measured).
 
+**A real gap in the isolation argument, found by pressure-testing it
+against TagDrop's actual implementation practice, not a hypothetical.**
+Isolation-based collision safety for a self-allocated even Type ID
+(above) is a property of *the carrier at the point of consumption*, not
+of the bytes — nothing in an even Type ID's own encoding marks it as
+"only ever reachable through an isolating wrapper." Asked TagDrop
+directly whether that assumption actually holds for how they build
+things, rather than assuming it does because the spec says so: it
+doesn't, cleanly. TagDrop deliberately reuses the identical CBOR-
+sequence bytes across two carriers for implementation simplicity — the
+same bytes get Base41-encoded into their `tagdrop:` URI *and* dropped
+raw into an NDEF record under their own `application/vnd.tagdrop` MIME
+type. Both of TagDrop's *current* carriers happen to preserve isolation
+(distinct scheme, distinct MIME type — neither is a shared/generic
+dispatch context), so nothing is actually broken today. But the
+practice itself — one shared codepath producing bytes that get wrapped
+differently depending on transport — is exactly the shape of thing that
+silently stops being safe the moment a *third* carrier is added without
+equivalent exclusivity (a bare byte-mode QR with no distinguishing
+wrapper, or a shared/generic MIME type), since nothing at the wire level
+would notice or block it.
+
+**The deeper issue isn't a bug to fix, it's a real tension this
+mechanism has that the spec previously understated.** An application
+that wants any degree of recognizability by tools other than its own
+decoder — which is presumably *part of the point* of adopting QDEF's
+shared Record format at all, rather than keeping a fully bespoke
+private wire format — is, by definition, choosing not to stay
+permanently isolated. For that application, leaning on isolation as the
+collision-safety mechanism for its even Type IDs works against its own
+stated goal. Namespace-scoping (§3.5) or an eventual First Come First
+Served registry entry (§4, "Governed vs. ungoverned," above) are the
+carrier-independent alternatives — either stays collision-safe
+regardless of which carrier the bytes end up traveling through, which
+self-allocated-and-isolated even IDs structurally cannot offer.
+
+Added the caution directly to spec §2/§3.5 rather than leaving it
+implied — an implementer reusing binary internals across carriers needs
+to verify *every* carrier those bytes can reach provides isolation, not
+just the primary one, and an application whose actual goal includes
+interoperability should treat this tier's isolation story as an argument
+*against* using it, not for it. See FINDINGS.md for the full story of
+how this surfaced.
+
 §3.1's form boundary excludes CBOR major type 1 (negative integer) from
 valid typeID prefix forms, alongside array/map/tag/simple for
 skip-safety and sense-as-an-identifier reasons. Negint is different from
