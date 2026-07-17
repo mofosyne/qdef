@@ -1155,10 +1155,18 @@ whatever real ID that number belongs to instead of failing loudly:
 +------+------------------+---------+---------------------------------+
 ```
 
-All six are placeholders pending a real registry authority (§8), not
-protected allocations — see "Registering a real Type ID before
-governance exists," below, for what that means for an adopter shipping
-against one of these numbers today.
+All six sit in the `0`–`22` Standards Action tier — this spec document's
+own publication *is* the authoritative declaration for them, the same
+way CBOR's own tags `0`–`23` are authoritative by virtue of being
+defined in RFC 8949 itself, independent of whether IANA's registry
+infrastructure is actively processing anything. No separate "registry
+running" is needed to make these six real; a future registry authority
+(§8) inherits and records them, it doesn't grant them. This is different
+from an adopter's own pick in the `100`–`32767` tier (e.g. the
+illustrative `900` in "Registering a real Type ID before governance
+exists," below) — that tier's allocations genuinely are provisional
+until a review authority exists, since nothing in this spec document
+itself declares what any specific number in that range means.
 
 **Type ID allocation ranges** (adapted from CBOR's tag registry pattern,
 RFC 8949 §9.2):
@@ -1273,7 +1281,9 @@ isn't a Wrapper Record anymore — implements this for every Record Type
 that opts in, with zero code written by that Record Type's own author
 (demonstrated in `prototype/src/wrappers.js`'s `resolveStack`).
 
-Reserved Wrapper Type IDs (placeholders, pending a real registry):
+Wrapper Type IDs, authoritatively assigned by this spec document itself
+(Standards Action, `0`–`22` — see the note above the Type ID allocation
+table on why that tier needs no separate registry to be real):
 
 ```
 Type 2: {                    // Split
