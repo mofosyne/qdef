@@ -1474,3 +1474,67 @@ Added a compact, scannable table gathering all six assigned IDs (Split
 `2`, Encrypt `4`, Media Payload `6`, Compress `8`, Fallback Hint `10`,
 App Route `12`) in one place at the top of §4, cross-referencing each
 one's full definition rather than duplicating it.
+
+### 32. Checking QDEF against every real NDEF RTD, not just NDEF in the abstract, surfaced one cheap gap worth closing and confirmed several others are correctly out of scope
+
+Asked directly whether QDEF and NDEF content should convert in both
+directions, with an explicit escape hatch stated up front: not
+converting is an acceptable outcome where closing the gap would cost
+more decoder/design complexity than it's worth. `DESIGN.md`'s
+"Relationship to existing standards" had discussed NDEF at an
+architectural level since early in this project, but had never actually
+checked QDEF's standard record types (§4) against the NFC Forum's real,
+published RTD list one by one. Did that directly against the actual
+specifications rather than from memory.
+
+**One real, cheap gap: Smart Poster's language tag and action code.**
+Fallback Hint (§4.2) had a URI and a label, but nowhere to put a BCP 47
+language tag or Smart Poster's action code (perform/save/open). Closed
+it with two new odd/optional fields (keys `3` and `5`) — cheap
+specifically because both are optional: a decoder that doesn't recognize
+either still gets a fully working URI and label, the exact same
+graceful-degrade guarantee Fallback Hint already made for its original
+two fields. Multiple languages or multiple URIs (Smart Poster's
+multi-title behavior, Multiple URI RTD) needed no new mechanism at all —
+QDEF already permits repeated same-Type sibling Records, so repeating
+Fallback Hint once per variant already reproduces both behaviors for
+free.
+
+**One real efficiency trick checked and correctly declined, not just
+skipped for being unfamiliar.** NDEF URI RTD's 1-byte prefix-code scheme
+(standing in for common prefixes like `"http://www."`) is exactly the
+kind of external table QDEF has borrowed before when it was worth it
+(CoAP Content-Formats, COSE Algorithm IDs) — so the instinct to check it
+seriously was right. It doesn't transfer cleanly: representing
+`[prefix code, remainder]` as one field value needs either a bare array
+(disallowed by §3.2's field-value-shape rule) or a CBOR tag standing in
+for the code (reopening the tag-number-collision risk already rejected
+once for container routing, Finding #11). Splitting the URI field into a
+separate code-plus-remainder pair would work structurally, but at a real
+cost: a decoder recognizing Fallback Hint's Type but not that specific
+split would see a broken, prefix-less string instead of a working URI —
+undermining the one guarantee Fallback Hint exists to make. Declined,
+for a stated, checked reason, not because efficiency doesn't matter here
+(it clearly does everywhere else in this project) — this was the "not
+worth the complexity" escape hatch actually exercised, not left
+theoretical.
+
+**Confirmed, not just asserted, that Connection Handover (Alternative
+Carrier, Handover Request/Select/Mediation), Device Information RTD, and
+Verb RTD are correctly out of scope.** All three are tied to live,
+bidirectional device-pairing negotiation — multiple devices exchanging
+messages to agree on a Bluetooth/WiFi carrier. QDEF has no session, no
+response, no multi-message exchange concept anywhere in its design; it's
+static and scan-once by construction. Representing Handover's state
+machine would require growing a concept foreign to the format's entire
+model, for a use case QDEF was never aimed at. Signature RTD maps onto
+QDEF's own already-decided, already-tracked Sign wrapper (not built,
+waiting for a real adopter) — NDEF conversion is a new argument for
+prioritizing it sooner, not new scope. AAR was already covered by App
+Route.
+
+Prototyped in `prototype/test/fallback-hint.test.js`: the pre-existing
+bare-URI-plus-label shape round-trips unaffected, the new language/action
+fields round-trip together, an unaware decoder still gets a complete
+working URI and label with both new keys silently ignored, and repeated
+siblings correctly reproduce multi-language behavior.

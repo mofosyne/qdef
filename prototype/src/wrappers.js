@@ -19,7 +19,7 @@ const APP_ROUTE_TYPE = 12;
 const SPLIT_KNOWN_KEYS = new Set([0, 2, 4, 6, 7, 9]);
 const COMPRESS_KNOWN_KEYS = new Set([0]);
 const ENCRYPT_KNOWN_KEYS = new Set([0, 2, 3, 5]);
-const FALLBACK_HINT_KNOWN_KEYS = new Set([0]);
+const FALLBACK_HINT_KNOWN_KEYS = new Set([0, 1, 3, 5]);
 const MEDIA_PAYLOAD_KNOWN_KEYS = new Set([0, 2]);
 const APP_ROUTE_KNOWN_KEYS = new Set([0, 1]);
 

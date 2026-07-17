@@ -1449,7 +1449,13 @@ Type 10: {                         // Fallback Hint (standard record type)
   // field map:
   0: "https://example.com/open-this",  // CRITICAL: a URI a generic tool
                                         //   or browser can follow
-  1: "Open in MyApp"                    // OPTIONAL: human-readable label
+  1: "Open in MyApp",                   // OPTIONAL: human-readable label
+  3: "en",                              // OPTIONAL: BCP 47 language tag
+                                         //   for key 1's label
+  5: 0                                  // OPTIONAL: suggested action --
+                                         //   0 = perform the action (open
+                                         //   the URI), 1 = save for later,
+                                         //   2 = open for editing
 }
 ```
 
@@ -1458,6 +1464,46 @@ without the specific app" property. It **must** stay a plain sibling
 record, never nested inside a Wrapper — its entire value is being visible
 to a parser that understands nothing else in the container, which a
 Wrapper's opaque payload would defeat.
+
+**Keys `3` and `5` exist for lossless conversion to and from NDEF's Smart
+Poster RTD** (see DESIGN.md's "Relationship to existing standards" for
+the full comparison this was checked against), which carries a language
+tag on its title text and an action code neither of QDEF's original two
+fields had anywhere to hold. Both are odd/optional (§3.2): a decoder that
+doesn't recognize either still gets a fully working URI and label — the
+same graceful degrade Fallback Hint already guarantees for its two
+original fields, now extended to both new ones. Key `5`'s three values
+mirror Smart Poster's own action codes exactly, borrowed rather than
+reinvented, the same "use an existing small enum instead of inventing
+one" choice already made for Encrypt's Algorithm field (§4.1) and Media
+Payload's Media Type field (§4.3).
+
+**Multiple languages, or multiple URIs, need no new mechanism at all —
+just repeat Fallback Hint as an ordinary sibling Record, once per
+variant.** Nothing in QDEF restricts how many Records of the same Type
+appear in one Sequence; a decoder collecting every Fallback Hint sibling
+and picking the best language match already reproduces NDEF's
+multi-title Smart Poster behavior and its Multiple URI RTD, without
+either needing a dedicated list-carrying field (which §3.2's
+field-value-shape rule wouldn't allow as a bare array value in the first
+place).
+
+**Not adopted: NDEF URI RTD's compact prefix-code trick** (a 1-byte code
+standing in for a common scheme prefix like `"http://www."`), despite
+QDEF otherwise readily borrowing external tables (CoAP Content-Formats,
+COSE Algorithm IDs) when one already exists and is worth the byte
+savings. Checked concretely, not assumed away: representing it would
+need either a 2-element array value (disallowed outright by §3.2's
+field-value-shape rule) or a CBOR tag number standing in for the prefix
+code (reopening the exact tag-collision risk already rejected once for
+container routing — DESIGN.md's "CBOR tag-number collision"). The
+remaining option — splitting key `0` into a separate prefix-code field
+plus a prefix-stripped remainder — would mean a decoder that recognizes
+Type `10` but not that specific field pairing sees a broken, prefix-less
+string instead of a working URI, undermining Fallback Hint's entire
+reason to exist: *any* decoder that recognizes the Type gets a complete,
+usable URI, with no further sub-feature support required. A few bytes
+saved on an already-short field isn't worth trading that guarantee away.
 
 ### 4.3 Media Payload (optional)
 

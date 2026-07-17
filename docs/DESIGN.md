@@ -551,6 +551,107 @@ issue [#16](https://github.com/mofosyne/tagdrop/issues/16) (2016) proposed
 an NDEF-like binary header for QR codes a decade before this draft
 existed; QDEF is the first attempt to actually build it out.
 
+## Standard Record Type coverage against NDEF's own Record Type Definitions (RTDs) — checked directly, not assumed
+
+Prompted by asking whether QDEF and NDEF content should be convertible
+in both directions, with an explicit escape hatch: not converting is an
+acceptable outcome where trying would cost more design/decoder
+complexity than the conversion is worth, not something to force through
+regardless of cost. Checked every real NFC Forum RTD directly (their own
+published specifications, not memory) against what QDEF's standard
+record types (§4) already cover:
+
+```
++------------------------+---------------------------+----------------------------------------------+
+| NDEF RTD / mechanism    | Purpose                   | QDEF status                                  |
++------------------------+---------------------------+----------------------------------------------+
+| Text RTD                | Plain text + language tag | Covered -- Media Payload (§4.3), a text/*     |
+|                          |                            | MIME type; no dedicated Text type needed      |
+| URI RTD                 | Compact URI encoding      | Partial -- Fallback Hint (§4.2) covers the    |
+|                          |                            | fallback case; general "URI as primary        |
+|                          |                            | content" falls to Media Payload or an app     |
+|                          |                            | Type. Not an exact duplicate, not a gap       |
+| Smart Poster RTD        | URI + Text + action code  | Closed -- Fallback Hint gained language (key  |
+|                          |                            | 3) and action (key 5) fields, below           |
+| Signature RTD           | Cryptographic signing     | Known gap, already tracked -- QDEF's own Sign |
+|                          |                            | wrapper, decided but unbuilt (see below)      |
+| Device Information RTD  | Device model/identity     | Out of scope -- device pairing, not content   |
+|                          |                            | distribution                                  |
+| Multiple URI RTD        | List of URIs, one record  | Not needed -- repeated Fallback Hint siblings |
+|                          |                            | already generalize this, no new mechanism     |
+| Verb RTD                 | Handover service verbs    | Out of scope -- tied to Connection Handover    |
+| Connection Handover      | Live, bidirectional       | Out of scope entirely -- see below            |
+| (Alternative Carrier,    | Bluetooth/WiFi carrier    |                                                |
+| Handover Req/Sel/Med.)  | negotiation                |                                                |
+| Android Application      | App dispatch on scan      | Covered -- App Route (§4.4), designed as the  |
+| Record (AAR, not a real  |                            | explicit cross-platform equivalent            |
+| RTD, but functionally    |                            |                                                |
+| adjacent)                |                            |                                                |
++------------------------+---------------------------+----------------------------------------------+
+```
+
+**Closed: Smart Poster's language tag and action code, both cheap and
+additive.** Fallback Hint gained two new odd/optional fields — `3`
+(BCP 47 language tag for the label) and `5` (action code: `0` = perform
+the action, `1` = save for later, `2` = open for editing, borrowed
+directly from Smart Poster's own three values rather than inventing a
+new enum). Both are odd/optional specifically so a decoder that doesn't
+recognize either still gets a fully working URI and label — the
+graceful-degrade guarantee Fallback Hint already made for its original
+two fields, now extended rather than compromised. Multiple languages or
+multiple URIs need no new mechanism at all: QDEF already allows any
+number of same-Type sibling Records in one Sequence, so repeating
+Fallback Hint once per language/URI variant reproduces Smart Poster's
+multi-title behavior and Multiple URI RTD's list behavior for free.
+
+**Deliberately not adopted: NDEF URI RTD's compact prefix-code trick** (a
+1-byte code standing in for a common URI scheme prefix like
+`"http://www."`), even though QDEF readily borrows external tables
+elsewhere when the byte savings are real and a stable table already
+exists (CoAP Content-Formats for Media Payload, COSE Algorithm IDs for
+Encrypt). Checked concretely why this one doesn't transfer cleanly,
+rather than skipping it for being unfamiliar: representing `[prefix
+code, remainder]` as a single field value needs either a 2-element
+array (which §3.2's field-value-shape rule disallows outright as a field
+value) or a CBOR tag number standing in for the code (reopening the
+exact tag-number-collision risk with the wider CBOR ecosystem already
+rejected once, for container routing — "CBOR tag-number collision,"
+below). The remaining option — splitting the URI field into a separate
+prefix-code field plus a prefix-stripped remainder — would mean a
+decoder that recognizes Fallback Hint's Type but not that specific field
+split sees a broken, prefix-less string instead of a working URI,
+undermining the one property Fallback Hint exists to guarantee: *any*
+decoder recognizing the Type gets a complete, usable URI, no sub-feature
+support required. A few bytes saved on an already-short field isn't
+worth trading that guarantee away — the escape hatch this comparison
+started with, actually exercised rather than left theoretical.
+
+**Out of scope, and stated as a deliberate boundary rather than a gap:
+Device Information RTD, Verb RTD, and the entire Connection Handover
+family** (Alternative Carrier, Handover Request/Select/Mediation).
+Connection Handover is a live, bidirectional negotiation protocol —
+two devices exchanging multiple messages (Requester, Selector, and
+optionally a Mediator) to agree on a Bluetooth or WiFi carrier for
+further data exchange. QDEF has no notion of a session, a response, or
+a multi-message exchange anywhere in its design — it is a static,
+scan-once, one-way format, full stop. Representing Handover's state
+machine inside QDEF Records would mean growing an entirely foreign
+concept into the format's core model for a use case QDEF was never
+aimed at. Device Information RTD and Verb RTD are both tightly coupled
+to that same device-pairing use case, so the identical reasoning
+applies to both. This is the clearest instance of the "acceptable not to
+convert" escape hatch this whole comparison was framed around from the
+start.
+
+**Already tracked, not newly in scope.** Signature RTD's job is already
+covered by QDEF's own planned Sign/detached-authenticity wrapper —
+direction decided (content-hash-based coverage, sibling not wrapper
+form), prerequisite (canonical encoding) resolved, but not built,
+waiting for a real adopter's actual need (see "Sign / detached-
+authenticity wrapper," below). NDEF conversion is a new argument for
+prioritizing it sooner, not a reason to change the existing plan or
+build it speculatively ahead of a real want.
+
 ## Why not just carry a literal NDEF message as the QR byte-mode payload, instead of a new format?
 
 It's technically possible — nothing stops encoding actual NDEF bytes into
