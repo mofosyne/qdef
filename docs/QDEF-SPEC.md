@@ -1054,6 +1054,27 @@ namespace value applies to every Record in that code's own Sequence *and*
 to whatever Record a Wrapper stack (Split/Compress/Encrypt) in that
 Sequence ultimately resolves to, once fully unwrapped.
 
+**A Wrapper-wrapped Record's inner Type ID is never bare and never
+repeated the way a plain sibling Record's is — worth stating as its own
+principle, since it changes the byte-cost math for whether
+namespace-scoping a given Type ID actually pays off.** A plain sibling
+Record with a namespace-scoped Type ID is typically repeated verbatim
+across every code (for the same resilience reasons as the discriminator
+itself), so shrinking its Type ID to a namespace-scoped odd uint saves
+that shrink *N times* — once per code it's repeated on. A Type ID only
+reachable after a Wrapper stack (Split/Compress/Encrypt) fully resolves
+is structurally different: it exists exactly once, fragmented or
+otherwise encoded across the group, reconstructed once at the end — so
+shrinking *that* Type ID saves the shrink exactly *once* for the whole
+group, not once per code. When computing whether a given Type ID is
+worth namespace-scoping, use the repeated-savings math (below) for a
+plain sibling and the one-time saving for a Wrapper-reachable one — they
+are not the same calculation, and conflating them overstates a
+Wrapper-reachable ID's contribution to clearing the discriminator's
+own per-code repetition cost. See DESIGN.md's "Namespace repetition
+across a multi-code Split group" for a worked example of exactly this
+distinction.
+
 **This has a real wire-code cost, now cheaper than the earlier
 optional-Record design — verified against the actual encoder, not
 assumed.** Repeating a decentralized-namespace discriminator (a bare
@@ -1114,6 +1135,31 @@ own domain-specific Record Types ([EXAMPLES.md](EXAMPLES.md)) — who governs *t
 allocation is still open (§8), but at least the two registries are
 partitioned by construction and can't collide.
 
+**Currently assigned Type IDs — the complete list, gathered in one
+place.** Each is defined in full in its own subsection below; this
+table exists purely so an implementer can check or cross-reference an
+ID at a glance without hunting through prose, since a typo here (using
+the wrong number for a standard record type) collides silently with
+whatever real ID that number belongs to instead of failing loudly:
+
+```
++------+------------------+---------+---------------------------------+
+| ID   | Record Type      | Section | Notes                          |
++------+------------------+---------+---------------------------------+
+|  2   | Split            | §4.1    | Fragment reassembly / parity    |
+|  4   | Encrypt          | §4.1    | AEAD (e.g. AES-256-GCM)         |
+|  6   | Media Payload    | §4.3    | Typed binary content            |
+|  8   | Compress         | §4.1    | DEFLATE                         |
+| 10   | Fallback Hint    | §4.2    | URI fallback for unaware readers|
+| 12   | App Route        | §4.4    | Application dispatch/routing    |
++------+------------------+---------+---------------------------------+
+```
+
+All six are placeholders pending a real registry authority (§8), not
+protected allocations — see "Registering a real Type ID before
+governance exists," below, for what that means for an adopter shipping
+against one of these numbers today.
+
 **Type ID allocation ranges** (adapted from CBOR's tag registry pattern,
 RFC 8949 §9.2):
 
@@ -1157,6 +1203,62 @@ permanently — not merely "not yet registered"). No registry authority
 exists today for *any* uint tier (§8) — that's a separate, current-state
 fact from which of these three collision-safety models a given tier is
 *intended* to use once one does.
+
+**Choosing a Type ID form.** Six mechanisms sit above, each solving
+collision-safety a different way — real implementer feedback is that
+picking the right one for a given Record Type isn't obvious from the
+table alone. Work through these questions in order; stop at the first
+`YES`:
+
+```
+1. Is this part of QDEF's own standard-record-type infrastructure
+   (a Wrapper Record or similar mechanism, not application content)?
+     YES -> even uint 0-22 (Standards Action, spec-maintained -- not
+            something an application ever picks for itself)
+
+2. Do you want this Type eventually recognized by unrelated
+   implementers, even though no registry exists yet (§8)?
+     YES -> even uint 100-32767 (Specification Required / common
+            vocabulary). Ship now with an illustrative number, or use
+            a decentralized byte string as a provisional placeholder
+            (step 5) with a clean promotion path later via a backup
+            typeID (§3.1).
+
+3. Does your application already have -- or are you willing to
+   declare -- a namespace (your own allocated one, or a self-chosen
+   decentralized one)?
+     YES -> a small sequential odd uint (1, 3, 5...) inside that
+            namespace. The cheapest option (as little as 1 byte), and
+            if your carrier already isolates you (own URI scheme, own
+            NDEF MIME type), the namespace itself can be implied by
+            that carrier and never transmitted at all (§3.5) -- so
+            this option is usually available "for free" even without
+            wanting to pay for an explicit namespace declaration.
+
+4. Do you need this specific ID to be independently self-certifying
+   -- verifiable against its own name by anyone, with no namespace or
+   registry involved at all?
+     YES -> a decentralized byte string, hash-derived from a qualified
+            name (§3.1's self-certifying strengthening). This is the
+            one job nothing else here can do; it is not a general
+            substitute for step 3.
+
+5. Is your carrier already isolated, and you're accepting that its
+   safety is carrier-dependent (§3.5's caution) rather than reaching
+   for step 3's implied-namespace pattern instead?
+     YES -> a self-allocated even uint, 32768+ (First Come First
+            Served). Cheapest form available, but re-read step 3 first
+            -- the implied-namespace pattern costs the same and is
+            strictly safer for an already-isolated carrier.
+     NO  -> you need a namespace after all; go back to step 3.
+```
+
+Most application Record Types resolve at step 3 — a declared namespace,
+implied or explicit, with small sequential odd uints inside it. Steps 2,
+4, and 5 are each real, but narrower than they might first appear; see
+DESIGN.md's "Registry governance" and FINDINGS.md #29/#30 for the full
+reasoning behind why namespace-scoping is the default rather than any
+of the alternatives.
 
 ### 4.1 Wrapper Records (optional)
 

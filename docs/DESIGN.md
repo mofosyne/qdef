@@ -1335,6 +1335,22 @@ where Body's one-time saving doesn't stack with a per-code tax the way
 two *repeating* IDs would) — it just isn't the general rule this section
 implied. Fixed the stale examples in both places; see FINDINGS.md.
 
+**Stated as its own general principle, not just a footnote on one worked
+scenario — a real implementer-facing gap, closed after being asked how
+much it actually mattered in practice.** The distinction buried in the
+paragraph above generalizes: a plain sibling Record's namespace-scoped
+Type ID is typically repeated on every code, so shrinking it saves the
+shrink *N times*; a Type ID only reachable after a Wrapper stack fully
+resolves exists exactly once for the whole group (fragmented or
+otherwise encoded, reconstructed once), so shrinking it saves the shrink
+*exactly once*, full stop — never something that scales with code count.
+Getting this backwards — crediting a Wrapper-reachable ID's shrink as if
+it repeated N times — overstates how quickly a repeating discriminator's
+own per-code cost gets cleared. Worth being explicit about since nothing
+forces an implementer doing this math themselves to notice the
+difference; the "Preview vs. Body" example above is one instance of the
+general rule, not a special case. Now also stated directly in spec §3.5.
+
 **Superseded numbers, not re-derived here.** The `8 bytes` repeated-header
 cost above was the optional Type `0` Record's cost; the mandatory
 container discriminator (["Container discriminator

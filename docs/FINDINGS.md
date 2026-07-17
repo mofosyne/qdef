@@ -1433,3 +1433,44 @@ whichever registry eventually governs the Allocated tier (or looking at
 older content predating one), can read the namespace's own name straight
 off the wire instead of guessing or needing external lookup. Same job
 Type Hint (§3.1) already does for Record Type IDs, one level up.
+
+### 31. Three documentation-clarity gaps, surfaced by implementer-experience-shaped feedback: a buried cost-math distinction, no decision guide for six Type ID mechanisms, and no single scannable list of assigned IDs
+
+None of these change the wire format or any decoder's behavior — all
+three are about a reader/implementer being able to find and apply
+information that was already correct, just hard to locate.
+
+**A Wrapper-wrapped Record's inner Type ID is never bare and never
+repeated the way a plain sibling Record's is, and that changes
+namespace-scoping cost math — the fact was already present, but only as
+a parenthetical aside on one specific worked example ("Namespace
+repetition across a multi-code Split group," above), not stated as its
+own general principle.** A plain sibling Record's namespace-scoped Type
+ID is typically repeated on every code, so shrinking it saves the shrink
+*N times*; a Type ID only reachable after a Wrapper stack fully resolves
+exists exactly once for the whole group, so shrinking it saves the
+shrink *exactly once* — never something that scales with code count.
+Conflating the two overstates how quickly a repeating discriminator's
+own per-code cost gets cleared. Stated as its own clearly-labeled
+principle in both `DESIGN.md` and spec §3.5, rather than left implicit
+in a footnote about a different correction.
+
+**Six Type ID mechanisms (§4's range table) with no guide for picking
+among them — real feedback was that the taxonomy took multiple
+clarifying rounds even with direct access to ask.** Added a step-by-step
+decision tree to spec §4, ordered so most application Record Types
+resolve at step 3 (a declared namespace, implied or explicit, with small
+sequential odd uints inside it) — matching where this project's own
+analysis (Findings #29/#30) already concluded most real usage should
+land, now made discoverable without having to reconstruct the reasoning
+from scattered sections.
+
+**No single place listing every currently-assigned standard Record Type
+ID, only prose scattered across §4.1–§4.4 — a real implementation-
+mistake risk, not just an inconvenience.** A typo here (the wrong number
+for a standard Type) collides silently with whatever real ID that number
+belongs to, rather than failing loudly the way an unrecognized ID would.
+Added a compact, scannable table gathering all six assigned IDs (Split
+`2`, Encrypt `4`, Media Payload `6`, Compress `8`, Fallback Hint `10`,
+App Route `12`) in one place at the top of §4, cross-referencing each
+one's full definition rather than duplicating it.
