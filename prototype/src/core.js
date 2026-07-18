@@ -54,7 +54,7 @@ function encodeContainer(records, discriminator) {
  * @param {Object} record
  * @param {Array<number|bigint|Buffer>} record.typeIds
  * @param {Map<number, any>} [record.fields]
- * @param {number|bigint|Buffer} [record.localNamespace] - if given, wraps
+ * @param {Buffer} [record.localNamespace] - if given, wraps
  *   the primary typeID (typeIds[0]) in a namespace-pairing prefix item
  *   ([localNamespace, typeIds[0]]) instead of encoding it bare. See
  *   isNamespacePairing below. Backup typeIDs (typeIds[1+]) are always
@@ -244,11 +244,11 @@ function isTypeId(item) {
 /**
  * Check if a decoded CBOR item is a namespace-pairing prefix item: a
  * definite-length array of exactly 2 elements, [namespace, typeId],
- * where namespace is a valid Namespace ID (uint > 0, or byte string —
+ * where namespace is a byte string (the only valid Namespace ID shape —
  * same convention as the container discriminator's namespace value,
- * §3.5) and typeId is a uint (even = Allocated/global, odd = Scoped to
- * this specific namespace, overriding any container-level ambient
- * namespace for this one Record).
+ * §3.5; there is no Allocated/uint namespace tier) and typeId is a uint
+ * (even = Allocated/global, odd = Scoped to this specific namespace,
+ * overriding any container-level ambient namespace for this one Record).
  *
  * Purely structural: this function does not interpret what a namespace
  * IS or how it affects lookup — it only recognizes the shape so Phase 1
@@ -258,15 +258,16 @@ function isTypeId(item) {
  * string is deliberately never valid as the *typeId* half of a pairing
  * — decentralized Record IDs stay a separate, unpaired, always-global
  * mechanism (§3.1); pairing exists only to let a uint Record ID declare
- * or override its namespace inline.
+ * or override its namespace inline. A uint in the *namespace* slot is no
+ * longer recognized at all — this item simply isn't a namespace-pairing
+ * item then, and falls through to being treated as an ordinary
+ * unrecognized prefix item, same as any other unrecognized 2-element
+ * array.
  */
 function isNamespacePairing(item) {
   if (!Array.isArray(item) || item.length !== 2) return false;
   const [ns, id] = item;
-  const nsValid =
-    (typeof ns === 'number' && Number.isInteger(ns) && ns > 0) ||
-    (typeof ns === 'bigint' && ns > 0n) ||
-    Buffer.isBuffer(ns);
+  const nsValid = Buffer.isBuffer(ns);
   const idValid =
     (typeof id === 'number' && Number.isInteger(id) && id >= 0) ||
     (typeof id === 'bigint' && id >= 0n);

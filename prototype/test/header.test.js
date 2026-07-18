@@ -27,16 +27,15 @@ test('a decentralized-namespace discriminator (byte string) round-trips, no hint
   assert.equal(h.hint, undefined);
 });
 
-test('an allocated-namespace discriminator (small uint) round-trips', () => {
+test('a nonzero uint discriminator is no longer a recognized namespace shape -- degrades gracefully (there is no Allocated namespace tier)', () => {
   const container = core.encodeContainer(
     [{ typeIds: [100], fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) }],
     500,
   );
 
-  const { discriminator } = core.decodeContainer(container);
-  const h = header.parseDiscriminator(discriminator);
-
-  assert.equal(h.namespace, 500);
+  const { discriminator, records } = core.decodeContainer(container);
+  assert.equal(header.parseDiscriminator(discriminator), undefined);
+  assert.equal(records[0].typeId, 100); // Records after it are unaffected
 });
 
 test('the default discriminator (bare uint 0) means no namespace declared', () => {
@@ -53,7 +52,7 @@ test('the default discriminator (bare uint 0) means no namespace declared', () =
 });
 
 test('the full map-form discriminator round-trips namespace and hint, for cases needing more than a bare id/hint pair', () => {
-  const namespace = 12271745624591856273n;
+  const namespace = Buffer.from('a9d6e1f30b7c4482', 'hex');
   const fullForm = new Map([
     [header.HEADER_NAMESPACE_KEY, namespace],
     [header.HEADER_NAMESPACE_HINT_KEY, 'com.example/tagdrop-paper'],
@@ -63,7 +62,7 @@ test('the full map-form discriminator round-trips namespace and hint, for cases 
   const { discriminator } = core.decodeContainer(container);
   const h = header.parseDiscriminator(discriminator);
 
-  assert.equal(h.namespace, namespace);
+  assert.ok(h.namespace.equals(namespace));
   assert.equal(h.hint, 'com.example/tagdrop-paper');
 });
 
@@ -91,9 +90,9 @@ test('arrays are no longer a recognized discriminator shape (post-collapse) -- e
   }
 });
 
-test('the map form also carries the decentralized backup namespace (key 5), for the same all-three-together case the array forms used to cover', () => {
-  const namespace = 500;
-  const decentralizedBackup = Buffer.from('a1b2c3d4', 'hex');
+test('the map form also carries a second, backup namespace (key 5) for a length-promotion transition, for the same all-three-together case the array forms used to cover', () => {
+  const namespace = Buffer.from('a9d6e1f30b7c4482', 'hex'); // the new, longer namespace
+  const decentralizedBackup = Buffer.from('a1b2c3d4', 'hex'); // the old, shorter one
   const fullForm = new Map([
     [header.HEADER_NAMESPACE_KEY, namespace],
     [header.HEADER_NAMESPACE_HINT_KEY, 'com.example/tagdrop-paper'],
@@ -104,7 +103,7 @@ test('the map form also carries the decentralized backup namespace (key 5), for 
   const { discriminator } = core.decodeContainer(container);
   const h = header.parseDiscriminator(discriminator);
 
-  assert.equal(h.namespace, namespace);
+  assert.ok(h.namespace.equals(namespace));
   assert.equal(h.hint, 'com.example/tagdrop-paper');
   assert.deepEqual(h.decentralizedBackup, decentralizedBackup);
 });
@@ -146,8 +145,9 @@ test('the container is exactly magic + discriminator + CBOR Sequence, no version
 // ---------------------------------------------------------------------
 
 test('even uint Type IDs always resolve globally, regardless of namespace', () => {
+  const namespace = Buffer.from('6f6f6f6f', 'hex');
   for (const typeId of [0, 2, 4, 8, 100, 998, 32768]) {
-    const withNamespace = header.resolveLookupKey({ namespace: 111n }, typeId);
+    const withNamespace = header.resolveLookupKey({ namespace }, typeId);
     const withoutNamespace = header.resolveLookupKey(undefined, typeId);
 
     assert.deepEqual(withNamespace, { scope: 'global', typeId },
@@ -158,12 +158,14 @@ test('even uint Type IDs always resolve globally, regardless of namespace', () =
 });
 
 test('odd uint Type IDs resolve as namespace-scoped when a namespace is declared', () => {
-  const keyA = header.resolveLookupKey({ namespace: 111n }, 32769);
-  const keyB = header.resolveLookupKey({ namespace: 222n }, 32769);
+  const namespaceA = Buffer.from('11111111', 'hex');
+  const namespaceB = Buffer.from('22222222', 'hex');
+  const keyA = header.resolveLookupKey({ namespace: namespaceA }, 32769);
+  const keyB = header.resolveLookupKey({ namespace: namespaceB }, 32769);
 
   assert.notDeepEqual(keyA, keyB);
-  assert.deepEqual(keyA, { scope: 'namespace', namespace: 111n, typeId: 32769 });
-  assert.deepEqual(keyB, { scope: 'namespace', namespace: 222n, typeId: 32769 });
+  assert.deepEqual(keyA, { scope: 'namespace', namespace: namespaceA, typeId: 32769 });
+  assert.deepEqual(keyB, { scope: 'namespace', namespace: namespaceB, typeId: 32769 });
 });
 
 test('odd uint Type IDs throw without a declared namespace', () => {
@@ -179,7 +181,8 @@ test('odd uint Type IDs throw without a declared namespace', () => {
 
 test('byte string Type IDs always resolve globally', () => {
   const byteId = Buffer.from('A7F90B3C', 'hex');
-  const withNamespace = header.resolveLookupKey({ namespace: 111n }, byteId);
+  const namespace = Buffer.from('6f6f6f6f', 'hex');
+  const withNamespace = header.resolveLookupKey({ namespace }, byteId);
   const withoutNamespace = header.resolveLookupKey(undefined, byteId);
 
   assert.deepEqual(withNamespace, { scope: 'global', typeId: byteId });
@@ -192,13 +195,14 @@ test('a common-vocabulary Type ID stays global even inside a declared namespace'
     return GLOBAL_KNOWN_TYPES.get(typeId);
   }
 
-  const key = header.resolveLookupKey({ namespace: 12271745624591856273n }, 100);
+  const namespace = Buffer.from('a9d6e1f30b7c4482', 'hex');
+  const key = header.resolveLookupKey({ namespace }, 100);
   assert.deepEqual(key, { scope: 'global', typeId: 100 });
   assert.equal(naiveDispatch(key.typeId), 'Wi-Fi Provisioning');
 });
 
 test("TagDrop's migration case: old global byte string ID keeps working, new namespace-scoped odd uint for 'the same' logical type never collides", () => {
-  const TAGDROP_NAMESPACE = 12271745624591856273n;
+  const TAGDROP_NAMESPACE = Buffer.from('a9d6e1f30b7c4482', 'hex');
   const OLD_GLOBAL_TYPE_ID = Buffer.from('A7F90B3CDE123456', 'hex');
   const NEW_NAMESPACE_LOCAL_ID = 32769;
 

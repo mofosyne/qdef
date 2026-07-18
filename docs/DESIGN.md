@@ -91,12 +91,12 @@ on:
   every Record Type, forever) — see "Namespace-scoped Type IDs," below.
   The "cost" is that the namespace operator has to not reuse a number
   they've already issued themselves, which is trivial for whoever
-  controls one namespace. This holds regardless of whether the namespace
-  itself is centrally allocated or self-chosen/decentralized — that
-  choice is what a byte string namespace value is actually for now (see
-  "Governed vs. ungoverned," below); it's a namespace-operator-governance
-  lever, not a per-Record-Type identity mechanism, once a real adopter's
-  actual practice (TagDrop) was checked against it. A byte string
+  controls one namespace. A namespace value is always a self-chosen byte
+  string (see "Governed vs. ungoverned," below, and "Namespace IDs are
+  always Decentralized," further down, for why there's no Allocated/uint
+  namespace tier to choose instead) — once a real adopter's actual
+  practice (TagDrop) was checked against it, that turned out to be what
+  namespace operators actually do anyway. A byte string
   *Type ID* keeps exactly one job a namespace-scoped uint structurally
   can't do: standing alone as an independently self-certifying identity,
   verifiable against its own name with no namespace, registry, or
@@ -179,11 +179,16 @@ that's the actual line, not tier width or magnitude:**
 +------------------------+------------------+-------------+-------------+
 ```
 
-Namespace IDs (§3.5) reuse this identical shape one level up, since they
-use the same uint/byte-string convention as Type IDs: an Allocated
-(uint) namespace inherits the same Specification-Required/First-Come
-split, a Decentralized (byte string) namespace is permanently ungoverned
-the same way a decentralized Type ID is.
+Namespace IDs (§3.5) do **not** reuse this table the way an earlier
+draft assumed — that assumption didn't survive contact with what a real
+adopter (TagDrop) actually does. A namespace value is always
+Decentralized (byte string); there is no Allocated (uint) namespace tier
+to inherit the Specification-Required/First-Come split from, and
+therefore no governed row applies at this layer at all. See "Namespace
+IDs are always Decentralized," below, for the full reasoning — the short
+version is that a namespace is the global root of trust for everything
+scoped inside it, which makes its collision-safety needs different in
+kind from a Type ID's, not just a smaller instance of the same table.
 
 **Why First Come First Served has to mean "eventually recorded," not
 "permanently informal," or the tier is pointless.** If it meant the
@@ -256,6 +261,124 @@ Route (§4.4) without App Route's domain-verified trust model behind it.
 Use App Route explicitly when routing is the actual goal; don't let a
 Type-ID-prefix convention become an accidental second routing channel
 nobody decided to build.
+
+## Namespace IDs are always Decentralized — the Allocated (uint) namespace tier was dropped
+
+Raised directly, continuing the "too many shapes to reason about"
+simplification thread that also produced the discriminator-shape
+collapse (see FINDINGS.md): does QDEF's namespace layer actually need
+the same governed/ungoverned choice §3.1 gives Record Type IDs, or was
+that duplication carried over from Type IDs without checking whether it
+earns its keep one level up? A concrete data point resolved it: TagDrop,
+the project's one real adopter, already treats its namespace as always
+decentralized. Combined with the observation that a namespace is
+architecturally different from a Type ID — it's the *global root of
+trust* for everything scoped inside it (two colliding namespaces means
+every Type ID scoped to each collides too, not just one identity), and
+it's exactly the kind of value that ends up baked into physical,
+already-printed QR/NFC media with no way to fix a bad choice
+retroactively — the Allocated (uint) namespace tier was dropped
+entirely. A namespace value is now always a byte string; there is no
+"registered/common-vocabulary" numeric option to choose instead.
+
+**Concrete effects of dropping it:**
+
+- The container discriminator's shape table drops from four recognized
+  shapes to three (`uint 0`, byte string, map) — any nonzero uint now
+  degrades gracefully to "no namespace," the same treatment an
+  unrecognized shape already got, rather than meaning "Allocated
+  Namespace ID."
+- §3.1's namespace-*pairing* prefix item (`[namespace, typeId]`) is
+  affected identically, since it always followed the same
+  uint-or-byte-string convention: a uint in the `namespace` slot is no
+  longer recognized as a pairing item at all, and the array falls
+  through to being an ordinary unrecognized prefix item — meaningfully
+  different from before, since that now costs the Record its only
+  typeID, not just its namespace. Fixed identically in both
+  `prototype/src/core.js`'s `isNamespacePairing` and
+  `rust/qdef-core`'s `parse_namespace_pairing`, so the two
+  implementations can't drift on this axis. Regenerated
+  `rust/qdef-core/src/fixtures.rs` to match (the old
+  `ALLOCATED_NAMESPACE_PAIRING_CONTAINER` fixture is now
+  `UINT_NAMESPACE_SLOT_UNRECOGNIZED_CONTAINER`, same encoded bytes,
+  different meaning).
+- §3.5's Hint-name guidance simplifies too: a namespace Hint is now
+  *always* the fully self-certifying, hash-verifiable case (§3.1's
+  strengthening applies to every namespace, since every namespace is a
+  byte string), never the weaker "plain, unverifiable recovery name"
+  case a uint Type ID hint is stuck with. One fewer distinction a reader
+  has to track.
+
+**Byte-length policy, worked out from the actual collision math rather
+than picked by feel.** Checked the birthday-bound numbers directly
+rather than trusting intuition about keyspace size — the naive read
+("`2^24` is 16.7 million possibilities, plenty") is wrong for
+self-allocated IDs with no coordination, because the safe *population*
+a width supports is governed by `√N`, not `N`:
+
+```
+bytes | keyspace (N) | wire cost | namespaces for 1% risk | for 1-in-a-million
+------|---------------|-----------|-------------------------|--------------------
+  3   | 16.7M         | 4 bytes   | 579                     | 6
+  4   | 4.3B          | 5 bytes   | 9,268                   | 93
+  5   | 1.1T          | 6 bytes   | 148,291                 | 1,483
+  8   | 18.4Qi        | 9 bytes   | 607M                    | 6.07M
+```
+
+3 bytes reaches meaningful collision risk (~3%) at just 1,000
+independent picks, and is essentially guaranteed to collide by 10,000 —
+not a hypothetical scale for an open format that could plausibly see a
+few thousand independent adopters over a decade. **Resolution: self-
+certify freely at 4 bytes or longer (no coordination needed); shorter
+than 4 bytes is reserved, not self-allocatable** — safe only with
+uniqueness actually guaranteed by direct coordination, and there is no
+formal registry process for that today, deliberately (see "Standard
+library governance," above, for why this project's registry effort is
+aimed at growing §4's standard record types instead, not at operating a
+namespace-allocation bureaucracy). A sub-4-byte namespace is something
+to ask for directly if the need is ever real, not infrastructure worth
+pre-building on spec.
+
+**A hybrid was considered and rejected: registry-*curated* allocation
+specifically for the 1–3 byte range, self-certification above it.**
+Structurally this actually works better than the birthday-bound numbers
+above suggest — a registry that reviews before granting sidesteps the
+birthday bound entirely (curated allocation gets the *full* keyspace,
+not `√N`, the same way any reviewed numeric tier does), so a curated
+1–3-byte tier could genuinely serve the rare case that needs an
+ultra-compact ID. Rejected anyway, for the same reason the Allocated
+namespace tier itself was dropped: it reintroduces exactly the
+governed/ungoverned split this whole simplification pass was cutting,
+for a self-admittedly niche need, and requires an actual operating
+authority to review requests — the same "don't build registry
+infrastructure ahead of real demand" discipline already applied
+everywhere else in this project (Type IDs, App Route, everything). If
+someone concrete ever needs a 1–3 byte namespace, that's a real
+conversation to have then; nothing about the wire format needs to
+anticipate it now, since the byte string shape already accepts any
+length without a new CBOR shape.
+
+**Why the 4-byte floor doesn't bend toward a smaller, more "honest"
+population estimate.** A fair objection: QDEF is a niche format, and the
+real long-run number of independent namespaces might plausibly be far
+smaller than the 1,000+ figures the table above uses — maybe closer to
+10–20. Worth taking seriously, but it shouldn't move the floor, because
+of an asymmetry specific to this format: over-provisioning length costs
+a few extra bytes, once, forever negligible against any realistic
+payload. Under-provisioning is unfixable — it's baked into physical
+media the moment the format succeeds beyond whatever the humble estimate
+assumed, with no way to reissue what's already printed. Given that
+asymmetry, sizing for a plausible-upside scenario is the only choice
+that doesn't risk being caught out by the format's own success. (One
+genuinely resolved sub-question here: does a namespace minted short and
+early become retroactively unsafe once later adopters pick longer
+lengths? No — different-length byte strings can never be byte-for-byte
+equal to begin with, so cross-length collision is structurally
+impossible; a length is only ever at risk from *other* namespaces
+choosing that exact same length, never from the ecosystem growing at
+other lengths. This is what makes "self-certify at 4+ bytes, no
+coordination" durable regardless of how namespace-length choices spread
+out over time.)
 
 ## Registry entry template — a concrete, documentable shape, not yet a process
 
@@ -509,6 +632,24 @@ Related but narrower (spec §4): who maintains the reserved `1`–`99` range
 itself — additions like §4.1/§4.2/§4.3 need some process for becoming
 part of "the standard record types" rather than just another vendor's Record Type
 squatting on a low number.
+
+**This is where a QDEF registry's effort is actually best spent — not on
+allocating namespace or application-specific Type IDs.** Namespace IDs
+are always self-certifying now (no Allocated tier, "Namespace IDs are
+always Decentralized," below) and application Type IDs inside a declared
+namespace are the namespace operator's own numbering to manage — neither
+needs a central authority at all, by design. What genuinely benefits
+from shared, reviewed curation is the opposite direction: growing §4's
+common vocabulary itself (new standard record types any conformant
+decoder can recognize, the way `Split`/`Compress`/`Encrypt`/`Fallback
+Hint`/`Media Payload`/`App Route` already do) so unrelated apps get
+*more* structure they don't have to invent themselves, rather than a
+registry whose main effect would be encouraging every app to mint and
+register its own bespoke namespace instead of reaching for what's
+already standard. A registry that reviews and extends §4 is worth
+building when there's real demand for it; a registry that allocates
+namespace or app-specific Type IDs was never worth building at all,
+since self-certification already does that job for free.
 
 ## Magic-header overhead for QR
 
@@ -1940,13 +2081,16 @@ routing form):
 +-------------------------------------------------+-------+
 | Form                                             | bytes |
 +-------------------------------------------------+-------+
-| [Allocated Namespace ID, scoped typeId]          |     4 |
 | [Decentralized Namespace ID (4B), scoped typeId] |     7 |
 | standalone decentralized Record ID (4B, today)   |     5 |
 +-------------------------------------------------+-------+
 ```
 
-A decentralized pairing costs *more* than a plain standalone
+(An Allocated/uint namespace row previously appeared here too; removed
+once the Allocated namespace tier itself was dropped — see "Namespace
+IDs are always Decentralized," below.)
+
+A pairing costs *more* than a plain standalone
 decentralized Record ID (7 > 5) — it bundles a full namespace
 declaration onto the one Record using it. So this mechanism doesn't
 replace, and shouldn't be reached for instead of, either the container
@@ -1970,12 +2114,13 @@ recognizes the pairing shape, `encodeRecordBytes` takes an optional
 (`resolveLookupKeyForRecord`), `prototype/src/wrappers.js`
 (`resolveStack`'s terminal-Record resolution prefers a local override),
 and `prototype/test/record-namespace-pairing.test.js` — round-trip for
-both Allocated and Decentralized namespace forms, local-overrides-
-ambient and falls-back-to-ambient resolution, the even-typeId-is-vacuous
-case, backup-typeID interaction (the same promotion pattern §3.1 already
-uses, applied to a namespace-scoped primary), a `resolveStack` case
-where the Wrapper-resolved terminal Record carries its own override, and
-the byte-cost FINDING above.
+the Decentralized namespace form (the only valid one; a uint in the
+namespace slot is confirmed to fall through as unrecognized), local-
+overrides-ambient and falls-back-to-ambient resolution, the
+even-typeId-is-vacuous case, backup-typeID interaction (the same
+promotion pattern §3.1 already uses, applied to a namespace-scoped
+primary), a `resolveStack` case where the Wrapper-resolved terminal
+Record carries its own override, and the byte-cost FINDING above.
 
 Cross-validated in `rust/qdef-core`: `parse_record`'s Phase 1 gained the
 identical structural recognition rule (a definite-length 2-element array

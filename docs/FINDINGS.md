@@ -1746,3 +1746,90 @@ group now resolves correctly; codes genuinely disagreeing on a
 byte-string namespace (different content, same length) are still
 correctly rejected; and `namespaceEquals` is checked directly against a
 number/bigint pair for the same value.
+
+### 36. The Allocated (uint) namespace tier was dropped — namespace IDs are always Decentralized now
+
+Continuing the same "too many shapes to reason about" thread that
+produced #34's discriminator collapse: does the namespace layer actually
+need the same governed/ungoverned choice §3.1 gives Record Type IDs, or
+was that duplication inherited from Type IDs without checking whether it
+earns its own keep one level up? Resolved with a concrete data point
+rather than more abstract reasoning: TagDrop, the project's one real
+adopter, already treats its namespace as always decentralized in
+practice. Combined with recognizing a namespace is architecturally
+different from a Type ID — it's the *global root of trust* for
+everything scoped inside it, and it's exactly the value most likely to
+end up baked into physical, already-printed QR/NFC media with no way to
+retroactively fix a bad choice — the Allocated (uint) namespace tier was
+dropped entirely. A namespace value is now always a byte string.
+
+**Cascading effects, all fixed together rather than left to drift:** the
+container discriminator's shape table drops to three real shapes (`uint
+0`, byte string, map) — any nonzero uint now degrades gracefully to "no
+namespace" instead of meaning "Allocated Namespace ID." §3.1's
+namespace-*pairing* prefix item followed the identical uint-or-
+byte-string convention, so it needed the identical fix: a uint in the
+`namespace` slot of `[namespace, typeId]` is no longer recognized as a
+pairing item at all, meaningfully different from before, since the
+Record now loses its only typeID (not just its namespace) and becomes
+unroutable. Fixed identically in `prototype/src/core.js`'s
+`isNamespacePairing` and `rust/qdef-core`'s `parse_namespace_pairing`,
+with `rust/qdef-core/src/fixtures.rs` regenerated to match (the old
+`ALLOCATED_NAMESPACE_PAIRING_CONTAINER` fixture is now
+`UINT_NAMESPACE_SLOT_UNRECOGNIZED_CONTAINER`, same bytes, corrected
+meaning and assertions). A namespace Hint is now always the fully
+self-certifying case too (§3.1's hash-verification strengthening applies
+to every namespace, since every namespace is a byte string) — one fewer
+distinction to track versus Type ID hints, which stay split between the
+plain (uint) and self-certifying (byte string) cases.
+
+**Byte-length policy, grounded in the actual birthday-bound math rather
+than picked by feel.** The naive read of keyspace size is wrong for
+self-allocated IDs with no coordination — the population a width safely
+supports is governed by `√N`, not `N`. Checked directly: 3 bytes (`2^24`)
+reaches ~3% collision risk at just 1,000 independent picks and is
+essentially guaranteed to collide by 10,000; 4 bytes (`2^32`) stays
+comfortable into the tens of thousands. **Resolution: self-certify
+freely at 4 bytes or longer (no coordination needed); shorter is
+reserved, not self-allocatable** — safe only with uniqueness guaranteed
+by direct coordination, which has no formal registry process today,
+deliberately (see DESIGN.md's "Standard library governance," expanded
+alongside this finding: a QDEF registry's real value is growing §4's
+shared standard record types, not allocating namespace or app-specific
+Type IDs that self-certification already handles for free).
+
+**A hybrid was considered and rejected: registry-curated allocation
+specifically for a 1–3 byte range, self-certification above it.**
+Structurally sound — curated allocation sidesteps the birthday bound
+entirely, getting the full keyspace instead of `√N`, the same way any
+reviewed numeric tier does — but rejected for reintroducing the exact
+governed/ungoverned split this whole pass was cutting, for a
+self-admittedly niche need, without a real operating authority to run
+it. Same "don't build registry infrastructure ahead of real demand"
+discipline already applied to Type IDs and App Route elsewhere in this
+project.
+
+**The 4-byte floor deliberately doesn't bend toward a smaller, more
+"honest" population estimate**, even though one was raised directly:
+QDEF being a niche format, the real long-run namespace count might
+plausibly be closer to 10–20 than 1,000+. Not disputed as a median
+guess — but the two ways to be wrong about it aren't symmetric.
+Over-provisioning costs a few bytes, once, forever negligible.
+Under-provisioning is unfixable the moment it's printed on physical
+media the format succeeds beyond the humble estimate. That asymmetry is
+why the floor is sized for a plausible-upside scenario, not the median
+one. Separately confirmed and load-bearing for this whole resolution:
+different-length byte strings can never be byte-for-byte equal, so
+cross-length collision is structurally impossible — a namespace minted
+short and early is never retroactively endangered by other adopters
+later choosing longer lengths, only by other adopters choosing that same
+short length. That's what makes "self-certify at 4+ bytes, no
+coordination, no need to track ecosystem-wide adoption over time"
+durable rather than a ticking clock.
+
+Full reasoning, the birthday-math table, and the rejected-hybrid
+analysis in DESIGN.md's "Namespace IDs are always Decentralized"
+section. Prototyped and cross-validated in both `prototype/src/core.js`
+/ `prototype/src/header.js` and `rust/qdef-core`, all tests updated
+in-place to construct namespace values as byte strings throughout rather
+than left pointing at a now-nonexistent shape.

@@ -284,14 +284,17 @@ fn namespace_pairing_prefix_item_yields_the_nested_typeid_and_the_raw_namespace(
 }
 
 #[test]
-fn namespace_pairing_accepts_an_allocated_uint_namespace_too() {
+fn a_uint_in_the_namespace_pairing_slot_is_no_longer_recognized() {
+    // There is no Allocated (uint) namespace tier -- [100, 1] is not a
+    // namespace-pairing item anymore, so it falls through to being an
+    // ordinary unrecognized prefix item. The Record loses its only
+    // typeID as a result, not just its namespace.
     let container =
-        Container::parse(ALLOCATED_NAMESPACE_PAIRING_CONTAINER).expect("valid container");
+        Container::parse(UINT_NAMESPACE_SLOT_UNRECOGNIZED_CONTAINER).expect("valid container");
     let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
     let rec = &records[0];
-    assert!(!rec.ignored);
-    assert_eq!(rec.type_id(), Some(Key::Uint(1)));
-    assert_eq!(rec.local_namespace(), Some(Key::Uint(100)));
+    assert!(rec.ignored);
+    assert_eq!(rec.type_id(), None);
 }
 
 #[test]

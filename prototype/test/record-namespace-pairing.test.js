@@ -25,20 +25,21 @@ const wrappers = require('../src/wrappers');
 
 const AMBIENT_NAMESPACE = Buffer.from('11111111', 'hex');
 const OVERRIDE_NAMESPACE = Buffer.from('cdcdcdcd', 'hex');
-const ALLOCATED_NAMESPACE = 100;
 const KNOWN_KEYS = new Set([0]);
 
-test('a namespace-pairing prefix item round-trips: uint (Allocated) namespace paired with a scoped typeID', () => {
+test('a uint in the namespace slot is no longer a recognized pairing item -- there is no Allocated namespace tier, so the Record loses its only typeID and becomes unroutable, not just its namespace', () => {
   const bytes = core.encodeRecordBytes({
     typeIds: [1],
     fields: new Map([[0, 'payload']]),
-    localNamespace: ALLOCATED_NAMESPACE,
+    localNamespace: 100, // uint -- namespace values are byte-string only now
   });
   const [rec] = core.decodeSequence(bytes);
-  assert.equal(rec.ignored, false);
-  assert.equal(rec.typeId, 1);
-  assert.equal(rec.localNamespace, ALLOCATED_NAMESPACE);
-  assert.equal(rec.map.get(0), 'payload');
+  // [100, 1] is no longer recognized as a namespace-pairing item, so it
+  // falls through to being an ordinary unrecognized prefix item -- Phase
+  // 1 finds no typeID at all before the map, same as if the Record's
+  // prefix were empty.
+  assert.equal(rec.ignored, true);
+  assert.equal(rec.typeId, null);
 });
 
 test('a namespace-pairing prefix item round-trips: byte string (Decentralized) namespace paired with a scoped typeID', () => {
@@ -182,21 +183,18 @@ test('FINDING: the pairing form is NOT a cheaper substitute for a standalone dec
     return core.encodeRecordBytes({ typeIds, fields: fields || new Map(), localNamespace }).length;
   }
 
-  const pairedAllocated = bareCost([1], undefined, ALLOCATED_NAMESPACE);
   const pairedDecentralized = bareCost([1], undefined, OVERRIDE_NAMESPACE);
   const standaloneDecentralizedId = bareCost([Buffer.alloc(4, 0xab)]);
 
-  assert.equal(pairedAllocated, 5);
   assert.equal(pairedDecentralized, 8);
   assert.equal(standaloneDecentralizedId, 6);
-  // Verified, not asserted: pairing with a decentralized namespace costs
-  // MORE per Record than a plain standalone decentralized Record ID
-  // (7 > 5) -- because it bundles a full namespace declaration onto
-  // every Record that uses it, unlike the container discriminator's
-  // one-time, amortized-across-the-whole-container cost. This form
-  // exists to answer "can this one Record use a different namespace
-  // than the container's ambient one", not "how do I cheaply get a
-  // decentralized ID" -- that's still what a standalone byte string
-  // typeID is for.
+  // Verified, not asserted: pairing with a namespace costs MORE per
+  // Record than a plain standalone decentralized Record ID (8 > 6) --
+  // because it bundles a full namespace declaration onto every Record
+  // that uses it, unlike the container discriminator's one-time,
+  // amortized-across-the-whole-container cost. This form exists to
+  // answer "can this one Record use a different namespace than the
+  // container's ambient one", not "how do I cheaply get a decentralized
+  // ID" -- that's still what a standalone byte string typeID is for.
   assert.ok(pairedDecentralized > standaloneDecentralizedId);
 });

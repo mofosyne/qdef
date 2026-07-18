@@ -21,7 +21,7 @@ const core = require('../src/core');
 const wrappers = require('../src/wrappers');
 const header = require('../src/header');
 
-const NAMESPACE = 12271745624591856273n;
+const NAMESPACE = Buffer.from('a9d6e1f30b7c4482', 'hex');
 const NAMESPACE_SCOPED_TYPE = 32769; // odd uint -- requires a declared namespace
 const KNOWN_KEYS = new Map([
   [wrappers.SPLIT_TYPE, wrappers.SPLIT_KNOWN_KEYS],
@@ -49,7 +49,7 @@ test('a namespace repeated on every code resolves correctly after full Split rea
   const terminal = wrappers.resolveStack(codes, {}, KNOWN_KEYS);
 
   assert.equal(terminal.typeId, NAMESPACE_SCOPED_TYPE);
-  assert.equal(terminal.namespace, NAMESPACE);
+  assert.ok(terminal.namespace.equals(NAMESPACE));
   assert.equal(terminal.map.get(0), 'namespace-scoped payload');
 });
 
@@ -61,7 +61,7 @@ test('the repeated namespace survives losing any one code, same as the data it d
   const droppedOneCode = [codes[0], codes[1], codes[3]];
 
   const terminal = wrappers.resolveStack(droppedOneCode, {}, KNOWN_KEYS);
-  assert.equal(terminal.namespace, NAMESPACE);
+  assert.ok(terminal.namespace.equals(NAMESPACE));
   assert.equal(terminal.map.get(0), 'namespace-scoped payload');
 });
 
@@ -83,7 +83,7 @@ test('FINDING: a namespace declared on only one code is a single point of failur
   // are both present.
   const keepingTheNamespaceCode = [codes[0], codes[1], codes[3]];
   const terminal = wrappers.resolveStack(keepingTheNamespaceCode, {}, KNOWN_KEYS);
-  assert.equal(terminal.namespace, NAMESPACE);
+  assert.ok(terminal.namespace.equals(NAMESPACE));
 });
 
 test('codes disagreeing on the declared namespace is rejected, not silently resolved one way or the other', () => {
@@ -93,8 +93,8 @@ test('codes disagreeing on the declared namespace is rejected, not silently reso
   });
   const fragmentRecords = wrappers.splitEncode(innerBytes, { count: 2 });
   const codes = [
-    core.encodeContainer([fragmentRecords[0]], 111n),
-    core.encodeContainer([fragmentRecords[1]], 222n),
+    core.encodeContainer([fragmentRecords[0]], Buffer.from('11111111', 'hex')),
+    core.encodeContainer([fragmentRecords[1]], Buffer.from('22222222', 'hex')),
   ];
 
   assert.throws(
@@ -172,19 +172,16 @@ test('codes disagreeing on a decentralized namespace (different bytes, same leng
   );
 });
 
-test('the same logical namespace value never spuriously mismatches across JS number/bigint representation', () => {
-  const innerBytes = core.encodeRecordBytes({
-    typeIds: [NAMESPACE_SCOPED_TYPE],
-    fields: new Map([[0, 'payload']]),
-  });
-  const fragmentRecords = wrappers.splitEncode(innerBytes, { count: 2 });
-  // header.parseDiscriminator normally decides number vs. bigint based on
-  // magnitude, so this scenario is otherwise hard to hit naturally --
-  // constructed directly to prove namespaceEquals itself is sound.
+test('namespaceEquals stays defensively correct for number/bigint even though a real container can never carry one as a namespace anymore', () => {
+  // There is no Allocated (uint) namespace tier (docs/FINDINGS.md) -- a
+  // uint discriminator now always degrades to "no namespace"
+  // (header.test.js covers that), so this scenario can't arise through
+  // any real encodeContainer/resolveStack path. Checked directly against
+  // namespaceEquals itself only as defensive-correctness insurance for
+  // the map form's namespace key (`1`), which is never type-checked at
+  // the structural-decode layer -- a non-conformant encoder could still
+  // put a uint there, and this makes sure that degrades to a safe
+  // comparison instead of a silent bug.
   assert.equal(header.namespaceEquals(500, 500n), true);
   assert.equal(header.namespaceEquals(500n, 500), true);
-
-  const codes = fragmentRecords.map((f) => core.encodeContainer([f], 500));
-  const terminal = wrappers.resolveStack(codes, {}, KNOWN_KEYS);
-  assert.equal(terminal.namespace, 500);
 });

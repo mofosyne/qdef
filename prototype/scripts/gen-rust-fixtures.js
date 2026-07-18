@@ -253,9 +253,14 @@ const namespacePairingContainer = core.encodeContainer([
   },
 ]);
 
-// --- Namespace-pairing with an Allocated (uint) namespace ---
+// --- A uint in the namespace-pairing slot: no longer recognized ---
+// There is no Allocated (uint) namespace tier -- namespace values are
+// byte-string only (docs/FINDINGS.md). [100, 1] is therefore not a
+// namespace-pairing item at all; it falls through to being an ordinary
+// unrecognized prefix item, so this Record loses its only typeID and
+// ends up unroutable (ignored), not just its namespace.
 
-const allocatedNamespacePairingContainer = core.encodeContainer([
+const uintNamespaceSlotUnrecognizedContainer = core.encodeContainer([
   {
     typeIds: [1],
     fields: new Map([[0, 'payload']]),
@@ -325,6 +330,6 @@ console.log(rustBytes('BACKUP_TYPE_ID_CONTAINER', backupTypeIdContainer));
 console.log();
 console.log(rustBytes('NAMESPACE_PAIRING_CONTAINER', namespacePairingContainer));
 console.log();
-console.log(rustBytes('ALLOCATED_NAMESPACE_PAIRING_CONTAINER', allocatedNamespacePairingContainer));
+console.log(rustBytes('UINT_NAMESPACE_SLOT_UNRECOGNIZED_CONTAINER', uintNamespaceSlotUnrecognizedContainer));
 console.log();
 console.log(rustBytes('NAMESPACE_PAIRING_WITH_BACKUP_CONTAINER', namespacePairingWithBackupContainer));

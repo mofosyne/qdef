@@ -275,29 +275,26 @@ fn parse_record(buf: &[u8]) -> Result<(Record<'_>, usize), Error> {
 
 /// Attempts to parse the two elements of a namespace-pairing array's
 /// contents (the slice starting right after the array's own head): a
-/// namespace (uint > 0, or a byte string — the same convention as the
-/// container discriminator's namespace value, §3.5) followed by a typeId
+/// namespace (a byte string — the only valid Namespace ID shape, same
+/// convention as the container discriminator's namespace value, §3.5;
+/// there is no Allocated/uint namespace tier) followed by a typeId
 /// (uint only — a namespace-pairing item never carries a byte-string
 /// typeId; decentralized Record IDs stay a separate, unpaired, always-
 /// global mechanism, §3.1).
 ///
 /// Returns `Ok(None)` — not an error — when the two elements are
 /// well-formed CBOR but don't match this shape (e.g. the namespace slot
-/// holds a text string, or the typeId slot holds a byte string): that
-/// means this array isn't a namespace pairing after all, and the caller
-/// falls back to treating it as an ordinary unrecognized prefix item.
-/// Only a genuine decode failure (truncated/malformed bytes) propagates
-/// as `Err`.
+/// holds a uint or a text string, or the typeId slot holds a byte
+/// string): that means this array isn't a namespace pairing after all,
+/// and the caller falls back to treating it as an ordinary unrecognized
+/// prefix item. Only a genuine decode failure (truncated/malformed
+/// bytes) propagates as `Err`.
 fn parse_namespace_pairing(buf: &[u8]) -> Result<Option<(cbor::Key<'_>, u64, usize)>, cbor::Error> {
     let (ns_key, ns_len) = match cbor::read_key(buf) {
         Ok(v) => v,
         Err(_) => return Ok(None),
     };
-    let ns_valid = match ns_key {
-        cbor::Key::Uint(n) => n > 0,
-        cbor::Key::ByteString(_) => true,
-        cbor::Key::TextString(_) | cbor::Key::NegInt(_) => false,
-    };
+    let ns_valid = matches!(ns_key, cbor::Key::ByteString(_));
     if !ns_valid {
         return Ok(None);
     }

@@ -93,10 +93,11 @@ test('array length alone disambiguates external-ID (1 element) from namespace-pa
     fields: new Map(),
     externalId: 'x',
   });
+  const namespace = Buffer.from('a1b2c3d4', 'hex');
   const withPairing = core.encodeRecordBytes({
     typeIds: [1],
     fields: new Map(),
-    localNamespace: 500,
+    localNamespace: namespace,
   });
 
   const [recA] = core.decodeSequence(withExternalId);
@@ -105,7 +106,7 @@ test('array length alone disambiguates external-ID (1 element) from namespace-pa
   assert.equal(recA.externalId, 'x');
   assert.equal(recA.localNamespace, undefined);
   assert.equal(recB.externalId, undefined);
-  assert.equal(recB.localNamespace, 500);
+  assert.ok(recB.localNamespace.equals(namespace));
 });
 
 test('FINDING: byte cost of the external-ID wrapper alone, verified against the real encoder', () => {
