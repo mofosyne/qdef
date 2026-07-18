@@ -47,7 +47,7 @@ const COAP_CONTENT_FORMAT_APPLICATION_CBOR = 60;
 
 function compressEncode(innerBytes) {
   return {
-    typeIds: [COMPRESS_TYPE],
+    typeId: COMPRESS_TYPE,
     fields: new Map([[0, zlib.deflateRawSync(innerBytes)]]),
   };
 }
@@ -70,7 +70,7 @@ function encryptEncode(innerBytes, key, { algorithm, keyAlgorithm } = {}) {
   if (algorithm !== undefined) fields.set(3, algorithm);
   if (keyAlgorithm !== undefined) fields.set(5, keyAlgorithm);
   return {
-    typeIds: [ENCRYPT_TYPE],
+    typeId: ENCRYPT_TYPE,
     fields,
   };
 }
@@ -111,7 +111,7 @@ function splitEncode(innerBytes, { count, parityScheme = PARITY_SCHEME_NONE }) {
     ]);
     if (parityScheme !== PARITY_SCHEME_NONE) fields.set(9, parityScheme);
     fragments.push({
-      typeIds: [SPLIT_TYPE],
+      typeId: SPLIT_TYPE,
       fields,
     });
   }
@@ -131,7 +131,7 @@ function splitEncode(innerBytes, { count, parityScheme = PARITY_SCHEME_NONE }) {
       [9, parityScheme],
     ]);
     fragments.push({
-      typeIds: [SPLIT_TYPE],
+      typeId: SPLIT_TYPE,
       fields,
     });
   } else if (parityScheme !== PARITY_SCHEME_NONE) {

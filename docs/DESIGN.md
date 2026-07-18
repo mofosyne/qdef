@@ -59,48 +59,22 @@ on:
     smaller ID space, same "nobody's tracking it" property).
   Exact boundaries remain a policy decision for whoever ends up running
   the registry, not a wire-format one.
-- **Decentralized byte string IDs are a separate axis entirely, not a
-  continuation of the numeric range tiers above.** A byte string typeID
-  (§3.1, any width) sits outside the tiered-range system altogether —
-  it isn't "a fourth, higher range," it's a different CBOR major type
-  with a structurally different collision-safety story: an implementer
-  who picks a byte string ID with sufficient length (e.g. 4 or 8 bytes)
-  gets collision avoidance from the sheer size of the byte space, the
-  same way a UUID does, never from a registry recording or reviewing it.
-  This is the one tier that stays ungoverned *permanently, by design* —
-  not "no registry yet," but "no registry, ever, on purpose," since
-  self-certification (Type Hint's hash-derivation, §3.1) is what does
-  the collision-safety work instead. Call it "decentralized" if that's
-  useful, but don't assume the ID stays undisclosed or single-party:
-  Unicode's Private Use Areas and Bluetooth's private/random device
-  addresses are both self-assigned the same way, and neither implies the
-  result is never published or never recognized by an unrelated party.
-  What actually distinguishes this tier from every tier above isn't
-  visibility, it's *authority*: no registry vouches for what a
-  self-allocated ID means, so any cross-implementer recognition has to
-  come from somewhere else — Type Hint's hash-derivation (§3.1), a
-  declared namespace (§3.5), or App Route (§4.4), not a lookup table. It's
-  only viable at all because the wire format never fixed Type IDs to a
-  small byte-width field.
-
-  **Not the recommended default for "cheap ID, no registry," though —
-  resolved after checking the actual numbers, not assumed.** Once a
-  namespace is declared (§3.5), odd uints become cheap *and*
-  collision-free too, without needing any self-chosen width at all, and
-  do so at a fraction of a byte string's per-ID cost (1 byte vs. 4+,
-  every Record Type, forever) — see "Namespace-scoped Type IDs," below.
-  The "cost" is that the namespace operator has to not reuse a number
-  they've already issued themselves, which is trivial for whoever
-  controls one namespace. A namespace value is always a self-chosen byte
-  string (see "Governed vs. ungoverned," below, and "Namespace IDs are
-  always Decentralized," further down, for why there's no Allocated/uint
-  namespace tier to choose instead) — once a real adopter's actual
-  practice (TagDrop) was checked against it, that turned out to be what
-  namespace operators actually do anyway. A byte string
-  *Type ID* keeps exactly one job a namespace-scoped uint structurally
-  can't do: standing alone as an independently self-certifying identity,
-  verifiable against its own name with no namespace, registry, or
-  reachable-author trust required at all (Finding #29).
+- **Decentralized byte string Type IDs — tried, then removed entirely
+  once namespace-scoped odd uints existed to do the same job cheaper.**
+  An earlier draft gave a byte string Type ID (any width) its own axis
+  outside the tiered-range system, with collision safety coming from
+  sheer byte-space size (like a UUID) rather than a registry, backed by
+  a self-certifying hash-derivation Hint. That mechanism is gone now
+  (§3.1) — checking what a real adopter (TagDrop) actually does made the
+  case for keeping it evaporate: nobody in practice needed a Type ID that
+  stood alone with no namespace, since a declared namespace (§3.5, itself
+  still a byte string, still fully decentralized) gives every odd uint
+  inside it the identical zero-coordination collision safety at a
+  fraction of the per-ID cost — 1 byte vs. 4+ every Record Type, forever.
+  See FINDINGS.md's entry on retiring decentralized Type IDs for the full
+  reasoning, and "Namespace-scoped Type IDs," below, for the byte-cost
+  comparison that made the namespace path strictly better for every case
+  that used to reach for a standalone decentralized Type ID.
 - **An older, narrower "first-come-first-served" tier (`1000`–`0xFFFF`,
   registered but with no review gate) was considered and dropped — a
   different mechanism from the `32768`+ tier above, despite the shared
@@ -128,11 +102,13 @@ on:
   (spec §3.2) but applies it to a different axis (ID classification, not
   key criticality). The two uses never overlap — one applies to map keys,
   the other to prefix typeIDs — and both follow the same mnemonic
-  (even = safe/default, odd = conditional/special). The ID space is not
-  halved in practice because byte strings provide a second, orthogonal
-  path for decentralized allocation that doesn't compete for uint numbers
-  at all. See spec §3.1's note on even/odd vocabulary reuse for the full
-  rationale.
+  (even = safe/default, odd = conditional/special). The even/odd split
+  only costs half of the *global* uint space, not half of the
+  ecosystem's total addressable IDs: every declared namespace (§3.5)
+  gets its own independent range of odd uints, so there's no fixed
+  ceiling on how many namespace-scoped Type IDs can exist across every
+  namespace combined. See spec §3.1's note on even/odd vocabulary reuse
+  for the full rationale.
 
 ### Governed vs. ungoverned, made explicit
 
@@ -170,14 +146,15 @@ that's the actual line, not tier width or magnitude:**
 | (uint odd, any value)  | namespace         | nothing to  |             |
 |                        |                   | register    |             |
 +------------------------+------------------+-------------+-------------+
-| Decentralized          | ID width /        | No, ever,   | No          |
-| (byte string, any      | hash-derivation   | by design   |             |
-| width)                 |                   |             |             |
-+------------------------+------------------+-------------+-------------+
-| Named (reserved)       | not yet defined   | TBD         | TBD         |
-| (text string)          |                   |             |             |
-+------------------------+------------------+-------------+-------------+
 ```
+
+There is no longer a Decentralized (byte string) or Named (text string)
+row here — both Type ID forms were retired entirely once namespace-
+scoped odd uints existed to give the identical zero-coordination
+collision safety at a fraction of the per-ID byte cost (§3.1; see
+FINDINGS.md). The table above is exhaustive for Type IDs as they exist
+today: exactly two axes, uint parity and, for even IDs, which of three
+numeric ranges the value falls in.
 
 Namespace IDs (§3.5) do **not** reuse this table the way an earlier
 draft assumed — that assumption didn't survive contact with what a real
@@ -192,11 +169,14 @@ kind from a Type ID's, not just a smaller instance of the same table.
 
 **Why First Come First Served has to mean "eventually recorded," not
 "permanently informal," or the tier is pointless.** If it meant the
-latter, it would be strictly dominated by a decentralized byte string
-ID: same "nobody's tracking it" property, but a *smaller* collision-safe
-ID space (a uint vs. an arbitrary-width byte string) — no reason to ever
-choose it. This is the identical reasoning that already killed the
-older, narrower first-come tier once before (above): a tier that's cheap
+latter, it would be strictly dominated by just declaring a namespace
+(§3.5) and using a cheap odd uint inside it: same "nobody reviews it"
+property, but zero-coordination collision safety that comes from the
+namespace itself rather than from luck, and a 1-byte-forever cost
+instead of a global uint the whole ecosystem draws from — no reason to
+ever choose an unrecorded global even uint over that. This is the
+identical reasoning that already killed the older, narrower first-come
+tier once before (above): a tier that's cheap
 *and* uncoordinated without picking one of the three real
 collision-safety sources never has a viable governance model. The
 `32768`+ tier only earns its place because it's the one that *will* get
@@ -216,51 +196,34 @@ opportunistically is good practice, not urgent — there's no retroactive
 protection to lose by waiting, since nothing is tracked yet for anyone
 to have raced against.
 
-**Guidance, not a requirement: structured composition within the
-decentralized byte string space.** [GitHub issue #10](https://github.com/mofosyne/qdef/issues/10)
-raised this after building against the tier as recommended: an implementer
-defining several related Record Types MAY compose a decentralized byte
-string ID using a fixed prefix plus a locally self-assigned suffix, rather
-than drawing an independent hash or random value for each one. The prefix
-bytes are shared across all related Types; only the suffix varies.
+**Historical: structured composition within the decentralized byte
+string Type ID space — the use case behind [GitHub issue
+#10](https://github.com/mofosyne/qdef/issues/10), now resolved a
+different way.** The issue asked how an implementer defining several
+related Record Types should structure a decentralized byte string ID —
+a fixed prefix shared across all related Types, plus a locally
+self-assigned suffix, rather than an independent hash or random draw per
+Type — and the guidance that used to live here worked out the
+prefix/suffix width tradeoff and the birthday-bound math for exactly
+that (a 56-bit prefix gives 56-bit-class safety, not 64-bit-class, once
+suffix clustering around small sequential integers is accounted for; a
+32-bit prefix is unsafe at any serious ecosystem scale). None of that
+math is needed anymore: decentralized byte string Type IDs were retired
+entirely (§3.1, above), and the problem they were being structured to
+solve — several related Record Types under one implementer, without
+per-Type registry coordination — is exactly what declaring a namespace
+(§3.5) and using small sequential odd uints inside it already does,
+at a fraction of the per-ID cost and with no prefix-width sizing
+decision to get wrong. See "Namespace-scoped Type IDs," below.
 
-Two things worth stating plainly if this gets used, not left implied:
-
-- **Skew the split toward the prefix, not evenly.** Suffix demand for a
-  single implementer is typically small (single digits to low tens of
-  distinct Record Types), so the suffix should get the minimum obviously
-  sufficient width, not a 50/50 split — every bit shifted to the prefix
-  meaningfully improves the number that actually matters.
-- **Effective collision safety is governed by the prefix width alone,
-  not the full field width.** Suffix values will cluster around small
-  sequential integers (`0`, `1`, `2`...) in practice, since that's what
-  any implementer will naturally reach for. Conditional on two
-  implementers' prefixes colliding, a full-value collision on a low
-  suffix value becomes near-certain rather than merely possible — so a
-  56-bit prefix gives *56-bit-class* safety, not 64-bit-class, and
-  narrower prefixes should be sized off real numbers, not intuition: at
-  10 million independent draws, birthday-bound collision probability is
-  ~2.7×10⁻⁶ at 64 bits, ~6.9×10⁻⁴ at 56 bits, and already past 1 expected
-  collision at 32 bits — 32-bit alone is not safe at any serious
-  ecosystem scale.
-
-**Scope note, corrected.** An earlier version of this note warned that
-using a decentralized Type ID for cross-implementer coordination was a
-"widening" beyond the tier's scope, on the premise that the tier meant
-closed/internal-only use. That premise was wrong (corrected above) —
-self-allocation was never a promise to stay undiscovered, and Type
-Hint's whole reason to exist (§3.1) is letting an unrelated implementer
-recognize a self-allocated ID. So there's no widening to guard against
-there.
-
-The caution actually worth keeping is narrower and still real: if a
-structured decentralized ID's prefix starts getting treated as an
-*implicit* cross-implementer routing signal — "anything sharing my
-prefix is safe to auto-launch for" — that's quietly reinventing App
-Route (§4.4) without App Route's domain-verified trust model behind it.
-Use App Route explicitly when routing is the actual goal; don't let a
-Type-ID-prefix convention become an accidental second routing channel
-nobody decided to build.
+The one caution from this thread that's still live, restated in current
+terms: if a namespace value's own prefix bytes start getting treated as
+an *implicit* cross-implementer routing signal — "anything sharing my
+namespace prefix is safe to auto-launch for" — that's quietly
+reinventing App Route (§4.4) without App Route's domain-verified trust
+model behind it. Use App Route explicitly when routing is the actual
+goal; don't let a namespace-prefix convention become an accidental
+second routing channel nobody decided to build.
 
 ## Namespace IDs are always Decentralized — the Allocated (uint) namespace tier was dropped
 
@@ -554,8 +517,22 @@ holds regardless of which tag number is on the wire, so restricting to
 registry itself already sorts into the right buckets without QDEF needing
 to maintain an allowlist of "safe" tag numbers.
 
+**Superseded, not just widened, by a later change: §3.2's field-value-
+shape rule was dropped entirely** (a field value may now be any
+well-formed CBOR item — see "Field-value-shape rule — rationale,"
+below), so every analysis in this section of which specific tags are
+"safe" no longer gates anything at the wire-format level; any tag
+wrapping any content is legal now, regardless of shape. Left here
+because the underlying skip-safety mechanism it worked out —
+content-shape checking generalizes cleanly across tag numbers, and
+doesn't need a private allowlist — is exactly what made the later, full
+relaxation safe to do at all: `skip_any_item` already walked arbitrary
+tag content with a bounded stack before field values ever needed the
+same treatment.
+
 Two things confirmed this wasn't accidentally reopening either hazard the
-narrower rule was guarding against:
+narrower rule was guarding against, back when the rule still restricted
+field-value shape:
 
 - **Not the recursion hazard.** The bound that matters is "tag content is
   checked to be a definite-length string directly, never another tag" —
@@ -572,29 +549,40 @@ narrower rule was guarding against:
   That's the correct use of CBOR tags per RFC 8949's own design
   philosophy, not a reopening of the mechanism that was removed.
 
-## Type Hint (Key 1): dropped from the map entirely
+## Type Hint (Key 1): dropped from the map, then the mechanism itself retired
 
 Key `1` was originally reserved globally for Type Hint — an optional
-recoverable name for a decentralized Type ID (spec §3.1). With the
+recoverable name for a decentralized Type ID (spec §3.1, then). With the
 introduction of the prefix typeIDs format, Type Hint moved out of the
-map and into the prefix alongside the Type ID itself. Key `1` is now
-dropped from the map entirely, freeing it for each Record Type's own
-use. No folding-into-key-`0` alternative was needed: the prefix format
-removed the constraint that created the tension in the first place.
+map and into the prefix alongside the Type ID itself, freeing key `1`
+for each Record Type's own use. **Later, once decentralized Type IDs
+were retired entirely** (the job they did — self-certifying,
+zero-coordination identity — turned out to be better and more cheaply
+served by a declared namespace, §3.5), Type Hint itself had nothing left
+to attach a name to and was retired alongside it, not just relocated
+again. The bare-text-string slot that used to carry it (and, before
+that, a reserved-for-future "Named ID" typeID form) now carries the
+NDEF-ID-equivalent instead (spec §3.1) — one unambiguous meaning for a
+position that used to be split between two retired purposes.
 
-## Media Payload (Type 6): why it does *not* reuse Type Hint's decentralized-ID pattern
+## Media Payload (Type 6): why it never reused the (now-retired) decentralized-ID + Hint pattern
 
 The first draft of spec §4.3 copied Type Hint's decentralized-ID + Hint +
-opportunistic-hash-verify pattern (§3.1, above) onto Media Type wholesale
-— same mechanism, one layer down. That turned out to be a mistake worth
-recording, not just quietly fixing: it mechanically reapplied a pattern
-without checking whether the problem it solves was even present at this
-layer.
+opportunistic-hash-verify pattern (as it existed in §3.1 at the time)
+onto Media Type wholesale — same mechanism, one layer down. That turned
+out to be a mistake worth recording, not just quietly fixing: it
+mechanically reapplied a pattern without checking whether the problem it
+solves was even present at this layer. (Type Hint itself was later
+retired entirely — see above — but the reasoning below for why Media
+Type never needed its own version of that pattern still holds, and is
+worth keeping as the general argument for *when* a hash-derivation
+Hint earns its cost, since namespace IDs, §3.5, still use exactly this
+pattern today.)
 
-**Type ID and Media Type are not the same shape of problem.** A
-decentralized Type ID has *no* identity besides the bytes — that's
-exactly why Type Hint has to exist (to attach a name) and why the hash
-check has to exist (to prove that name wasn't tampered with). A media
+**Type ID and Media Type were never the same shape of problem.** A
+decentralized Type ID had *no* identity besides the bytes — that's
+exactly why a Hint had to exist (to attach a name) and why the hash
+check had to exist (to prove that name wasn't tampered with). A media
 type isn't like that: `"text/vcard"` is already a stable, globally
 meaningful string, defined by RFC 6838's own Media Types registry,
 completely independent of whether CoAP ever assigned it a compact number.
@@ -606,7 +594,7 @@ to add. Settled on the simpler two-form design instead: a CoAP uint when
 registered, the plain MIME string otherwise, nothing else.
 
 This also answers a question worth asking directly: does CoAP itself have
-a private-use/decentralized tier the way QDEF's Type ID does? No — its
+a private-use/decentralized tier the way QDEF's Type ID used to? No — its
 tiers are Expert Review, IETF Review, First-Come-First-Served, and a small
 Experimental range explicitly barred from real use ("MUST NOT be used in
 operational deployments"), never a "pick a large random number, no
@@ -614,9 +602,9 @@ registration needed" escape hatch. Partly structural (Content-Format is a
 16-bit field in the CoAP wire protocol itself, so there's only 65536
 numbers total — too few for uncoordinated random self-assignment to be
 collision-safe), but more fundamentally because media types don't need
-one: they already have external, stable names outside CoAP's registry.
-QDEF's own Type ID tier needs a private-use escape hatch because Type IDs
-have no other identity; media types already do.
+one: they already have external, stable names outside CoAP's registry. A
+decentralized Type ID needed a private-use escape hatch because it had
+no other identity; media types already had one.
 
 **Relying on CoAP's registry at all is a conditional choice, not a
 default.** It's justified specifically because that registry has good
@@ -793,7 +781,7 @@ authenticity wrapper," below). NDEF conversion is a new argument for
 prioritizing it sooner, not a reason to change the existing plan or
 build it speculatively ahead of a real want.
 
-## NDEF's ID field — two competing experimental prototypes for a QDEF equivalent, neither adopted
+## NDEF's ID field — two competing experimental prototypes, resolved later by a third option neither anticipated
 
 The NDEF RTD comparison above left one open question: NDEF's `ID` field
 (§3.2.11/§2.4.3 of the NFC Forum spec) is a URI-reference string every
@@ -814,10 +802,17 @@ typeID prefix items and the namespace-pairing item (§3.1) — parsed by
 the mandatory core, before any Type-specific interpretation begins — not
 inside any one Type's map.
 
+**Resolved later, by neither of the two options explored below — see the
+wrap-up at the end of this entry.** The two prototypes here predate
+that resolution and are kept as the real feasibility-checking trail,
+including a genuine cross-implementation bug they surfaced (below) that
+needed fixing regardless of which option, if any, ultimately shipped.
+
 Two structurally sound, mutually exclusive shapes were prototyped to
 check feasibility (`prototype/src/core.js`, `prototype/test/
 experimental-external-id.test.js` and `experimental-core-metadata-negkey.
-test.js`). **Neither is adopted or spec-documented** — this is
+test.js` — both since deleted as dead code once the actual resolution
+landed). **Neither was adopted or spec-documented** — this was
 feasibility-checking only.
 
 **Option A: a 1-element array prefix item, `[externalId]`.** Sits next to
@@ -909,6 +904,32 @@ wash), but because it keeps Phase 1's parsing surface from growing
 indefinitely. It is not, by itself, a reason to freeze the discriminator,
 and no decision has been made to adopt either option or to formally close
 Phase 1's shape set.
+
+**Resolution, much later: a third option, made possible by an unrelated
+change, adopted instead of either A or B.** Once decentralized Type IDs
+were retired (§3.1) and Type Hint went with them, the bare-text-string
+prefix position that used to be split between two other retired
+purposes — a reserved-for-future "Named ID" typeID form, and Type
+Hint's own verification string — was sitting unclaimed, already
+structurally reserved, already at the correct architectural layer (Phase
+1, parsed by the mandatory core before any Type-specific interpretation,
+exactly the property this whole entry was checking for). A bare CBOR
+text string immediately following the typeID-bearing item became the
+NDEF-ID-equivalent: no new prefix-item shape for Phase 1 to learn (it's
+just "a text string, if present, right after the typeID" — dispatched by
+CBOR major type like everything else in the prefix), no reserved
+negative map key needed, and — the deciding property neither Option A
+nor B could claim — literally zero design cost, since the slot already
+existed and had already been paid for structurally by two now-retired
+mechanisms. Both experimental prototypes were deleted as dead code once
+this shipped; see spec §3.1's "NDEF-ID-equivalent" and FINDINGS.md.
+
+This doesn't retroactively validate or invalidate the Option A/B
+tradeoff analysis above — that reasoning is still correct for what it
+was actually deciding between, it just turned out a fourth possibility
+existed that neither was checked against, because the prefix-item slot
+it reuses didn't become available until a much later, unrelated
+redesign freed it.
 
 ## Why not just carry a literal NDEF message as the QR byte-mode payload, instead of a new format?
 
@@ -1217,7 +1238,29 @@ repetition case, not a general wire-bloat fix — worth a concrete same-
 code case actually hitting this before adding the complexity, same
 discipline as everything else deferred in this document.
 
-## App Route's decentralized form — a second use case surfaced late, not a second mechanism
+**The same "no cross-code state" wall killed a later, unrelated idea
+too — worth cross-referencing rather than re-litigating.** While
+designing the namespace-pairing prefix item (§3.5), a "quick-select"
+variant was proposed: let a short (1–3 byte) value in the namespace slot
+act as a prefix-match back-reference to a full-length namespace declared
+earlier in the same container, instead of always repeating the full
+namespace bytes. Same fatal flaw as reference/value-sharing tags above —
+it requires a decoder to carry memory of previously-seen records across
+the position it's currently parsing, which conflicts with every physical
+code being parsed independently from a blank slate. Deferred as a future
+evolution idea, not built, for the identical reason this section gives.
+
+## App Route's hash-derived form — a second use case surfaced late, not a second mechanism
+
+**Renamed from "decentralized form."** At the time this section was
+written, App Route's pre-filter form reused the same decentralized-ID +
+Hint pattern Type IDs (§3.1, then) used. Once decentralized Type IDs
+were retired and Type Hint went with them, "decentralized" stopped
+having a stable meaning at that layer — App Route's key `0` was never a
+Type ID to begin with, just an ordinary field value using the shared
+hash-derivation algorithm (now homed at spec §3.5, since namespace IDs
+are its primary surviving user). Renamed to "hash-derived form" to avoid
+the collision; the mechanism itself is unchanged.
 
 The domain-verified form of App Route (§4.4, FINDINGS.md #17) was built
 to answer one question: which installed application should this scanned
@@ -1237,8 +1280,8 @@ proof (Android App Links / iOS Universal Links). The pre-filter is not
 security-relevant — get it wrong and a decoder wastes a little effort
 before `group_id` catches the mismatch anyway, exactly the same outcome
 as not pre-filtering at all. That gap in stakes is *why* the
-decentralized form is allowed to reuse Type Hint's cheaper,
-unauthenticated pattern (a decentralized byte string at key `0`, an
+hash-derived form is allowed to reuse the cheaper, unauthenticated
+hash-derivation pattern (a hash-derived byte string at key `0`, an
 optional recoverable name at key `1`) instead of requiring domain
 verification for both — it would be a mistake to make the pre-filter pay
 the domain form's registration cost for a property it doesn't need, and
@@ -1249,9 +1292,9 @@ Concretely this is the same "magic byte" idea raised earlier in this
 project's history (see the ref-pointer/wire-bloat discussion above),
 given a specific pre-filter role instead of staying an abstract
 possibility. Landed as one Record Type with two forms rather than a new
-Record Type, since the wire shape, skip behavior, and Type Hint's
-name-binding pattern are all identical; only the trust model and the
-etiquette guidance around repetition differ (§4.4).
+Record Type, since the wire shape, skip behavior, and the shared
+hash-derivation name-binding pattern (§3.5) are all identical; only the
+trust model and the etiquette guidance around repetition differ (§4.4).
 
 ## Container discriminator redesign
 
@@ -1622,7 +1665,7 @@ either way. Worth answering by tracing the actual mechanics, not by
 analogy alone.
 
 **It must repeat on every code, for the same reason Preview and App
-Route's decentralized form already do.** Each physical code is parsed as
+Route's hash-derived form already do.** Each physical code is parsed as
 its own independent container, from a blank slate, with no cross-code
 state — already established, for a different reason, in "Type ID
 inheritance within a Sequence" and "Reference/value-sharing tags," above.
@@ -1943,9 +1986,13 @@ bytes: an old decoder and a new decoder would read the identical Record
 differently. An *explicit* negint-form back-reference item doesn't have
 that problem: checked against `isTypeId`/`parseRecords` directly, an old
 decoder sees a well-formed CBOR item it doesn't recognize as a typeID
-form, skips it as padding (same as any other future extension), and
-falls back to whatever recognized backup typeID (if any) rides alongside
-it — never a silent reinterpretation, never corruption. So the
+form, skips it as padding (same as any other future extension) — the
+Record's typeID identity comes only from whatever bare uint or
+namespace-pairing item precedes it in the prefix, exactly as it does
+today (§3.1: one typeID-bearing item per Record, no backup accumulation
+since that mechanism was retired); if there is none, the Record is
+simply `ignored: true`, same as any other Record with no recognized
+typeID — never a silent reinterpretation, never corruption. So the
 version-bump objection that shelved both ideas does not actually apply
 to this specific shape. Worth writing down since it may matter if either
 backlog item is revisited later.
@@ -2082,24 +2129,24 @@ routing form):
 | Form                                             | bytes |
 +-------------------------------------------------+-------+
 | [Decentralized Namespace ID (4B), scoped typeId] |     7 |
-| standalone decentralized Record ID (4B, today)   |     5 |
+| bare typeID, no override (today)                 |     2 |
 +-------------------------------------------------+-------+
 ```
 
-(An Allocated/uint namespace row previously appeared here too; removed
-once the Allocated namespace tier itself was dropped — see "Namespace
-IDs are always Decentralized," below.)
+(An Allocated/uint namespace row, and a "standalone decentralized Record
+ID" row, both previously appeared here too; the former was removed once
+the Allocated namespace tier itself was dropped — see "Namespace IDs are
+always Decentralized," below — and the latter once decentralized Record
+Type IDs were retired entirely, §3.1: there's no longer a standalone
+decentralized form to compare against.)
 
-A pairing costs *more* than a plain standalone
-decentralized Record ID (7 > 5) — it bundles a full namespace
-declaration onto the one Record using it. So this mechanism doesn't
-replace, and shouldn't be reached for instead of, either the container
-discriminator (the cheap, amortized, common-case path) or a standalone
-decentralized Record ID (§3.1, kept as-is, still the cheapest way to get
-one self-certifying global ID with no namespace involved at all). It
+A pairing costs *more* than a bare typeID with no override (7 > 2) — it
+bundles a full namespace declaration onto the one Record using it. So
+this mechanism doesn't replace, and shouldn't be reached for instead of,
+the container discriminator (the cheap, amortized, common-case path): it
 answers a narrower question — "can this one Record use a namespace
-other than the container's ambient one" — that the two previously-
-rejected options couldn't answer without taxing everyone else.
+other than the container's ambient one" — that the discriminator alone
+can't answer without taxing everyone else.
 
 **An even (Allocated/global) typeId inside a pairing is vacuous.** The
 existing invariant — even uints are always globally interpreted,
@@ -2108,8 +2155,8 @@ pairing a namespace with an even typeId has no effect on its lookup. The
 mechanism is only meaningful for odd (scoped) typeIds, which is its
 entire purpose.
 
-Prototyped in `prototype/src/core.js` (Phase 1 typeID accumulation
-recognizes the pairing shape, `encodeRecordBytes` takes an optional
+Prototyped in `prototype/src/core.js` (Phase 1 typeID recognition
+handles the pairing shape, `encodeRecordBytes` takes an optional
 `localNamespace` parameter), `prototype/src/header.js`
 (`resolveLookupKeyForRecord`), `prototype/src/wrappers.js`
 (`resolveStack`'s terminal-Record resolution prefers a local override),
@@ -2117,89 +2164,68 @@ and `prototype/test/record-namespace-pairing.test.js` — round-trip for
 the Decentralized namespace form (the only valid one; a uint in the
 namespace slot is confirmed to fall through as unrecognized), local-
 overrides-ambient and falls-back-to-ambient resolution, the
-even-typeId-is-vacuous case, backup-typeID interaction (the same
-promotion pattern §3.1 already uses, applied to a namespace-scoped
-primary), a `resolveStack` case where the Wrapper-resolved terminal
-Record carries its own override, and the byte-cost FINDING above.
+even-typeId-is-vacuous case, a `resolveStack` case where the
+Wrapper-resolved terminal Record carries its own override, and the
+byte-cost FINDING above. (A pairing item stacking with a following
+NDEF-ID-equivalent text string, §3.1, is covered separately — see
+`prototype/test/ndef-id.test.js`; there's no longer a backup-typeID
+interaction to test, since that mechanism was retired.)
 
 Cross-validated in `rust/qdef-core`: `parse_record`'s Phase 1 gained the
 identical structural recognition rule (a definite-length 2-element array
 is a valid prefix-item shape; its second element is pulled in as an
 ordinary typeID, its first is exposed raw via the new
 `Record::local_namespace()`), with zero namespace-semantic code added to
-the crate — matching the container discriminator's own precedent. Four
-new tests confirm the pairing round-trips for both namespace forms,
-degrades correctly when a Record carries no pairing item, and still
-accumulates an ordinary backup typeID alongside a pairing primary.
+the crate — matching the container discriminator's own precedent. Tests
+confirm the pairing round-trips for both namespace forms and degrades
+correctly when a Record carries no pairing item.
 
-## Text string Type IDs — reserved for future use, but pinned enough to not repeat FINDINGS #21
+## Text string Type IDs — historical: the reserved slot went to the NDEF-ID-equivalent instead
 
-§3.1 reserves text string (major type 3) as a future "Named ID" typeID
-form, with no registration scheme defined yet — deliberately, the same
-"don't build it until a real need exists" posture as everything else
-left open in this document. Raised directly: is an entirely bare
-reservation the right amount of caution here, given a text string is
-different in kind from a reserved numeric range? A number carries no
-meaning until one is assigned, so nothing tempts an implementer to
-start using reserved numeric space informally. A text string already
-*looks* usable the moment it exists — nothing stops an implementer from
-writing `"wifi-config"` into that prefix position today, years before
-any registration scheme exists, and once real content ships against
-whatever ad hoc convention emerges first, the eventual real scheme
-inherits a much harder compatibility problem than if a few structural
-rules had existed from day one.
+**Superseded.** This entry originally worked out placeholder-grade
+caution guidance (definite-length required, exact byte comparison, a
+reverse-domain-naming cross-reference) for a then-reserved-for-future
+"Named ID" text string Type ID form. That form never shipped, and the
+underlying premise it was building caution for — a bare text string
+prefix item, positioned where the parser would otherwise treat it as a
+kind of Type ID — no longer exists at all: §3.1's redesign retired
+decentralized Type IDs entirely (both the byte string and the reserved
+text string forms) once a declared namespace turned out to do that job
+strictly better, and repurposed the now-freed bare-text-string prefix
+position for something with a clearer job: the NDEF-ID-equivalent, a
+stable external reference immediately following the typeID-bearing
+item, mirroring NDEF's own `ID` field (spec §3.1).
 
-Checked the actual spec text rather than assuming the gap was real:
-confirmed genuinely bare — "a parser MUST treat them as valid prefix
-items... but no registration scheme for them is defined yet," nothing
-else. Compare the byte string form, which already has a real caution
-paragraph (definite-length required, minimum byte length, recommended
-lengths by context). Text string had no equivalent.
+Every one of the three gaps this entry originally closed carried
+forward into the NDEF-ID-equivalent's own spec text almost verbatim,
+since they're properties of "a bare text string prefix item," not
+specific to what it used to mean as a Type ID: definite-length required
+(§3.4 already covers this for every encoder-emitted string, not just
+this position), exact raw-UTF-8-byte comparison for anyone matching
+against it, and no ambiguity about what "reserved" meant, since the slot
+is no longer reserved at all — it has exactly one meaning now. See
+"Implementer caution for the NDEF-ID-equivalent," spec §3.1.
 
-**Three concrete, closeable gaps, not a vague call for "more scrutiny":**
-
-1. **No definite-length requirement stated**, even though the identical
-   skip-safety hazard byte string's rule exists to prevent (an
-   indefinite-length string can only be measured by walking its chunks)
-   applies identically to text strings.
-2. **No comparison rule** — byte-for-byte, or some implied Unicode
-   normalization/case-folding? Left silent, two implementations can
-   disagree about whether two strings that "look the same" actually
-   match. This is exactly the failure shape FINDINGS.md #21 already
-   found the hard way: §3.1's own hash-derivation algorithm shipped
-   without a pinned comparison/derivation rule and produced a real,
-   silently-wrong verification bug before two independent
-   implementations were actually checked against each other. Pinning a
-   comparison rule for text string Type IDs now, before any have
-   shipped in real content, is the same fix applied pre-emptively
-   instead of after the fact.
-3. **No collision-safety guidance**, even though §3.1 already has
-   exactly the applicable guidance (reverse-domain qualification for
-   hash-derived names) sitting a few paragraphs away, just not
-   cross-referenced to this case. A bare text string Type ID has the
-   identical bare-generic-word collision hazard as a bare
-   hash-derivation name, for the identical reason, and text string
-   Type IDs are always global — nothing else protects them.
-
-**Resolution: added a placeholder-grade caution paragraph to §3.1,
-closing exactly those three gaps, without building the registration
-scheme itself.** Definite-length required (mirrors the byte string
-rule); exact raw-UTF-8-byte comparison, no normalization; a
-cross-reference tying bare text string Type IDs into the existing
-reverse-domain naming guidance; and an explicit "not yet safe for
-guaranteed cross-implementer uniqueness" caveat, since "reserved for
-future use" doesn't say that outright on its own. No code change
-needed — the parser's existing forward-compat padding skip already
-handles an unrecognized or malformed text string prefix item the same
-way it handles any other unrecognized item; this is a constraint on
-what a conformant *encoder* may emit, not a new decoder behavior.
+This entry is kept for the historical trail: the reasoning that "an
+unclaimed-but-parseable text string slot accumulates informal, hard-to-
+retrofit convention faster than an unclaimed number does" is worth
+remembering the next time this project reserves something without
+building it.
 
 ## The hash-derivation algorithm was never actually pinned — a real bug, not just a documentation gap
 
-Three separate mechanisms (Type Hint, §3.1; App Route's decentralized
-form, §4.4; the format namespace, §3.5) all describe an optional
-strengthening: derive a decentralized ID from a hash of its own name, so
-the binding is independently checkable. The spec text always wrote this
+**Historical — written while Type Hint (§3.1, then) was still the
+mechanism's primary home; it was retired entirely once decentralized
+Type IDs were (see "Text string Type IDs," above, and FINDINGS.md).**
+Kept for the real bug-fix trail; the algorithm itself is unaffected and
+lives on at §3.5, the namespace mechanism being its main surviving
+direct user today.
+
+Three separate mechanisms (Type Hint, §3.1 at the time; App Route's
+hash-derived form, §4.4; the format namespace, §3.5) all describe an
+optional strengthening: derive a decentralized ID from a hash of its own
+name, so the binding is independently checkable. The spec text always
+wrote this
 as `ID = truncate(hash(name), N)` — which sounds precise but isn't: it
 never said which hash function, how the string gets encoded, how
 truncation/byte-order works, or what `N` actually is. §3.1 called `N`
@@ -2237,19 +2263,35 @@ Fixed by normalizing both sides through Buffer comparison.
 §3.5 described `namespace = truncate(hash(name), N)` in prose from the
 day it landed, with nothing in the prototype actually implementing or
 testing it — caught in the same pass. `header.js`'s `verifyNamespaceHint`
-now exists, calling `typeHint.js`'s derivation directly rather than a
-second implementation of the same algorithm, so namespace values and
-Type IDs are checked identically by construction, not by two
-conventions that happen to look similar today and could silently drift
-apart later.
+was implemented for the first time here, calling `typeHint.js`'s
+derivation directly rather than a second implementation of the same
+algorithm, so namespace values and Type IDs were checked identically by
+construction, not by two conventions that happened to look similar and
+could silently drift apart later.
 
-Prototyped in `prototype/test/type-hint.test.js` (a regression test
-proving a 64-bit-class ID now verifies, and a narrow-vs-wide test
-confirming the two derivations for the same name don't cross-verify
-against each other) and `prototype/test/header.test.js` (the namespace
-hash-check exercised for the first time, mirroring Type Hint's own
-verify/degrade/not-applicable three-way split exactly). See
-FINDINGS.md #21.
+**Postscript, caught much later: `verifyNamespaceHint` itself quietly
+disappeared, and nobody noticed for a while.** When Type Hint moved from
+the field Map into the prefix (an unrelated redesign pass), `typeHint.js`
+was deleted and `verifyNamespaceHint` — which depended on it — went with
+it, without a corresponding doc update anywhere. QDEF-SPEC.md and this
+file kept citing it as prototyped for weeks of real history, across
+several later redesigns, before a routine documentation-consistency
+sweep during the record-architecture redesign (this document's own
+"Registry governance" and neighboring sections) actually re-checked the
+claim against `prototype/src/header.js` and found it false. Restored as
+a small, now-standalone function in `header.js` (no `typeHint.js` to
+depend on anymore — Type Hint itself is gone, so `deriveHashId` now
+lives directly in `header.js`, `N` simply the candidate namespace's own
+byte length rather than a magnitude-inferred uint width), with a fresh
+regression test set in `prototype/test/header.test.js` covering both
+narrow and wide widths, an unverified-Hint case, a no-Hint
+not-applicable case, and a real decode-to-verify round trip. Worth
+recording as its own small finding: a doc that cites a specific function
+name is a checkable claim, not just prose, and drifted silently here for
+longer than it should have.
+
+Prototyped in `prototype/test/header.test.js`. See FINDINGS.md #21 for
+the original bug, and FINDINGS.md for this restoration.
 
 ## Pinning the algorithm only solved half the naming problem — the input still has to be collision-resistant
 
@@ -2336,20 +2378,63 @@ libraries. That mechanism has been removed — see "CBOR tag-number
 collision" below and FINDINGS.md #11 for why. The prefix-based typeID
 mechanism is sufficient on its own.
 
-## Field-value-shape rule — rationale
+## Field-value-shape rule — dropped, once what it cost was checked against what it protected
 
-The field-value-shape rule (§3.2) restricts field values to scalars,
-definite-length strings, or tags wrapping a definite-length string directly.
-This isn't a style preference: determining a field's length ordinarily
-requires walking into its structure (an array's or map's true byte length
-isn't known until every element inside it has been walked, recursively for
-nested structure), which is an unbounded-recursion hazard on a target with
-only a few KB of stack. A byte or text string's length, by contrast, is
-always stated directly in its own head — skipping one is pure cursor
-arithmetic, never a walk. Restricting every field value to that shape means
-a conformant core parser never needs to recurse *at all* to skip a field it
-doesn't recognize — not "recursion bounded by a depth guard," but no
-recursion, structurally.
+**Historical, then superseded.** §3.2 originally restricted field values
+to scalars, definite-length strings, or tags wrapping a definite-length
+string directly — determining a field's length ordinarily requires
+walking into its structure (an array's or map's true byte length isn't
+known until every element inside it has been walked, recursively for
+nested structure), which is an unbounded-recursion hazard on a target
+with only a few KB of stack. A byte or text string's length, by
+contrast, is always stated directly in its own head — skipping one is
+pure cursor arithmetic, never a walk. Restricting every field value to
+that shape meant a conformant core parser never needed to recurse *at
+all* to skip a field it didn't recognize — not "recursion bounded by a
+depth guard," but no recursion, structurally.
+
+**Dropped entirely, once what that guarantee actually cost turned out to
+matter more than what it protected.** The restriction forced a real
+indirection tax on any Record Type that ever wanted natural nested
+structure — pre-encode it separately, carry it as an opaque byte string,
+decode it again by hand. Raised directly: is "no recursion at all, not
+even bounded" a property most real decoders actually need, or one the
+format's own physical medium (a QR code tops out around 800 bytes at
+practical error-correction levels) already limits well enough on its
+own? Checked, not assumed: the answer was the latter.
+
+**What made the relaxation safe to do at zero new risk, not just cheap
+to do.** `skip_any_item` — the function that already walked prefix items
+(namespace-pairing arrays, tag-wrapped content) — never used true
+recursion to begin with; it already used a bounded explicit stack
+(`MAX_DEPTH`, an implementation choice, not a wire-format requirement).
+The stricter, definite-length-string-only `skip_value` function used for
+field values specifically was a separate, narrower function living
+alongside it. Merging field-value skipping into `skip_any_item` didn't
+reopen the "constrained embedded scanner" property this project cares
+about — it just meant field values now go through the same bounded-stack
+mechanism prefix items already trusted. The one genuinely new capability
+needed was skipping indefinite-length (chunked) strings, which
+`skip_any_item` gained via an inline chunk-reading loop (`rust/qdef-core`
+'s `cbor::Error::MalformedIndefiniteString` catches a malformed chunk
+sequence — mismatched major type or a nested-indefinite chunk — rather
+than walking it).
+
+**Depth cap: advisory guidance, not a wire-format requirement.** No hard
+spec-level cap on nesting depth or indefinite-length usage — an
+implementer's note warns against excessive nesting and suggests a
+practical bound, but doesn't mandate one; a decoder MAY enforce its own
+limit as an implementation choice (`rust/qdef-core` keeps its existing
+`MAX_DEPTH: usize = 16`, documented as this decoder's own practical
+safety choice, not something the spec requires). The physical medium's
+own small size is what actually bounds real-world complexity here, the
+same reasoning that justified dropping the shape restriction in the
+first place.
+
+Prototyped in `rust/qdef-core/src/cbor.rs` (`skip_value` removed,
+merged into `skip_any_item`) and `prototype/test/nested-field-values.test.js`
+(bare array/map field values, multi-level nesting, criticality unaffected
+by value shape for both even and odd keys). See docs/FINDINGS.md.
 
 ## Wrapper Records — why a wrapper, not a reserved key range
 

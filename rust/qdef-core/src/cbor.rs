@@ -7,12 +7,16 @@
 //! us whether that claim is actually true.
 //!
 //! Scope is deliberately narrow: read a head byte + argument, read a small
-//! uint or a definite-length string, skip one *field value* (which, per
-//! docs/QDEF-SPEC.md §3.2's field-value-shape rule, is never a bare
-//! array/map/tag — keeping this O(1) without recursion), and skip an
-//! *arbitrary* CBOR item (for walking unknown items in a Record's typeID
-//! prefix). The field-value skip is recursion-free by construction; the
-//! arbitrary-item skip uses a bounded explicit stack.
+//! uint or a definite-length string, and skip an *arbitrary* well-formed
+//! CBOR item (`skip_any_item`) — used both for walking unknown prefix items
+//! and for skipping a Record field's value. §3.2's earlier field-value-
+//! shape restriction (never a bare array/map/tag) was dropped (see
+//! docs/FINDINGS.md), so there is no longer a separate, more restrictive
+//! skip for field values specifically — `skip_any_item`'s bounded explicit
+//! stack (no true recursion, `no_std` safe) handles both jobs identically
+//! now. Its `MAX_DEPTH` bound is this decoder's own practical safety
+//! choice, not a wire-format requirement — the spec places no hard limit
+//! on nesting depth, only advisory guidance against excess (§3.2).
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Error {
@@ -25,13 +29,11 @@ pub enum Error {
     /// A Record map key's major type wasn't one `read_key` recognizes at
     /// all (uint, negint, byte string, or text string).
     NotAKey,
-    /// §3.2: a Record field's value was a bare array or map (major type 4
-    /// or 5), an indefinite-length string, or a tag (major type 6) wrapping
-    /// anything other than a definite-length string directly (including
-    /// another tag) — none of which are legal QDEF field values. Structured
-    /// content must be pre-encoded as CBOR and carried inside a
-    /// definite-length byte string instead.
-    DisallowedFieldValueShape,
+    /// An indefinite-length (chunked) byte/text string's chunk sequence
+    /// was malformed: a chunk's major type didn't match the string's own,
+    /// or a chunk was itself indefinite-length (not legal CBOR — RFC 8949
+    /// forbids nesting indefinite-length strings inside their own chunks).
+    MalformedIndefiniteString,
     /// `skip_any_item` encountered a break byte outside any indefinite-
     /// length container.
     UnexpectedBreak,
@@ -117,66 +119,18 @@ pub(crate) fn read_head(buf: &[u8]) -> Result<Head, Error> {
     }
 }
 
-/// Skip one CBOR item that is a legal QDEF Record field value: a scalar
-/// (uint, negint, simple, or float), a definite-length byte/text string, or
-/// any CBOR tag wrapping exactly one definite-length byte/text string
-/// directly. Anything else that would require walking into nested
-/// structure to find its length — a bare array, a nested map, an
-/// indefinite-length string, or a tag wrapping anything other than a
-/// string directly (including another tag) — is refused immediately
-/// rather than walked, so this function still never recurses and never
-/// loops: the tag branch is two fixed header reads in sequence, not a call
-/// back into this function, so nesting a tag inside a tag is rejected
-/// rather than silently accepted at unbounded depth, regardless of which
-/// tag numbers are involved. That's the point: skipping an unrecognized
-/// field stays O(1) instead of a stack-depth risk, tag included — the
-/// *content* shape is what's checked, not the tag number, so this doesn't
-/// need a tag allowlist to stay safe (spec §3.2, FINDINGS.md #15/#16).
-pub(crate) fn skip_value(buf: &[u8]) -> Result<usize, Error> {
-    let head = read_head(buf)?;
-    match head.major {
-        0 | 1 => Ok(head.head_len),
-        7 if head.info != 31 => Ok(head.head_len),
-        2 | 3 if !head.is_indefinite() => {
-            let len = head.arg as usize;
-            let total = head
-                .head_len
-                .checked_add(len)
-                .ok_or(Error::LengthOverflow)?;
-            if buf.len() < total {
-                return Err(Error::UnexpectedEof);
-            }
-            Ok(total)
-        }
-        6 => {
-            let rest = buf.get(head.head_len..).ok_or(Error::UnexpectedEof)?;
-            let inner = read_head(rest)?;
-            if (inner.major != 2 && inner.major != 3) || inner.is_indefinite() {
-                return Err(Error::DisallowedFieldValueShape);
-            }
-            let inner_len = inner.arg as usize;
-            let total = head
-                .head_len
-                .checked_add(inner.head_len)
-                .and_then(|n| n.checked_add(inner_len))
-                .ok_or(Error::LengthOverflow)?;
-            if buf.len() < total {
-                return Err(Error::UnexpectedEof);
-            }
-            Ok(total)
-        }
-        _ => Err(Error::DisallowedFieldValueShape),
-    }
-}
-
 /// Skip any well-formed CBOR item, including containers (arrays, maps,
-/// tags) and indefinite-length items. Uses a bounded explicit stack
-/// instead of recursion — `no_std` safe, bounded at compile time.
+/// tags), indefinite-length containers, and indefinite-length (chunked)
+/// strings. Uses a bounded explicit stack instead of recursion —
+/// `no_std` safe, bounded at compile time by `MAX_DEPTH`, this decoder's
+/// own practical safety choice (not a wire-format requirement — see the
+/// module doc comment).
 ///
-/// This is used by the record-parsing loop to skip unknown items in a
-/// Record's typeID prefix (forward-compat padding for future QDEF
-/// evolution). The field-value shape rule (§3.2) does NOT apply here —
-/// prefix items can be any valid CBOR.
+/// Used both to skip unknown prefix items in a Record's typeID run
+/// (forward-compat padding) and, since §3.2's field-value-shape
+/// restriction was dropped, to skip a Record field's value — there is no
+/// longer a separate, more restrictive skip for the latter. A field
+/// value may now be any well-formed CBOR item.
 pub(crate) fn skip_any_item(buf: &[u8]) -> Result<usize, Error> {
     const MAX_DEPTH: usize = 16;
 
@@ -219,20 +173,41 @@ pub(crate) fn skip_any_item(buf: &[u8]) -> Result<usize, Error> {
                 }
                 continue;
             }
-            // byte or text string: skip payload
+            // byte or text string: skip payload, or -- if indefinite --
+            // walk its chunk sequence (each chunk definite-length, same
+            // major type, terminated by a break byte). No recursion or
+            // stack push needed either way: fully consumed inline.
             2 | 3 => {
                 if head.is_indefinite() {
-                    return Err(Error::UnexpectedEof); // no indefinite strings in QDEF prefix
+                    loop {
+                        let b = *buf.get(pos).ok_or(Error::UnexpectedEof)?;
+                        if b == 0xFF {
+                            pos += 1;
+                            break;
+                        }
+                        let chunk_head = read_head(&buf[pos..])?;
+                        if chunk_head.major != head.major || chunk_head.is_indefinite() {
+                            return Err(Error::MalformedIndefiniteString);
+                        }
+                        pos += chunk_head.head_len;
+                        let clen = chunk_head.arg as usize;
+                        let total = pos.checked_add(clen).ok_or(Error::LengthOverflow)?;
+                        if buf.len() < total {
+                            return Err(Error::UnexpectedEof);
+                        }
+                        pos += clen;
+                    }
+                } else {
+                    let len = head.arg as usize;
+                    let total = head
+                        .head_len
+                        .checked_add(len)
+                        .ok_or(Error::LengthOverflow)?;
+                    if buf.len() < total {
+                        return Err(Error::UnexpectedEof);
+                    }
+                    pos += len;
                 }
-                let len = head.arg as usize;
-                let total = head
-                    .head_len
-                    .checked_add(len)
-                    .ok_or(Error::LengthOverflow)?;
-                if buf.len() < total {
-                    return Err(Error::UnexpectedEof);
-                }
-                pos += len;
             }
             // array
             4 => {
@@ -294,37 +269,17 @@ pub(crate) fn skip_any_item(buf: &[u8]) -> Result<usize, Error> {
 /// (§3.2's even/odd rule). Negative (NegInt) keys are CBOR-legal and were
 /// never explicitly excluded by the spec, but no Record Type is defined
 /// against them yet — see docs/FINDINGS.md's negative-key entry. This
-/// variant carries the *raw CBOR argument*, not the mathematical value:
-/// per RFC 8949 §3.1, a major-type-1 item's actual integer value is
-/// `-1 - arg`. Reconstructing that (or checking its parity) is the
-/// caller's job — see `neg_int_value`/`neg_int_is_even` below.
+/// variant carries the *raw CBOR argument*, not the mathematical value
+/// (per RFC 8949 §3.1, a major-type-1 item's actual integer value is
+/// `-1 - arg`) — this crate only needs to recognize the shape enough to
+/// avoid erroring on it (a real, previously-fixed bug, see
+/// docs/FINDINGS.md), not interpret what it means.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Key<'a> {
     Uint(u64),
     NegInt(u64),
     ByteString(&'a [u8]),
     TextString(&'a [u8]),
-}
-
-/// Reconstructs a `Key::NegInt`'s actual mathematical value: `-1 - arg`
-/// per RFC 8949 §3.1. Saturates instead of overflowing/panicking on an
-/// `arg` near `u64::MAX` (a value with no realistic QDEF use, but this
-/// crate never panics on attacker-controlled input regardless).
-pub fn neg_int_value(arg: u64) -> i64 {
-    match i64::try_from(arg) {
-        Ok(a) => -1 - a,
-        Err(_) => i64::MIN,
-    }
-}
-
-/// Whether a `Key::NegInt`'s actual value is even, without needing the
-/// full `i64` reconstruction. `-1 - arg` is even exactly when `arg` is
-/// odd (negation and the constant -1 offset each flip parity once, which
-/// cancel: value parity == NOT(arg parity) == ... — verified directly:
-/// arg=0 -> value=-1 (odd), arg=1 -> value=-2 (even), arg=2 -> value=-3
-/// (odd); i.e. value is even iff arg is odd).
-pub fn neg_int_is_even(arg: u64) -> bool {
-    arg % 2 == 1
 }
 
 /// Reads a Record map key at `buf[0]`: a uint (major type 0), negint

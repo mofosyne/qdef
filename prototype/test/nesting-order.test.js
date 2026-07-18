@@ -28,11 +28,11 @@ test('canonical order (Split outermost -> Encrypt -> plain) resolves via the gen
   const aesKey = crypto.randomBytes(32);
 
   const innerRecordBytes = core.encodeRecordBytes({
-    typeIds: [rt.PGP_BACKUP_TYPE],
+    typeId: rt.PGP_BACKUP_TYPE,
     fields: new Map([[0, secretKeyBytes]]),
   });
-  const { typeIds: encTypeIds, fields: encFields } = wrappers.encryptEncode(innerRecordBytes, aesKey);
-  const encryptRecordBytes = core.encodeRecordBytes({ typeIds: encTypeIds, fields: encFields });
+  const { typeId: encTypeId, fields: encFields } = wrappers.encryptEncode(innerRecordBytes, aesKey);
+  const encryptRecordBytes = core.encodeRecordBytes({ typeId: encTypeId, fields: encFields });
   const fragmentRecords = wrappers.splitEncode(encryptRecordBytes, { count: 3, parityScheme: wrappers.PARITY_SCHEME_XOR });
   const codes = fragmentRecords.map((f) => core.encodeContainer([f]));
 
@@ -46,14 +46,14 @@ test('FINDING: a reversed, non-conformant order (Encrypt-per-code outermost, Spl
   const aesKey = crypto.randomBytes(32);
 
   const innerRecordBytes = core.encodeRecordBytes({
-    typeIds: [rt.PGP_BACKUP_TYPE],
+    typeId: rt.PGP_BACKUP_TYPE,
     fields: new Map([[0, secretKeyBytes]]),
   });
   const fragmentRecords = wrappers.splitEncode(innerRecordBytes, { count: 3, parityScheme: wrappers.PARITY_SCHEME_XOR });
   const codes = fragmentRecords.map((fragRec) => {
-    const fragRecordBytes = core.encodeRecordBytes({ typeIds: fragRec.typeIds, fields: fragRec.fields });
-    const { typeIds: encTypeIds, fields: encFields } = wrappers.encryptEncode(fragRecordBytes, aesKey);
-    return core.encodeContainer([{ typeIds: encTypeIds, fields: encFields }]);
+    const fragRecordBytes = core.encodeRecordBytes({ typeId: fragRec.typeId, fields: fragRec.fields });
+    const { typeId: encTypeId, fields: encFields } = wrappers.encryptEncode(fragRecordBytes, aesKey);
+    return core.encodeContainer([{ typeId: encTypeId, fields: encFields }]);
   });
 
   const terminal = wrappers.resolveStack(codes, { aesKey }, KNOWN_KEYS_REGISTRY);

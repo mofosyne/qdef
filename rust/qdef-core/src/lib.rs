@@ -5,10 +5,13 @@
 //! standard-record-type layer, not here, by design.
 //!
 //! Every Record is a sequence of CBOR items terminating in a CBOR Map:
-//! one or more typeID items (uint or byte string) followed by zero or
-//! more unknown items (forward-compat padding), then the field Map as
-//! the record delimiter. The parser accumulates typeIDs in a contiguous
-//! run at the start, skips unknown items, and stops at the first Map.
+//! exactly one typeID-bearing item — a bare uint, or a namespace-pairing
+//! array — optionally followed by exactly one bare text string (an
+//! NDEF-ID-equivalent external reference, §3.1), followed by zero or more
+//! unknown items (forward-compat padding), then the field Map as the
+//! record delimiter. There is no backup-typeID accumulation: at most one
+//! typeID-bearing item per Record (see docs/FINDINGS.md for why
+//! decentralized Type IDs and backup typeIDs were both dropped).
 //!
 //! No version byte: the container is magic, a mandatory discriminator
 //! item, then a CBOR Sequence of Records. Container-level metadata (a
@@ -20,20 +23,17 @@
 //! specific handling, entirely outside this crate's scope, same as
 //! every other optional mechanism.
 //!
-//! `no_std`, zero heap allocation, zero dependencies, and — thanks to
-//! §3.2's field-value-shape rule (Record field values are always a scalar
-//! or a definite-length string, never a bare array/map/tag) — the
-//! field-value skip is entirely recursion-free. Skipping unknown prefix
-//! items uses a bounded explicit stack (also zero allocation). See
-//! `cbor::skip_value`, `cbor::skip_any_item`, and ../../docs/FINDINGS.md.
+//! `no_std`, zero heap allocation, zero dependencies. §3.2's field-value-
+//! shape rule was dropped (a field value may now be any well-formed CBOR
+//! item, not just a flat scalar or string) — `cbor::skip_any_item`'s
+//! bounded explicit stack (no true recursion) now handles both prefix-
+//! item skipping and field-value skipping identically. See
+//! ../../docs/FINDINGS.md.
 #![cfg_attr(not(test), no_std)]
 
 mod cbor;
 
 pub const MAGIC: [u8; 4] = *b"QDEF";
-
-/// Maximum number of typeIDs accumulated per Record.
-const MAX_TYPE_IDS: usize = 4;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Error {
@@ -124,7 +124,7 @@ impl<'a> Iterator for Records<'a> {
             Err(e) => {
                 // A malformed CBOR item means we can no longer determine
                 // where it ends, so we can't safely resume the Sequence —
-                // unlike a well-formed Record with no typeIDs (ignored),
+                // unlike a well-formed Record with no typeID (ignored),
                 // which skips only itself.
                 self.done = true;
                 Some(Err(e))
@@ -133,25 +133,24 @@ impl<'a> Iterator for Records<'a> {
     }
 }
 
-/// A routed Record: which Type IDs it claims (via the prefix items,
-/// §3.1's routing mechanism), and its raw map bytes for a
-/// Record-Type-specific handler (e.g. `check_criticality`,
+/// A routed Record: its typeID (via the prefix item, §3.1's routing
+/// mechanism), its optional NDEF-ID text string, and its raw map bytes
+/// for a Record-Type-specific handler (e.g. `check_criticality`,
 /// `find_value`) to inspect further.
 pub struct Record<'a> {
-    /// The accumulated typeID keys from the record prefix (up to
-    /// `MAX_TYPE_IDS`; extras are silently dropped). A namespace-pairing
-    /// prefix item (see `parse_namespace_pairing`) contributes its
-    /// nested typeId here, indistinguishable from a bare one — routing
-    /// doesn't care which form produced it.
-    type_ids_buf: [cbor::Key<'a>; MAX_TYPE_IDS],
-    /// Number of valid entries in `type_ids_buf`.
-    type_id_count: usize,
-    /// The namespace from this Record's own first namespace-pairing
-    /// prefix item, if it had one — raw, uninterpreted (same treatment
-    /// as `Container::discriminator()`). `None` means this Record
-    /// declared no override; interpretation-layer code falls back to
-    /// whatever ambient namespace the container discriminator declared.
+    /// This Record's typeID, if it had one. `None` iff `ignored`.
+    type_id: Option<cbor::Key<'a>>,
+    /// The namespace from this Record's own namespace-pairing prefix
+    /// item, if it had one — raw, uninterpreted (same treatment as
+    /// `Container::discriminator()`). `None` means this Record declared
+    /// no override; interpretation-layer code falls back to whatever
+    /// ambient namespace the container discriminator declared.
     local_namespace: Option<cbor::Key<'a>>,
+    /// The raw bytes of this Record's NDEF-ID-equivalent text string
+    /// (§3.1), if present. Uninterpreted -- this crate only recognizes
+    /// the shape (a bare text string immediately following the typeID
+    /// item), never what the string means.
+    ndef_id: Option<&'a [u8]>,
     /// True if no typeID was found before the map — the record is
     /// unroutable and should be ignored by dispatch logic.
     pub ignored: bool,
@@ -161,18 +160,9 @@ pub struct Record<'a> {
 }
 
 impl<'a> Record<'a> {
-    /// The first typeID, if any. This is the primary routing key.
+    /// This Record's typeID, if any.
     pub fn type_id(&self) -> Option<cbor::Key<'a>> {
-        if self.type_id_count > 0 {
-            Some(self.type_ids_buf[0])
-        } else {
-            None
-        }
-    }
-
-    /// All accumulated typeIDs (primary + backup).
-    pub fn type_ids(&self) -> &[cbor::Key<'a>] {
-        &self.type_ids_buf[..self.type_id_count]
+        self.type_id
     }
 
     /// The raw namespace value from this Record's own namespace-pairing
@@ -184,53 +174,62 @@ impl<'a> Record<'a> {
     pub fn local_namespace(&self) -> Option<cbor::Key<'a>> {
         self.local_namespace
     }
+
+    /// The raw bytes of this Record's NDEF-ID-equivalent text string
+    /// (§3.1), if present.
+    pub fn ndef_id(&self) -> Option<&'a [u8]> {
+        self.ndef_id
+    }
 }
 
 fn parse_record(buf: &[u8]) -> Result<(Record<'_>, usize), Error> {
     let mut pos = 0usize;
-    let mut type_ids_buf = [cbor::Key::Uint(0); MAX_TYPE_IDS];
-    let mut type_id_count = 0usize;
+    let mut type_id: Option<cbor::Key<'_>> = None;
     let mut local_namespace: Option<cbor::Key<'_>> = None;
+    let mut ndef_id: Option<&[u8]> = None;
 
-    // Phase 1: accumulate typeIDs — contiguous run of uint/byte-string/
-    // text-string items, and/or namespace-pairing arrays, at the start
-    // of the record.
-    while pos < buf.len() {
-        // Peek at the head to check major type before fully parsing.
+    // Phase 1: recognize this Record's single typeID-bearing item -- a
+    // bare uint, or a namespace-pairing array -- then its optional
+    // NDEF-ID text string.
+    if pos < buf.len() {
         let head = cbor::read_head(&buf[pos..]).map_err(Error::Cbor)?;
-        if head.major == 0 || head.major == 2 || head.major == 3 {
-            // It's a typeID (uint or byte string). Parse the key.
+        if head.major == 0 {
+            // Bare uint typeID -- the only valid bare typeID shape now
+            // (byte string and text string Type IDs were both retired,
+            // see docs/FINDINGS.md).
             let (key, len) = cbor::read_key(&buf[pos..]).map_err(Error::Cbor)?;
-            if type_id_count < MAX_TYPE_IDS {
-                type_ids_buf[type_id_count] = key;
-                type_id_count += 1;
-            }
+            type_id = Some(key);
             pos += len;
         } else if head.major == 4 && !head.is_indefinite() && head.arg == 2 {
             // Candidate namespace-pairing item: [namespace, typeId].
             // Purely structural recognition — this crate never learns
             // what a namespace means, only that this specific 2-element
-            // shape yields one more typeId candidate plus an opaque
-            // side value. If the two elements don't match the expected
-            // shape, this isn't a pairing after all; stop Phase 1 here
-            // (unchanged `pos`) and let Phase 2 skip the whole array
-            // generically, same as any other unrecognized item.
+            // shape yields one typeId candidate plus an opaque side
+            // value. If the two elements don't match the expected
+            // shape, this isn't a pairing after all; Phase 2 skips the
+            // whole array generically, same as any other unrecognized
+            // item.
             let elems_start = pos + head.head_len;
-            match parse_namespace_pairing(&buf[elems_start..]).map_err(Error::Cbor)? {
-                Some((ns, id, elems_len)) => {
-                    if local_namespace.is_none() {
-                        local_namespace = Some(ns);
-                    }
-                    if type_id_count < MAX_TYPE_IDS {
-                        type_ids_buf[type_id_count] = cbor::Key::Uint(id);
-                        type_id_count += 1;
-                    }
-                    pos = elems_start + elems_len;
-                }
-                None => break,
+            if let Some((ns, id, elems_len)) =
+                parse_namespace_pairing(&buf[elems_start..]).map_err(Error::Cbor)?
+            {
+                local_namespace = Some(ns);
+                type_id = Some(cbor::Key::Uint(id));
+                pos = elems_start + elems_len;
             }
-        } else {
-            break;
+        }
+    }
+
+    // The NDEF-ID text string only follows a *recognized* typeID item --
+    // a bare text string with no preceding typeID is not this Record's
+    // NDEF-ID, it's an unrouted Record's first unrecognized item (Phase
+    // 2 skips it as forward-compat padding, same as before).
+    if type_id.is_some() && pos < buf.len() {
+        let head = cbor::read_head(&buf[pos..]).map_err(Error::Cbor)?;
+        if head.major == 3 && !head.is_indefinite() {
+            let (payload, len) = cbor::read_definite_string(&buf[pos..]).map_err(Error::Cbor)?;
+            ndef_id = Some(payload);
+            pos += len;
         }
     }
 
@@ -251,21 +250,22 @@ fn parse_record(buf: &[u8]) -> Result<(Record<'_>, usize), Error> {
         }
     }
 
-    // Validate field-value-shape (§3.2): walk every field value to
-    // ensure it's skip-safe (scalar, definite string, or tag-wrapping-
-    // a-string). This catches disallowed shapes early, during parsing,
-    // so a well-formed-but-illegal Record never silently passes through.
+    // Well-formedness check: walk every field value once so a truncated
+    // or malformed map is caught during parsing, not silently passed
+    // through. §3.2 no longer restricts field-value *shape* (any
+    // well-formed CBOR item is legal now), so this only ever checks
+    // well-formedness, never shape.
     if !map_bytes.is_empty() {
         walk_map_pairs(map_bytes, |_k, _v| Ok(ControlFlow::Continue)).map_err(Error::Cbor)?;
     }
 
-    let ignored = type_id_count == 0;
+    let ignored = type_id.is_none();
 
     Ok((
         Record {
-            type_ids_buf,
-            type_id_count,
+            type_id,
             local_namespace,
+            ndef_id,
             ignored,
             map_bytes,
         },
@@ -279,16 +279,15 @@ fn parse_record(buf: &[u8]) -> Result<(Record<'_>, usize), Error> {
 /// convention as the container discriminator's namespace value, §3.5;
 /// there is no Allocated/uint namespace tier) followed by a typeId
 /// (uint only — a namespace-pairing item never carries a byte-string
-/// typeId; decentralized Record IDs stay a separate, unpaired, always-
-/// global mechanism, §3.1).
+/// typeId; decentralized Record IDs were retired entirely, §3.1).
 ///
 /// Returns `Ok(None)` — not an error — when the two elements are
 /// well-formed CBOR but don't match this shape (e.g. the namespace slot
-/// holds a uint or a text string, or the typeId slot holds a byte
-/// string): that means this array isn't a namespace pairing after all,
-/// and the caller falls back to treating it as an ordinary unrecognized
-/// prefix item. Only a genuine decode failure (truncated/malformed
-/// bytes) propagates as `Err`.
+/// holds a uint or a text string, or the typeId slot holds something
+/// other than a uint): that means this array isn't a namespace pairing
+/// after all, and the caller falls back to treating it as an ordinary
+/// unrecognized prefix item. Only a genuine decode failure
+/// (truncated/malformed bytes) propagates as `Err`.
 fn parse_namespace_pairing(buf: &[u8]) -> Result<Option<(cbor::Key<'_>, u64, usize)>, cbor::Error> {
     let (ns_key, ns_len) = match cbor::read_key(buf) {
         Ok(v) => v,
@@ -328,10 +327,9 @@ pub fn check_criticality(
     walk_map_pairs(map_bytes, |k, _v| {
         // Record-Type-owned keys are always non-negative (Key::Uint).
         // Key 0 is a regular field key like any other — no special-case
-        // skip. Negative keys (Key::NegInt) are mandatory-core-reserved,
-        // not this Type's to interpret — silently skipped here, exactly
-        // like ByteString/TextString already were, and handled instead
-        // by `extract_core_metadata` (EXPERIMENTAL, see there).
+        // skip. Negative keys (Key::NegInt), byte-string keys, and
+        // text-string keys are silently skipped here -- not this Type's
+        // to interpret.
         if let cbor::Key::Uint(key) = k {
             if !known_keys.contains(&key) {
                 if key % 2 == 0 {
@@ -372,12 +370,9 @@ pub fn find_value<'a>(map_bytes: &'a [u8], key: u64) -> Result<Option<&'a [u8]>,
 
 /// Shared pair-walker used by criticality checking and field lookup —
 /// one generic "walk a CBOR map's key/value pairs" implementation
-/// instead of two near-duplicates. Record-Type-owned keys are always
-/// non-negative; negative keys are a separate, mandatory-core-reserved
-/// space (see `extract_core_metadata`, EXPERIMENTAL) — either way, this
-/// walker itself stays key-shape-agnostic, since `cbor::read_key` already
-/// accepts every key shape QDEF allows and callers decide what to do with
-/// each one.
+/// instead of two near-duplicates. Field values may be any well-formed
+/// CBOR item now (§3.2's shape rule was dropped) — `cbor::skip_any_item`
+/// handles skipping any of them, container or scalar alike.
 fn walk_map_pairs<'a>(
     map_bytes: &'a [u8],
     mut visit: impl FnMut(cbor::Key<'a>, &'a [u8]) -> Result<ControlFlow, cbor::Error>,
@@ -406,7 +401,7 @@ fn walk_map_pairs<'a>(
         let (key, klen) = cbor::read_key(&map_bytes[pos..])?;
         pos += klen;
         let vstart = pos;
-        let vlen = cbor::skip_value(&map_bytes[pos..])?;
+        let vlen = cbor::skip_any_item(&map_bytes[pos..])?;
         let value = &map_bytes[vstart..vstart + vlen];
         pos += vlen;
 
@@ -419,64 +414,14 @@ fn walk_map_pairs<'a>(
     Ok(pos)
 }
 
-/// EXPERIMENTAL -- not part of the spec. Mirrors `extractCoreMetadata` in
-/// the Node prototype's `core.js`: a second, competing prototype (next to
-/// the array-wrapper external-ID prefix item explored elsewhere) for
-/// whether QDEF could add a mandatory-core, type-independent external-
-/// reference identifier (an NDEF-ID equivalent), this time living in
-/// reserved *negative* map keys instead of a prefix item.
-///
-/// Key -1 is the only one currently assigned (external ID). An
-/// unrecognized negative key is still even/odd-checked, exactly like
-/// `check_criticality` does for positive keys — but applied here, at the
-/// mandatory-core level, identically to every Record regardless of its
-/// Type, never deferred to that Type's own `check_criticality` call.
-pub fn extract_core_metadata<'a>(
-    map_bytes: &'a [u8],
-) -> Result<CoreMetadataOutcome<'a>, Error> {
-    let mut external_id: Option<&'a [u8]> = None;
-    let mut aborted_on: Option<i64> = None;
-    walk_map_pairs(map_bytes, |k, v| {
-        if let cbor::Key::NegInt(arg) = k {
-            let value = cbor::neg_int_value(arg);
-            if value == -1 {
-                external_id = Some(v);
-            } else if cbor::neg_int_is_even(arg) {
-                aborted_on = Some(value);
-                return Ok(ControlFlow::Stop);
-            }
-            // odd, unrecognized: silently ignored — same forward-compat
-            // rule as any other odd key, just enforced by the core
-            // instead of a Type.
-        }
-        Ok(ControlFlow::Continue)
-    })
-    .map_err(Error::Cbor)?;
-
-    Ok(match aborted_on {
-        Some(k) => CoreMetadataOutcome::Aborted(k),
-        None => CoreMetadataOutcome::Ok(CoreMetadata { external_id }),
-    })
-}
-
-/// EXPERIMENTAL -- see `extract_core_metadata`.
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Default)]
-pub struct CoreMetadata<'a> {
-    pub external_id: Option<&'a [u8]>,
-}
-
-/// EXPERIMENTAL -- see `extract_core_metadata`.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum CoreMetadataOutcome<'a> {
-    Ok(CoreMetadata<'a>),
-    /// §3.2's even/odd rule, applied at the mandatory-core level: carries
-    /// the unrecognized even negative key's actual (reconstructed) value.
-    Aborted(i64),
-}
-
 /// Re-exported for callers that want to read a simple text/byte string
 /// field's payload out of a value returned by `find_value` (e.g. the Wi-Fi
-/// SSID field) without pulling in a full CBOR library themselves.
+/// SSID field) without pulling in a full CBOR library themselves. Only
+/// covers the common, definite-length case -- a field value that turns
+/// out to be something more exotic (an indefinite-length string, a
+/// nested container) needs a real CBOR library to decode fully, the same
+/// way it always did for containers even before §3.2's shape rule was
+/// dropped.
 pub fn read_definite_string(value_bytes: &[u8]) -> Result<&[u8], Error> {
     let (payload, _) = cbor::read_definite_string(value_bytes).map_err(Error::Cbor)?;
     Ok(payload)

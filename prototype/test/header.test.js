@@ -16,7 +16,7 @@ const header = require('../src/header');
 test('a decentralized-namespace discriminator (byte string) round-trips, no hint', () => {
   const namespace = Buffer.from('663c1cf2', 'hex');
   const container = core.encodeContainer(
-    [{ typeIds: [100], fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) }],
+    [{ typeId: 100, fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) }],
     namespace,
   );
 
@@ -29,7 +29,7 @@ test('a decentralized-namespace discriminator (byte string) round-trips, no hint
 
 test('a nonzero uint discriminator is no longer a recognized namespace shape -- degrades gracefully (there is no Allocated namespace tier)', () => {
   const container = core.encodeContainer(
-    [{ typeIds: [100], fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) }],
+    [{ typeId: 100, fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) }],
     500,
   );
 
@@ -40,7 +40,7 @@ test('a nonzero uint discriminator is no longer a recognized namespace shape -- 
 
 test('the default discriminator (bare uint 0) means no namespace declared', () => {
   const container = core.encodeContainer([
-    { typeIds: [100], fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) },
+    { typeId: 100, fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) },
   ]);
 
   const { discriminator, records } = core.decodeContainer(container);
@@ -112,7 +112,7 @@ test('an unrecognized discriminator shape (e.g. a bare text string) degrades to 
   // Text string is not currently a defined discriminator form -- same
   // graceful degrade an absent or malformed header already had.
   const container = core.encodeContainer(
-    [{ typeIds: [100], fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) }],
+    [{ typeId: 100, fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) }],
     'not-a-defined-shape',
   );
 
@@ -131,13 +131,64 @@ test('a container with no Records at all is still valid -- just the mandatory di
 
 test('the container is exactly magic + discriminator + CBOR Sequence, no version byte', () => {
   const container = core.encodeContainer([
-    { typeIds: [100], fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) },
+    { typeId: 100, fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) },
   ]);
 
   assert.deepEqual(container.subarray(0, 4), core.MAGIC);
   // Byte immediately after magic is the discriminator's own CBOR head --
   // the default (bare uint 0) encodes as a single byte, 0x00.
   assert.equal(container[4], 0x00);
+});
+
+// ---------------------------------------------------------------------
+// Namespace Hint hash-derivation verification (spec §3.5). Restores
+// verifyNamespaceHint, dropped without comment in an earlier prefix-
+// typeID redesign pass well before this session's own work -- QDEF-SPEC.md
+// and DESIGN.md kept documenting it as prototyped the whole time, so this
+// was a real doc/code drift, not a design decision. N is now simply the
+// candidate namespace's own byte length (always a byte string, §3.5) --
+// no uint-magnitude guessing the way the retired Type Hint mechanism
+// needed, since there's no uint form to infer a width from anymore.
+// ---------------------------------------------------------------------
+
+test('a namespace Hint that hash-derivation actually backs verifies -- narrow (4-byte) width', () => {
+  const namespace = header.deriveHashId('com.example/tagdrop-paper', 4);
+  assert.equal(header.verifyNamespaceHint(namespace, 'com.example/tagdrop-paper'), 'verified');
+});
+
+test('a namespace Hint verifies at wide (8-byte) width too -- the bug this locks in: an earlier version always truncated to 4 bytes regardless of the candidate ID\'s own magnitude, so a genuinely wide ID could never verify', () => {
+  const namespace = header.deriveHashId('com.example/tagdrop-paper', 8);
+  assert.equal(header.verifyNamespaceHint(namespace, 'com.example/tagdrop-paper'), 'verified');
+});
+
+test('a namespace Hint naming a different string than the one that actually derived the namespace is unverified, not silently accepted', () => {
+  const namespace = header.deriveHashId('com.example/tagdrop-paper', 4);
+  assert.equal(header.verifyNamespaceHint(namespace, 'com.example/some-other-name'), 'unverified');
+});
+
+test('a purely random namespace with no hash-derivation backing it at all is also just unverified -- self-certification is opportunistic, never required', () => {
+  const namespace = Buffer.from('deadbeef', 'hex');
+  assert.equal(header.verifyNamespaceHint(namespace, 'com.example/tagdrop-paper'), 'unverified');
+});
+
+test('no Hint name present means nothing to verify -- not-applicable, not a failure', () => {
+  const namespace = Buffer.from('663c1cf2', 'hex');
+  assert.equal(header.verifyNamespaceHint(namespace, undefined), 'not-applicable');
+  assert.equal(header.verifyNamespaceHint(undefined, 'com.example/tagdrop-paper'), 'not-applicable');
+});
+
+test('a real decoded discriminator round-trips into a verifiable Hint end to end', () => {
+  const namespace = header.deriveHashId('com.example/tagdrop-paper', 8);
+  const fullForm = new Map([
+    [header.HEADER_NAMESPACE_KEY, namespace],
+    [header.HEADER_NAMESPACE_HINT_KEY, 'com.example/tagdrop-paper'],
+  ]);
+  const container = core.encodeContainer([], fullForm);
+
+  const { discriminator } = core.decodeContainer(container);
+  const h = header.parseDiscriminator(discriminator);
+
+  assert.equal(header.verifyNamespaceHint(h.namespace, h.hint), 'verified');
 });
 
 // ---------------------------------------------------------------------
@@ -179,16 +230,6 @@ test('odd uint Type IDs throw without a declared namespace', () => {
   );
 });
 
-test('byte string Type IDs always resolve globally', () => {
-  const byteId = Buffer.from('A7F90B3C', 'hex');
-  const namespace = Buffer.from('6f6f6f6f', 'hex');
-  const withNamespace = header.resolveLookupKey({ namespace }, byteId);
-  const withoutNamespace = header.resolveLookupKey(undefined, byteId);
-
-  assert.deepEqual(withNamespace, { scope: 'global', typeId: byteId });
-  assert.deepEqual(withoutNamespace, { scope: 'global', typeId: byteId });
-});
-
 test('a common-vocabulary Type ID stays global even inside a declared namespace', () => {
   const GLOBAL_KNOWN_TYPES = new Map([[100, 'Wi-Fi Provisioning']]);
   function naiveDispatch(typeId) {
@@ -201,16 +242,21 @@ test('a common-vocabulary Type ID stays global even inside a declared namespace'
   assert.equal(naiveDispatch(key.typeId), 'Wi-Fi Provisioning');
 });
 
-test("TagDrop's migration case: old global byte string ID keeps working, new namespace-scoped odd uint for 'the same' logical type never collides", () => {
+test("an old self-allocated even Type ID and a new namespace-scoped odd Type ID never collide -- structurally independent mechanisms, no promotion/migration bridge needed between them", () => {
+  // There is no backup-typeID promotion mechanism anymore (docs/FINDINGS.md)
+  // -- an adopter with an existing self-allocated even ID and a newly-
+  // adopted namespace-scoped odd ID for new content just has two
+  // independent, never-colliding identities, not a "before/after" pair
+  // needing a bridge.
   const TAGDROP_NAMESPACE = Buffer.from('a9d6e1f30b7c4482', 'hex');
-  const OLD_GLOBAL_TYPE_ID = Buffer.from('A7F90B3CDE123456', 'hex');
-  const NEW_NAMESPACE_LOCAL_ID = 32769;
+  const OLD_SELF_ALLOCATED_ID = 32770; // even -- always global
+  const NEW_NAMESPACE_LOCAL_ID = 32769; // odd -- namespace-scoped
 
   const oldStyleContainer = core.encodeContainer([
-    { typeIds: [OLD_GLOBAL_TYPE_ID], fields: new Map([[0, 'legacy payload']]) },
+    { typeId: OLD_SELF_ALLOCATED_ID, fields: new Map([[0, 'legacy payload']]) },
   ]);
   const newStyleContainer = core.encodeContainer(
-    [{ typeIds: [NEW_NAMESPACE_LOCAL_ID], fields: new Map([[0, 'new payload']]) }],
+    [{ typeId: NEW_NAMESPACE_LOCAL_ID, fields: new Map([[0, 'new payload']]) }],
     TAGDROP_NAMESPACE,
   );
 

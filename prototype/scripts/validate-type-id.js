@@ -1,21 +1,27 @@
 #!/usr/bin/env node
 'use strict';
-// Validate a Record Type ID or Namespace ID against its name,
-// checking the hash derivation (spec §3.1), name quality, and constraints.
+// Validate a Namespace ID against its Hint name, checking the hash
+// derivation (spec §3.5), name quality, and constraints.
 // Exits 0 if valid, 1 if any check fails.
 //
 // Usage:
 //   node scripts/validate-type-id.js <name> <hex-id>
-//   node scripts/validate-type-id.js --namespace <name> <hex-id>
 //   node scripts/validate-type-id.js --reverse <hex-id> <name>
 //
 // The ID should be provided as a hex string (e.g. "34E1E4AF986C74E2").
+//
+// Namespace-only: decentralized (byte string) Record Type IDs were
+// retired entirely (spec §3.1) — a namespace-scoped odd uint Type ID
+// does that job cheaper, so there is no longer a "Record Type ID" mode
+// for this tool to validate. This algorithm's only remaining direct use
+// is verifying a Namespace ID's Hint name (spec §3.5).
 //
 // Checks performed:
 //   1. Hash derivation matches (SHA-256 truncated to the given byte length)
 //   2. Name is reverse-domain qualified (warning if not)
 //   3. Name doesn't use collision-prone bare generic words (warning)
-//   4. ID meets minimum byte length (>= 2 bytes)
+//   4. ID meets minimum byte length (>= 2 bytes; 4+ recommended to
+//      self-certify freely without coordination, spec §3.5)
 
 const crypto = require('crypto');
 
@@ -47,11 +53,6 @@ function parseArgs(argv) {
   if (args.includes('--help') || args.includes('-h')) {
     result.mode = 'help';
     return result;
-  }
-
-  if (args.includes('--namespace')) {
-    result.mode = 'namespace';
-    args.splice(args.indexOf('--namespace'), 1);
   }
 
   if (args.includes('--reverse')) {
@@ -95,16 +96,15 @@ function validate() {
   const { mode, name, id: idStr } = parseArgs(process.argv);
 
   if (mode === 'help') {
-    console.error(`Usage: node scripts/validate-type-id.js [--namespace] [--reverse] <name> <hex-id>
+    console.error(`Usage: node scripts/validate-type-id.js [--reverse] <name> <hex-id>
 
-Validate a decentralized Record Type ID or Namespace ID against its name.
+Validate a Namespace ID against its Hint name (spec §3.5).
 
 Arguments:
-  name        Reverse-domain qualified name (e.g. "com.example.myapp/route")
+  name        Reverse-domain qualified name (e.g. "com.example/myapp-paper")
   hex-id      The ID as a hex string (e.g. "34E1E4AF986C74E2" or h'34E1E4AF986C74E2')
 
 Flags:
-  --namespace Validate as a Namespace ID (same algorithm, different use)
   --reverse   Argument order is <hex-id> <name> instead of <name> <hex-id>
 
 Checks performed:
@@ -114,8 +114,7 @@ Checks performed:
   4. ID meets minimum byte length (>= 2 bytes)
 
 Examples:
-  node scripts/validate-type-id.js com.example.myapp/route 34E1E4AF986C74E2
-  node scripts/validate-type-id.js --namespace com.example/myapp-paper h'A7F90B3C'`);
+  node scripts/validate-type-id.js com.example/myapp-paper h'216e6add'`);
     process.exit(0);
   }
 
@@ -128,26 +127,24 @@ Examples:
   const warnings = [];
 
   // Parse the ID as a byte string
-  let typeId;
+  let namespaceId;
   try {
-    typeId = parseHexId(idStr);
+    namespaceId = parseHexId(idStr);
   } catch (e) {
     console.error(`Error: "${idStr}" is not a valid hex string: ${e.message}`);
     process.exit(1);
   }
 
-  if (typeId.length < MIN_BYTE_LENGTH) {
-    errors.push(`ID must be at least ${MIN_BYTE_LENGTH} bytes, got ${typeId.length}.`);
+  if (namespaceId.length < MIN_BYTE_LENGTH) {
+    errors.push(`ID must be at least ${MIN_BYTE_LENGTH} bytes, got ${namespaceId.length}.`);
   }
 
-  const isNamespace = mode === 'namespace';
-
   // 1. Hash derivation check
-  const expected = deriveHashId(name, typeId.length);
-  const matches = expected.equals(typeId);
+  const expected = deriveHashId(name, namespaceId.length);
+  const matches = expected.equals(namespaceId);
 
-  console.log(`Validating: ${isNamespace ? 'Namespace ID' : 'Record Type ID'} for "${name}"`);
-  console.log(`  Candidate ID:  h'${typeId.toString('hex')}' (${typeId.length} bytes)`);
+  console.log(`Validating: Namespace ID for "${name}"`);
+  console.log(`  Candidate ID:  h'${namespaceId.toString('hex')}' (${namespaceId.length} bytes)`);
   console.log(`  Expected hash: h'${expected.toString('hex')}' (${expected.length} bytes)`);
   console.log('');
 
@@ -161,7 +158,7 @@ Examples:
   // 2. Name quality: reverse-domain qualified?
   if (!name.includes('.') && !name.includes('/')) {
     warnings.push(`"${name}" does not look reverse-domain qualified.`);
-    console.warn(`  ⚠ Name is not reverse-domain qualified (spec §3.1 recommends qualifying).`);
+    console.warn(`  ⚠ Name is not reverse-domain qualified (spec §3.5 recommends qualifying).`);
   } else {
     console.log('  ✓ Name is reverse-domain qualified.');
   }
@@ -172,21 +169,19 @@ Examples:
     warnings.push(`"${name}" ends with a collision-prone generic word ("${lastSegment}").`);
     console.warn(`  ⚠ Name ends with "${lastSegment}" — a word two unrelated projects are likely`);
     console.warn(`    to pick independently. Consider a more specific name for better`);
-    console.warn(`    collision-safety. See spec §3.1.`);
+    console.warn(`    collision-safety. See spec §3.5.`);
   } else {
     console.log('  ✓ Name avoids known collision-prone patterns.');
   }
 
   // 4. Minimum byte length check
-  if (typeId.length >= 4) {
-    console.log(`  ✓ Byte length ${typeId.length} is adequate for global use.`);
-  } else if (typeId.length >= 2) {
-    console.log(`  ℹ Byte length ${typeId.length} is suitable for namespace-scoped use.`);
-    if (!isNamespace) {
-      warnings.push(`2-byte ID is recommended for namespace-scoped use only.`);
-      console.warn(`  ⚠ 2-byte IDs are recommended for namespace-scoped use only.`);
-      console.warn(`    Use 4+ bytes for global (unnamespaced) use.`);
-    }
+  if (namespaceId.length >= 4) {
+    console.log(`  ✓ Byte length ${namespaceId.length} is adequate to self-certify freely.`);
+  } else {
+    console.log(`  ℹ Byte length ${namespaceId.length} is below the 4-byte self-certify floor.`);
+    warnings.push('Namespace IDs shorter than 4 bytes are reserved, not self-allocatable.');
+    console.warn('  ⚠ Namespace IDs shorter than 4 bytes are reserved (spec §3.5) --');
+    console.warn('    safe only with uniqueness guaranteed by direct coordination.');
   }
 
   // Summary

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
-// Generate a hash-derived decentralized Record Type ID (or Namespace ID)
-// from a qualified name, per spec §3.1's pinned algorithm:
+// Generate a hash-derived Namespace ID from a qualified name, per spec
+// §3.5's pinned algorithm:
 //
 //   digest = SHA-256(UTF-8(name))
 //   N      = developer-chosen byte length (minimum 2, recommended 4+)
@@ -9,18 +9,19 @@
 //
 // Usage:
 //   node scripts/gen-type-id.js <name>
-//   node scripts/gen-type-id.js --namespace <name>
-//   node scripts/gen-type-id.js --width 2|4|8 <name>
+//   node scripts/gen-type-id.js --width 4|8 <name>
 //
-// Names SHOULD be reverse-domain qualified (e.g. "com.example.myapp/route")
-// for collision-safety — see spec §3.1 and DESIGN.md's "Pinning the algorithm"
-// section. Unqualified names are accepted with a warning.
+// Names SHOULD be reverse-domain qualified (e.g. "com.example.myapp-paper")
+// for collision-safety — see spec §3.5 and DESIGN.md's "Pinning the
+// algorithm" section. Unqualified names are accepted with a warning.
 //
-// Without --namespace: derives a Record Type ID (a prefix item before a
-//   Record's field Map, spec §3.1).
-// With --namespace:    derives a Namespace ID (same algorithm, different
-//   intended use — the value goes into the container discriminator,
-//   spec §3.5, not a Record's own prefix typeID).
+// Namespace-only: decentralized (byte string) Record Type IDs were
+// retired entirely (spec §3.1) — a namespace-scoped odd uint Type ID
+// gives every Record Type inside a declared namespace the identical
+// zero-coordination collision safety at a fraction of the per-ID cost,
+// so there is no longer a "Record Type ID" mode for this tool to offer.
+// This algorithm's only remaining direct use is deriving a Namespace ID
+// (the value goes into the container discriminator, spec §3.5).
 //
 // --width lets you pick the output byte width. Without it, 4 and 8 are shown.
 
@@ -42,39 +43,30 @@ function formatResult(buf) {
 }
 
 function usage() {
-  console.error(`Usage: node scripts/gen-type-id.js [--namespace] [--width 2|4|8] <name>
+  console.error(`Usage: node scripts/gen-type-id.js [--width 2|4|8] <name>
 
-Derive a hash-based decentralized Record Type ID or Namespace ID from a name.
+Derive a hash-based Namespace ID (spec §3.5) from a name.
 
 Arguments:
-  name            Reverse-domain qualified name (e.g. "com.example.myapp/route")
-  --namespace     Derive a Namespace ID instead of a Record Type ID
+  name            Reverse-domain qualified name (e.g. "com.example/myapp-paper")
   --width N       Output width in bytes (minimum 2). Without this flag, 4 and 8 are shown.
 
-Algorithm (spec §3.1):
+Algorithm (spec §3.5):
   SHA-256(UTF-8(name)), truncated to N bytes as a CBOR byte string.
-  N is developer-chosen: 2 for namespace-scoped, 4+ for global use.
+  N is developer-chosen: 4+ bytes recommended (self-certify freely at
+  this length or longer; shorter is reserved, not self-allocatable --
+  see spec §3.5's byte-length guidance).
 
 Examples:
-  node scripts/gen-type-id.js com.example.myapp/route
-  node scripts/gen-type-id.js --namespace com.example/myapp-paper
-  node scripts/gen-type-id.js --width 8 com.example.myapp/route`);
+  node scripts/gen-type-id.js com.example/myapp-paper
+  node scripts/gen-type-id.js --width 8 com.example/myapp-paper`);
 }
 
 const args = process.argv.slice(2);
-let asNamespace = false;
 let forcedWidth = null;
 
 // Parse flags
-const flagIdx = {
-  namespace: args.indexOf('--namespace'),
-  width: args.indexOf('--width'),
-};
-
-if (flagIdx.namespace !== -1) {
-  asNamespace = true;
-  args.splice(flagIdx.namespace, 1);
-}
+const flagIdx = { width: args.indexOf('--width') };
 
 if (flagIdx.width !== -1) {
   const wIdx = args.indexOf('--width');
@@ -101,8 +93,8 @@ if (!name || name.length === 0) {
 // Warn on unqualified names (no dot or slash — likely not reverse-domain).
 if (!name.includes('.') && !name.includes('/')) {
   console.error(`Warning: "${name}" does not look reverse-domain qualified.`);
-  console.error('  Names SHOULD be qualified (e.g. "com.example.myapp/route")');
-  console.error('  for collision-safety. See spec §3.1.');
+  console.error('  Names SHOULD be qualified (e.g. "com.example/myapp-paper")');
+  console.error('  for collision-safety. See spec §3.5.');
   console.error('');
 }
 
@@ -117,8 +109,8 @@ if (forcedWidth) {
   console.log(`    Value (hex): h'${result.hex}'`);
   console.log(`    CBOR wire:   ${(Buffer.from([0x40 + forcedWidth]).toString('hex') + result.hex)}`);
   if (forcedWidth < 4) {
-    console.log(`\nNote: ${forcedWidth}-byte IDs are recommended for namespace-scoped use only.`);
-    console.log('  Use 4+ bytes for global (unnamespaced) use.');
+    console.log(`\nNote: ${forcedWidth}-byte namespace IDs are reserved, not self-allocatable`);
+    console.log('  (spec §3.5). Use 4+ bytes to self-certify with no coordination.');
   }
 } else {
   const full = formatResult(deriveHashId(name, 32));
@@ -128,18 +120,15 @@ if (forcedWidth) {
   console.log(`Derivation:  SHA-256(UTF-8("${name}"))\n`);
   console.log(`  Full SHA-256:`);
   console.log(`    h'${full.hex}'\n`);
-  console.log(`  4-byte (recommended minimum for global use):`);
+  console.log(`  4-byte (recommended minimum, self-certify freely):`);
   console.log(`    Value (hex): h'${narrow.hex}'`);
   console.log(`\n  8-byte (maximum safety):`);
   console.log(`    Value (hex): h'${wide.hex}'`);
 }
 
-if (asNamespace) {
-  console.log('\nUsage in wire format: the container discriminator (spec §3.5),');
-  console.log('the mandatory CBOR item right after magic. Cheapest form is the');
-  console.log('bare byte string itself:');
-  console.log('  h\'<value above>\'                          // decentralized namespace, no hint');
-  console.log('\nTo also carry a recoverable name, use the array or map form:');
-  console.log('  [h\'<value above>\', "<name>"]              // array form');
-  console.log('  { 1: h\'<value above>\', 3: "<name>" }      // map form');
-}
+console.log('\nUsage in wire format: the container discriminator (spec §3.5),');
+console.log('the mandatory CBOR item right after magic. Cheapest form is the');
+console.log('bare byte string itself:');
+console.log('  h\'<value above>\'                          // namespace, no hint');
+console.log('\nTo also carry a recoverable Hint name, use the map form:');
+console.log('  { 1: h\'<value above>\', 3: "<name>" }      // map form');

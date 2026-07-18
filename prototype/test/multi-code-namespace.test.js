@@ -30,7 +30,7 @@ const KNOWN_KEYS = new Map([
 
 function buildCodes({ repeatNamespaceOnEveryCode }) {
   const innerBytes = core.encodeRecordBytes({
-    typeIds: [NAMESPACE_SCOPED_TYPE],
+    typeId: NAMESPACE_SCOPED_TYPE,
     fields: new Map([[0, 'namespace-scoped payload']]),
   });
   const fragmentRecords = wrappers.splitEncode(innerBytes, {
@@ -88,7 +88,7 @@ test('FINDING: a namespace declared on only one code is a single point of failur
 
 test('codes disagreeing on the declared namespace is rejected, not silently resolved one way or the other', () => {
   const innerBytes = core.encodeRecordBytes({
-    typeIds: [NAMESPACE_SCOPED_TYPE],
+    typeId: NAMESPACE_SCOPED_TYPE,
     fields: new Map([[0, 'payload']]),
   });
   const fragmentRecords = wrappers.splitEncode(innerBytes, { count: 2 });
@@ -105,7 +105,7 @@ test('codes disagreeing on the declared namespace is rejected, not silently reso
 
 test('a namespace-scoped Type ID with no namespace declared anywhere in the group still aborts, same as the single-code case', () => {
   const innerBytes = core.encodeRecordBytes({
-    typeIds: [NAMESPACE_SCOPED_TYPE],
+    typeId: NAMESPACE_SCOPED_TYPE,
     fields: new Map([[0, 'payload']]),
   });
   const fragmentRecords = wrappers.splitEncode(innerBytes, { count: 2 });
@@ -135,7 +135,7 @@ test('a namespace-scoped Type ID with no namespace declared anywhere in the grou
 test('a decentralized (byte string) namespace repeated identically across every code resolves correctly -- regression for the !== reference-equality bug', () => {
   const decentralizedNamespace = Buffer.from('a9d6e1f30b7c4482', 'hex');
   const innerBytes = core.encodeRecordBytes({
-    typeIds: [NAMESPACE_SCOPED_TYPE],
+    typeId: NAMESPACE_SCOPED_TYPE,
     fields: new Map([[0, 'namespace-scoped payload']]),
   });
   const fragmentRecords = wrappers.splitEncode(innerBytes, { count: 2 });
@@ -157,7 +157,7 @@ test('a decentralized (byte string) namespace repeated identically across every 
 
 test('codes disagreeing on a decentralized namespace (different bytes, same length) are still correctly rejected', () => {
   const innerBytes = core.encodeRecordBytes({
-    typeIds: [NAMESPACE_SCOPED_TYPE],
+    typeId: NAMESPACE_SCOPED_TYPE,
     fields: new Map([[0, 'payload']]),
   });
   const fragmentRecords = wrappers.splitEncode(innerBytes, { count: 2 });

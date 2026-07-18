@@ -33,7 +33,7 @@ test('a bare CBOR Sequence carried under a custom URI scheme round-trips with no
   // a full container now also carries the mandatory discriminator item
   // right after magic, which this path deliberately has neither of.
   const bareSeq = core.encodeRecordBytes({
-    typeIds: [PREVIEW_TYPE],
+    typeId: PREVIEW_TYPE,
     fields: new Map([[0, 'preview text']]),
   });
 
@@ -55,15 +55,15 @@ test('the same self-allocated even Type ID needs no declared namespace to resolv
 });
 
 test('FINDING: skipping magic, the discriminator, and namespace-scoping together is real, verified savings, not an estimate', () => {
-  function bareCost(typeIds, fields) {
-    return core.encodeRecordBytes({ typeIds, fields: fields || new Map() }).length;
+  function bareCost(typeId, fields) {
+    return core.encodeRecordBytes({ typeId, fields: fields || new Map() }).length;
   }
 
   const namespaceValue = Buffer.alloc(4, 0xcd);
   const discriminatorCost = cbor.encodeCanonical(namespaceValue).length;
-  const namespaceScopedPreviewCost = bareCost([1]); // smallest legal odd uint
+  const namespaceScopedPreviewCost = bareCost(1); // smallest legal odd uint
 
-  const selfAllocatedEvenCost = bareCost([PREVIEW_TYPE]);
+  const selfAllocatedEvenCost = bareCost(PREVIEW_TYPE);
 
   // Per-code cost, generic shared-container path: magic + a decentralized-
   // namespace discriminator + a namespace-scoped small odd uint Record.

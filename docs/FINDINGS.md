@@ -1833,3 +1833,240 @@ section. Prototyped and cross-validated in both `prototype/src/core.js`
 / `prototype/src/header.js` and `rust/qdef-core`, all tests updated
 in-place to construct namespace values as byte strings throughout rather
 than left pointing at a now-nonexistent shape.
+
+### 37. Decentralized Type IDs, backup typeIDs, and Type Hint all retired — a namespace-scoped odd uint does every job they did, cheaper
+
+Continuing the same reality-check discipline that produced #36:
+decentralized (byte string) Record Type IDs were the one Type ID form
+namespace-scoped odd uints didn't obviously subsume, since they alone
+could stand as a self-certifying identity with no namespace, registry,
+or reachable-author trust involved at all. Raised directly: does any
+concrete case — TagDrop or otherwise — actually need that property
+today, or was it carried forward from an earlier design generation
+without checking whether it still earns its keep? No concrete case did.
+Once a declared namespace (§3.5) gives every odd uint inside it the
+identical zero-coordination collision safety at 1 byte instead of 4+
+per Record Type, forever, decentralized Type IDs stopped being the
+cheaper option for the case they were actually being reached for in
+practice — they only remained the *only* option for standing alone with
+zero namespace involved, a property nobody was using.
+
+**Three mechanisms retired together, not independently, because their
+survival was interlinked:**
+
+- **Decentralized (byte string) and reserved (text string) Record Type
+  IDs.** The classification table collapses to two rows: uint even
+  (Standard, always global) and uint odd (Scoped, namespace-required).
+  Byte string and text string are no longer valid typeID forms at all —
+  a Record's prefix now recognizes exactly two shapes, a bare uint or a
+  namespace-pairing array wrapping one.
+- **Backup typeIDs.** Their only remaining job — promotion between a
+  decentralized form and a later-registered numeric one — evaporated
+  the moment decentralized Type IDs did; there was nothing left to
+  promote *from*. A Record's prefix now carries exactly one
+  typeID-bearing item; a second typeID-shaped item after it is no
+  longer accumulated, just silently skipped as an unrecognized prefix
+  item, identical to any other unrecognized forward-compat padding.
+- **Type Hint.** Existed only to attach a recoverable name to a
+  decentralized Type ID and let the binding be independently verified.
+  With nothing left to name, it was retired outright rather than kept
+  as an orphaned mechanism. The underlying hash-derivation *algorithm*
+  survives and was relocated to spec §3.5 (namespace IDs and App
+  Route's hash-derived form, §4.4, are its remaining direct users) —
+  only its Type-ID-specific application went away, not the primitive
+  itself.
+
+**Deliberately not built, and explicitly noted as future-evolution
+ideas instead, per direct instruction:** a structured/subscoped Type ID
+as a multi-element array (`[typeId, subscope, subscope, ...]`), for
+hierarchical organization without strict sequential numbering — set
+aside over parser-complexity concerns (unclear even/odd semantics for
+subscope elements, and disambiguating the shape from the surviving
+namespace-pairing array needs care); and a namespace "quick-select"
+mechanism — a short (1–3 byte) back-reference letting a Record cheaply
+select a namespace declared earlier in the same container instead of
+repeating its full bytes — rejected for conflicting with the project's
+standing "no cross-code/cross-record state, every physical code parsed
+independently from a blank slate" invariant, the same one that already
+killed CBOR reference/value-sharing tags and Type-ID-inheritance
+(DESIGN.md's "Reference/value-sharing tags for intra-Sequence
+repetition"). Neither is built; both are recorded in DESIGN.md as
+deferred ideas, not silently dropped.
+
+Verified, not just asserted: Node prototype rewritten
+(`prototype/src/core.js`'s `isTypeId`/`isNamespacePairing`/
+`parseRecords`), `rust/qdef-core` rewritten in lockstep
+(`lib.rs`'s `parse_record`, `cbor.rs`), roughly a dozen Node test files
+mechanically and manually updated (`typeIds: [X]` → `typeId: X`
+throughout, plus rewritten assertions for backup-typeID and byte-
+string-typeID tests), `rust/qdef-core/src/tests.rs` rewritten (28
+tests), `rust/qdef-core/src/fixtures.rs` regenerated from the Node
+encoder and confirmed byte-identical on re-generation both immediately
+after and again after all subsequent code changes (no drift). Final
+counts: 93 Node tests, 28 Rust tests, all passing;
+`cargo clippy --all-targets` and a `thumbv6m-none-eabi` build both
+clean.
+
+### 38. NDEF-ID-equivalent: the freed prefix slot got one clear meaning instead of staying split between two retired ones
+
+#33 explored two competing, mutually exclusive designs for an NDEF-`ID`
+equivalent (a stable, type-independent external reference any Record
+can carry) — a 1-element array prefix item, and a reserved negative map
+key — and left the question open, adopting neither. #37's retirement of
+decentralized Type IDs and Type Hint surfaced a third option neither
+prototype anticipated, because the slot it reuses didn't exist yet at
+the time: the bare CBOR text string immediately following the
+typeID-bearing item, previously split between two purposes (a
+reserved-for-future "Named ID" typeID form, and Type Hint's own
+verification string), both retired and freed at the same time.
+
+**Zero incremental design cost, the deciding property over both #33
+options.** Phase 1 already needed to check "is there a text string
+right after the typeID" for reasons predating this feature (Type Hint
+used to live there); repurposing that check for a general external-ID
+reference added no new prefix-item shape, no new CBOR major-type
+dispatch, and no reserved negative map key. It's parsed by the
+mandatory core, before any Type-specific interpretation, at the same
+architectural layer as the typeID prefix items and the namespace-
+pairing item — exactly the property #33 established the NDEF-`ID`
+equivalent needed and that ordinary field-map extensibility couldn't
+provide.
+
+Both #33's experimental prototypes (`prototype/test/
+experimental-external-id.test.js`, `experimental-core-metadata-negkey.
+test.js`) were deleted as dead code once this shipped; the negative-key
+cross-implementation bug #33 surfaced (`cbor::Key::NegInt`, `NotAKey`
+hard-erroring the whole Sequence) was a genuine, independent fix and is
+unaffected — it stays fixed regardless of which NDEF-`ID` design, if
+any, ultimately landed.
+
+Prototyped in `prototype/test/ndef-id.test.js` (6 tests: round-trip
+alongside an ordinary typeID, coexistence with namespace-pairing,
+zero-cost absence, a stray-text-string-with-no-typeID edge case, an
+only-the-first-of-two-text-strings-is-recognized edge case, and a
+byte-cost FINDING confirming no wrapper overhead over the bare string
+itself) and `rust/qdef-core/src/tests.rs` (3 tests covering the
+identical cases). See spec §3.1's "NDEF-ID-equivalent" and DESIGN.md's
+"NDEF's ID field" entry for the full resolution.
+
+### 39. The field-value-shape rule was dropped entirely — `skip_any_item`'s existing bounded-stack mechanism already covered the case that mattered
+
+§3.2 used to restrict a Record field's value to flat scalars,
+definite-length strings, or a tag wrapping a definite-length string
+directly — anything more structured had to be pre-encoded separately
+and carried as an opaque byte string, decoded again by hand. Raised
+directly, prompted by the observation that a QR code's own physical
+size (around 800 bytes at practical error-correction levels) already
+bounds real-world complexity: is "no recursion at all, not even
+bounded" a property most real decoders actually need, given that
+bound, or one this project kept enforcing past the point it earned its
+cost?
+
+**Checked against the actual implementation before deciding, not
+assumed safe.** The concern the old rule guarded against was
+unstructured recursion overflowing a constrained embedded parser's
+stack. But `skip_any_item` — the function already used to skip prefix
+items (namespace-pairing arrays, tag-wrapped content) — never used true
+recursion for that job; it already walked with a bounded explicit stack
+(`MAX_DEPTH`, a `rust/qdef-core` implementation choice, not a
+wire-format requirement). The stricter, definite-length-string-only
+`skip_value` used specifically for field values was a separate,
+narrower function living alongside it, enforcing a shape restriction
+`skip_any_item` didn't need for its own safety. Merging field-value
+skipping into `skip_any_item` and deleting `skip_value` didn't reopen
+the "constrained embedded scanner, no true recursion" property this
+project has repeatedly protected elsewhere — it just meant field values
+now go through the identical bounded-stack mechanism prefix items
+already trusted.
+
+**One genuinely new capability was needed, not just a rule relaxation:
+skipping indefinite-length (chunked) strings.** Previously only
+indefinite-length *containers* were supported (a `u64::MAX` stack
+sentinel); an indefinite-length byte or text string needs its own
+chunk-walking loop, since each chunk carries its own length and the
+terminator is a bare `0xFF` byte, not a container element count.
+Implemented as an inline loop inside `skip_any_item`'s existing
+byte/text-string branch; a new `cbor::Error::MalformedIndefiniteString`
+catches a chunk sequence with a mismatched major type or a
+nested-indefinite chunk (both illegal per RFC 8949) rather than walking
+into it. §3.4's canonical-encoding requirement is unchanged — conformant
+*encoders* still MUST produce definite-length forms; this is a
+decoder-robustness improvement only.
+
+**No hard depth cap at the spec level, by explicit decision — advisory
+guidance instead.** Encoders SHOULD NOT nest field values more deeply
+than genuinely useful content needs; a decoder MAY enforce its own
+practical bound as an implementation choice (`rust/qdef-core` keeps its
+existing `MAX_DEPTH: usize = 16`, now documented as this decoder's own
+choice, not a wire-format mandate). The format's own physical medium is
+the real-world limiter, the same reasoning that motivated dropping the
+rule in the first place.
+
+Prototyped in `prototype/test/nested-field-values.test.js` (5 tests: a
+bare nested array field value, a bare nested map field value, multi-
+level nesting, and criticality proven unaffected by value shape for
+both even and odd keys) and `rust/qdef-core/src/tests.rs` (three tests
+inverted from asserting `DisallowedFieldValueShape` errors to asserting
+success, plus two new tests for indefinite-length chunked strings — one
+confirming a well-formed chunk sequence skips cleanly, one confirming a
+malformed one is rejected, not silently walked). Cross-validated via
+`rust/qdef-core/src/fixtures.rs` regeneration (`arrayValueContainer`,
+`nestedTag24Container`, and others renamed from their old
+`disallowed*`/pre-relaxation names to reflect their now-legal status).
+
+### 40. `verifyNamespaceHint` had silently disappeared from the prototype months before anyone noticed — a cited function name is a checkable claim, not just prose
+
+While relocating §3.1's hash-derivation algorithm description to §3.5
+during #37's redesign (namespace IDs are its primary surviving direct
+user once Type Hint was retired), a routine check of the specific claim
+being carried forward — "prototyped in `prototype/src/header.js`'s
+`verifyNamespaceHint`" — against the actual current file turned up
+nothing: the function didn't exist. `header.js` had no hash-derivation
+code at all.
+
+**Traced to a real, years-old regression, not a wording error in this
+redesign.** `verifyNamespaceHint` was implemented for the first time in
+the commit that pinned the hash-derivation algorithm and fixed a live
+64-bit verification bug (`01bb2a9`, see #22's entry above — "Pinning
+the hash algorithm"). A later, unrelated commit (`f31737d`, "prefix-
+based typeID routing, drop Type Hint") deleted `prototype/src/typeHint.js`
+as part of moving Type Hint from the field Map into the prefix, and
+`verifyNamespaceHint` — which called into `typeHint.js`'s
+`deriveHashId` — was deleted alongside it, with no corresponding note
+in DESIGN.md or QDEF-SPEC.md that the namespace-Hint-verification
+capability itself had gone away, not just been relocated. Both
+documents kept citing it as prototyped across every redesign pass
+since, including this session's own §3.5 rewrite, until this specific
+check caught it.
+
+**Restored, not just corrected in prose.** Namespace Hint verification
+is real, load-bearing functionality — the self-certifying strengthening
+§3.5 describes is only actually true if something in the prototype
+checks it — so the fix was re-implementing the function, not lowering
+the doc's claim to match reality. Reimplemented directly in
+`prototype/src/header.js` as a small, self-contained function (no
+`typeHint.js` to depend on anymore, since Type Hint itself is gone):
+`deriveHashId(name, byteWidth)` using Node's `crypto` module, and
+`verifyNamespaceHint(namespace, hint)` returning `'verified'` /
+`'unverified'` / `'not-applicable'`. `N` is simply the candidate
+namespace's own byte length now (a namespace value is always a byte
+string, §3.5) rather than a magnitude-inferred uint width the way the
+original, Type-Hint-era version needed — one fewer inference step,
+since there's no uint form to guess a width from anymore.
+
+Six new tests added to `prototype/test/header.test.js`: narrow (4-byte)
+and wide (8-byte) verification, an unverified-Hint case (wrong name),
+an unverified case for a namespace with no hash-derivation backing it
+at all, a not-applicable case for a namespace or Hint that's absent,
+and a real decode-to-verify round trip through `parseDiscriminator`.
+All pass; full Node suite confirmed at 93/93 afterward.
+
+**The general lesson, worth stating plainly:** a design document citing
+a specific file and function name as evidence a mechanism is real is
+making a falsifiable claim, not writing prose — and that claim can go
+stale silently across many later, unrelated commits if nothing
+re-checks it against the actual source. This project's own stated
+discipline ("verify every claim directly, not by memory of what used to
+be true") caught this one; it's worth treating any DESIGN.md or
+QDEF-SPEC.md sentence naming a specific function as due for exactly
+this kind of periodic re-check, not a one-time fact.

@@ -56,6 +56,8 @@
 //                                    an Allocated namespace and no longer
 //                                    means anything.
 
+const crypto = require('crypto');
+
 const HEADER_NAMESPACE_KEY = 1; // map form only: namespace (bstr)
 const HEADER_NAMESPACE_HINT_KEY = 3; // map form only: recoverable name for it
 const HEADER_NAMESPACE_BACKUP_KEY = 5; // map form only: a second bstr namespace, for a length-promotion transition
@@ -159,8 +161,9 @@ function mapGet(mapLike, key) {
  * container's normalized header (as returned by parseDiscriminator, or
  * undefined).
  *
- * Classification (spec §3.1):
- * - Byte string IDs are always global (collision safety from byte length)
+ * Classification (spec §3.1 -- a typeID is always a uint now; byte
+ * string and text string Type IDs were both retired, see
+ * docs/FINDINGS.md):
  * - Even uint IDs are always global (standard record types)
  * - Odd uint IDs require a declared namespace (scoped record types)
  *
@@ -169,10 +172,6 @@ function mapGet(mapLike, key) {
  * (core.js) never calls this and needs no namespace knowledge at all.
  */
 function resolveLookupKey(header, typeId) {
-  // Byte string IDs are always global
-  if (Buffer.isBuffer(typeId)) {
-    return { scope: 'global', typeId };
-  }
   // Even uints are always global (standard record types)
   if (typeId % 2 === 0) {
     return { scope: 'global', typeId };
@@ -198,7 +197,7 @@ function resolveLookupKey(header, typeId) {
  * ambient discriminator stays the cheap default, and only a Record that
  * actually wants a different namespace pays anything extra for it.
  *
- * @param {{typeId: number|bigint|Buffer, localNamespace?: Buffer}} record
+ * @param {{typeId: number|bigint, localNamespace?: Buffer}} record
  * @param {{namespace: Buffer, hint?: string}|undefined} containerHeader -
  *   as returned by parseDiscriminator, or undefined
  */
@@ -210,6 +209,40 @@ function resolveLookupKeyForRecord(record, containerHeader) {
   return resolveLookupKey(effectiveHeader, record.typeId);
 }
 
+/**
+ * Derives a hash-based ID from a name, per spec §3.5's pinned algorithm
+ * (the general-purpose primitive, not tied to Type IDs -- decentralized
+ * Type IDs were retired, but namespace IDs and App Route's hash-derived
+ * form both still use this): SHA-256 over the name's raw UTF-8 bytes,
+ * truncated to the first `byteWidth` digest bytes.
+ */
+function deriveHashId(name, byteWidth) {
+  const digest = crypto.createHash('sha256').update(name, 'utf8').digest();
+  return digest.subarray(0, byteWidth);
+}
+
+/**
+ * §3.5's optional, opportunistic self-certifying strengthening for the
+ * namespace field: `namespace = truncate(SHA-256(UTF-8(name)), N)`,
+ * where N is simply the candidate namespace's own byte length (a
+ * namespace value is always a byte string, §3.5 -- there is no uint
+ * width to infer, unlike the now-retired Type Hint mechanism this
+ * algorithm was first pinned for). Verification is opportunistic: no
+ * hint means nothing to check, a match confirms the binding, a mismatch
+ * degrades to "an unverified label," never a hard failure (§3.5).
+ *
+ * @param {Buffer|undefined} namespace
+ * @param {string|undefined} hint
+ * @returns {'not-applicable'|'verified'|'unverified'}
+ */
+function verifyNamespaceHint(namespace, hint) {
+  if (namespace === undefined || typeof hint !== 'string') {
+    return 'not-applicable';
+  }
+  const derived = deriveHashId(hint, namespace.length);
+  return derived.equals(namespace) ? 'verified' : 'unverified';
+}
+
 module.exports = {
   HEADER_NAMESPACE_KEY,
   HEADER_NAMESPACE_HINT_KEY,
@@ -219,4 +252,6 @@ module.exports = {
   namespaceEquals,
   resolveLookupKey,
   resolveLookupKeyForRecord,
+  deriveHashId,
+  verifyNamespaceHint,
 };

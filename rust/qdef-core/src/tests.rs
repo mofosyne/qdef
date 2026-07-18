@@ -117,14 +117,36 @@ fn bad_magic_is_rejected() {
     assert_eq!(Container::parse(&bad_magic).err(), Some(Error::BadMagic));
 }
 
+// ---------------------------------------------------------------------
+// §3.2's field-value-shape rule was dropped: a field value may now be
+// any well-formed CBOR item, not just a flat scalar or definite-length
+// string. field_value_shape_rule_rejects_a_bare_array_even_under_an_odd_
+// optional_key, tag_24_directly_wrapping_another_tag_is_rejected_not_
+// silently_walked, and a_real_tag_whose_own_definition_requires_array_
+// content_is_still_rejected all previously asserted DisallowedFieldValue
+// Shape errors for exactly these three shapes -- inverted below, since
+// all three are legal now. skip_value's stricter domain was merged into
+// skip_any_item's (docs/FINDINGS.md).
+// ---------------------------------------------------------------------
+
 #[test]
-fn field_value_shape_rule_rejects_a_bare_array_even_under_an_odd_optional_key() {
-    let container = Container::parse(DISALLOWED_ARRAY_VALUE_CONTAINER).unwrap();
-    let result: Result<Vec<_>, _> = container.records().collect();
-    assert_eq!(
-        result.err(),
-        Some(Error::Cbor(cbor::Error::DisallowedFieldValueShape))
-    );
+fn a_bare_array_field_value_is_legal_now_previously_disallowed_outright() {
+    let container = Container::parse(ARRAY_VALUE_CONTAINER).unwrap();
+    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
+    let rec = &records[0];
+    assert!(!rec.ignored);
+
+    let outcome = check_criticality(rec.map_bytes, WIFI_KNOWN_KEYS, |k| assert_eq!(k, 9)).unwrap();
+    assert_eq!(outcome, CriticalityOutcome::Ok);
+
+    // find_value/read_definite_string only handle the simple scalar/
+    // string case by design (docs on read_definite_string) -- confirm the
+    // raw bytes are at least present and well-formed-CBOR-shaped (a
+    // 3-element array: 0x83 0x01 0x02 0x03), without decoding them
+    // further (that needs a real CBOR library, same as any nested
+    // container always did).
+    let raw = find_value(rec.map_bytes, 9).unwrap().unwrap();
+    assert_eq!(raw, &[0x83, 0x01, 0x02, 0x03]);
 }
 
 #[test]
@@ -159,13 +181,20 @@ fn tag_24_wrapping_a_definite_length_string_directly_is_a_legal_field_value() {
 }
 
 #[test]
-fn tag_24_directly_wrapping_another_tag_is_rejected_not_silently_walked() {
+fn a_tag_directly_wrapping_another_tag_is_legal_now_previously_disallowed() {
     let container = Container::parse(NESTED_TAG24_CONTAINER).unwrap();
-    let result: Result<Vec<_>, _> = container.records().collect();
-    assert_eq!(
-        result.err(),
-        Some(Error::Cbor(cbor::Error::DisallowedFieldValueShape))
-    );
+    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
+    let rec = &records[0];
+    assert!(!rec.ignored);
+
+    let outcome = check_criticality(rec.map_bytes, WIFI_KNOWN_KEYS, |k| assert_eq!(k, 9)).unwrap();
+    assert_eq!(outcome, CriticalityOutcome::Ok);
+
+    // tag 24 (0xd8 0x18) wrapping tag 24 (0xd8 0x18) wrapping the real
+    // definite-length byte string -- confirm it's present and well-formed
+    // without decoding further.
+    let raw = find_value(rec.map_bytes, 9).unwrap().unwrap();
+    assert_eq!(&raw[..4], &[0xd8, 0x18, 0xd8, 0x18]);
 }
 
 #[test]
@@ -185,13 +214,22 @@ fn any_tag_number_is_allowed_when_its_content_is_a_definite_length_string() {
 }
 
 #[test]
-fn a_real_tag_whose_own_definition_requires_array_content_is_still_rejected() {
+fn a_tag_wrapping_array_content_is_legal_now_previously_rejected_regardless_of_the_real_tag_definition(
+) {
     let container = Container::parse(STRUCTURED_TAG_WRAPPED_VALUE_CONTAINER).unwrap();
-    let result: Result<Vec<_>, _> = container.records().collect();
-    assert_eq!(
-        result.err(),
-        Some(Error::Cbor(cbor::Error::DisallowedFieldValueShape))
-    );
+    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
+    let rec = &records[0];
+    assert!(!rec.ignored);
+
+    let outcome = check_criticality(rec.map_bytes, WIFI_KNOWN_KEYS, |k| assert_eq!(k, 9)).unwrap();
+    assert_eq!(outcome, CriticalityOutcome::Ok);
+
+    // tag 4 (0xc4) wrapping a 2-element array [-2, 27315] (0x82 0x21 0x19
+    // 0x6a b3) -- confirm it's present and well-formed without decoding
+    // further.
+    let raw = find_value(rec.map_bytes, 9).unwrap().unwrap();
+    assert_eq!(raw[0], 0xc4);
+    assert_eq!(raw[1], 0x82); // 2-element array
 }
 
 #[test]
@@ -221,44 +259,37 @@ fn container_discriminator_needs_no_interpretation_from_this_crate() {
     assert_eq!(read_definite_string(ssid).unwrap(), b"SSID");
 }
 
+// ---------------------------------------------------------------------
+// Decentralized (byte-string) Type IDs and backup typeIDs were both
+// retired (docs/FINDINGS.md) -- byte_string_type_id_routes_correctly and
+// backup_type_ids_are_accumulated_and_accessible previously asserted the
+// old behavior; replaced below with tests confirming both shapes now
+// degrade gracefully instead.
+// ---------------------------------------------------------------------
+
 #[test]
-fn byte_string_type_id_routes_correctly() {
-    let container = Container::parse(BYTE_STRING_TYPE_ID_CONTAINER).expect("valid container");
+fn a_byte_string_typeid_is_no_longer_recognized_the_record_is_unroutable() {
+    let container =
+        Container::parse(BYTE_STRING_TYPE_ID_UNRECOGNIZED_CONTAINER).expect("valid container");
     let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
     assert_eq!(records.len(), 1);
     let rec = &records[0];
-    assert!(!rec.ignored);
-    match &rec.type_id() {
-        Some(Key::ByteString(bytes)) => {
-            assert_eq!(bytes, &[0xa7, 0xf9, 0x0b, 0x3c]);
-        }
-        other => panic!("expected ByteString type_id, got {:?}", other),
-    }
-
-    let payload = find_value(rec.map_bytes, 0).unwrap().unwrap();
-    assert_eq!(
-        read_definite_string(payload).unwrap(),
-        b"decentralized payload"
-    );
+    assert!(rec.ignored);
+    assert_eq!(rec.type_id(), None);
 }
 
 #[test]
-fn backup_type_ids_are_accumulated_and_accessible() {
-    let container = Container::parse(BACKUP_TYPE_ID_CONTAINER).expect("valid container");
+fn a_second_typeid_shaped_item_is_not_accumulated_as_a_backup_it_is_silently_skipped() {
+    let container =
+        Container::parse(SECOND_TYPE_ID_NOT_ACCUMULATED_CONTAINER).expect("valid container");
     let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
     assert_eq!(records.len(), 1);
     let rec = &records[0];
     assert!(!rec.ignored);
-
-    // Primary type ID is the uint
     assert_eq!(rec.type_id(), Some(Key::Uint(100)));
-    // Backup type ID is the byte string
-    let ids = rec.type_ids();
-    assert_eq!(ids.len(), 2);
-    match ids[1] {
-        Key::ByteString(bytes) => assert_eq!(bytes, &[0xa7, 0xf9, 0x0b, 0x3c]),
-        other => panic!("expected ByteString backup, got {:?}", other),
-    }
+
+    let ssid = find_value(rec.map_bytes, 0).unwrap().unwrap();
+    assert_eq!(read_definite_string(ssid).unwrap(), b"SSID");
 }
 
 #[test]
@@ -304,10 +335,37 @@ fn a_record_with_no_pairing_item_has_no_local_namespace() {
     assert_eq!(records[0].local_namespace(), None);
 }
 
+// ---------------------------------------------------------------------
+// NDEF-ID-equivalent (§3.1): a bare text string immediately following
+// the typeID item. Resolves which of two competing experimental
+// prototypes explored earlier (an array-wrapper prefix item, a reserved
+// negative map key) QDEF actually adopted: neither -- this reuses an
+// already-reserved, previously-unclaimed prefix-item slot (the "Named
+// ID" typeID form / Type Hint verification string, both retired
+// alongside decentralized Type IDs). See docs/FINDINGS.md.
+// ---------------------------------------------------------------------
+
 #[test]
-fn a_namespace_pairing_primary_still_accumulates_an_ordinary_backup_typeid() {
+fn an_ndef_id_text_string_round_trips_alongside_an_ordinary_typeid() {
+    let container = Container::parse(NDEF_ID_CONTAINER).expect("valid container");
+    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
+    let rec = &records[0];
+    assert!(!rec.ignored);
+    assert_eq!(rec.type_id(), Some(Key::Uint(100)));
+    assert_eq!(rec.ndef_id(), Some(&b"wifi-record-1"[..]));
+}
+
+#[test]
+fn a_record_with_no_ndef_id_has_it_absent_zero_cost_when_unused() {
+    let container = Container::parse(WIFI_CONTAINER).expect("valid container");
+    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
+    assert_eq!(records[0].ndef_id(), None);
+}
+
+#[test]
+fn an_ndef_id_coexists_with_a_namespace_pairing_typeid_both_prefix_concepts_stack_cleanly() {
     let container =
-        Container::parse(NAMESPACE_PAIRING_WITH_BACKUP_CONTAINER).expect("valid container");
+        Container::parse(NAMESPACE_PAIRING_WITH_NDEF_ID_CONTAINER).expect("valid container");
     let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
     let rec = &records[0];
     assert!(!rec.ignored);
@@ -317,13 +375,7 @@ fn a_namespace_pairing_primary_still_accumulates_an_ordinary_backup_typeid() {
         Some(Key::ByteString(bytes)) => assert_eq!(bytes, &[0xcd, 0xcd, 0xcd, 0xcd]),
         other => panic!("expected ByteString local_namespace, got {:?}", other),
     }
-
-    let ids = rec.type_ids();
-    assert_eq!(ids.len(), 2);
-    match ids[1] {
-        Key::ByteString(bytes) => assert_eq!(bytes, &[0xa7, 0xf9, 0x0b, 0x3c]),
-        other => panic!("expected ByteString backup, got {:?}", other),
-    }
+    assert_eq!(rec.ndef_id(), Some(&b"scoped-record-1"[..]));
 }
 
 // ---------------------------------------------------------------------
@@ -353,20 +405,6 @@ const TWO_RECORD_SEQ_WITH_NEG_KEY: &[u8] = &[
     0x18, 0x64, 0xa2, 0x00, 0x64, 0x53, 0x53, 0x49, 0x44, 0x20, 0x6d, 0x77, 0x69, 0x66, 0x69,
     0x2d, 0x72, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x2d, 0x31, 0x18, 0xc8, 0xa1, 0x00, 0x66, 0x73,
     0x65, 0x63, 0x6f, 0x6e, 0x64,
-];
-
-/// typeId(100) + { 0: "SSID", -2: "unknown" } -- an unrecognized EVEN
-/// negative key, core-level-critical.
-const RECORD_EVEN_NEG_KEY: &[u8] = &[
-    0x18, 0x64, 0xa2, 0x00, 0x64, 0x53, 0x53, 0x49, 0x44, 0x21, 0x67, 0x75, 0x6e, 0x6b, 0x6e,
-    0x6f, 0x77, 0x6e,
-];
-
-/// typeId(100) + { 0: "SSID", -3: "unknown" } -- an unrecognized ODD
-/// negative key, silently ignored at the core level.
-const RECORD_ODD_NEG_KEY: &[u8] = &[
-    0x18, 0x64, 0xa2, 0x00, 0x64, 0x53, 0x53, 0x49, 0x44, 0x22, 0x67, 0x75, 0x6e, 0x6b, 0x6e,
-    0x6f, 0x77, 0x6e,
 ];
 
 #[test]
@@ -407,38 +445,54 @@ fn check_criticality_silently_skips_negative_keys_they_are_not_this_types_to_int
     assert_eq!(outcome, CriticalityOutcome::Ok);
 }
 
+// ---------------------------------------------------------------------
+// Indefinite-length (chunked) byte/text strings inside field values:
+// new capability, added alongside the field-value-shape rule's removal.
+// `skip_any_item` already supported indefinite-length *containers*
+// (arrays/maps, via the u64::MAX sentinel) even before this -- what it
+// couldn't do was skip a chunked *string*, since prefix items never used
+// them. Hand-constructed (RFC 8949's deterministic/canonical encoding
+// never produces indefinite-length forms, so the Node prototype's
+// `cbor.encodeCanonical` can't generate this fixture -- there is nothing
+// for gen-rust-fixtures.js to cross-validate against here).
+// ---------------------------------------------------------------------
+
+/// typeId(100) + { 0: (indefinite text string) "SSID" chunked as "SS"+"ID" }
+/// 0x7f = indefinite-length text string start; 0x62 "SS"; 0x62 "ID"; 0xff = break.
+const RECORD_WITH_INDEFINITE_STRING_VALUE: &[u8] = &[
+    0x18, 0x64, 0xa1, 0x00, 0x7f, 0x62, 0x53, 0x53, 0x62, 0x49, 0x44, 0xff,
+];
+
+/// Same shape, but a chunk's major type doesn't match the string's own
+/// (a byte-string chunk inside a text-string sequence) -- malformed.
+const RECORD_WITH_MISMATCHED_CHUNK_MAJOR_TYPE: &[u8] = &[
+    0x18, 0x64, 0xa1, 0x00, 0x7f, 0x42, 0x53, 0x53, 0xff,
+];
+
 #[test]
-fn extract_core_metadata_reads_the_reserved_external_id_key() {
-    let records: Vec<_> = records_from_sequence(RECORD_WITH_NEG_KEY)
+fn an_indefinite_length_chunked_string_field_value_is_now_skip_safe() {
+    let records: Vec<_> = records_from_sequence(RECORD_WITH_INDEFINITE_STRING_VALUE)
         .collect::<Result<_, _>>()
-        .unwrap();
-    let outcome = extract_core_metadata(records[0].map_bytes).unwrap();
-    match outcome {
-        CoreMetadataOutcome::Ok(meta) => {
-            let raw = meta.external_id.expect("external_id present");
-            assert_eq!(read_definite_string(raw).unwrap(), b"wifi-record-1");
-        }
-        other => panic!("expected Ok, got {:?}", other),
-    }
+        .expect("indefinite-length string field values are legal now");
+    assert_eq!(records.len(), 1);
+    assert!(!records[0].ignored);
+
+    // find_value/skip_any_item correctly find where the chunked string
+    // ends (right after the break byte) -- confirmed by the fact parsing
+    // succeeded and the map has no trailing garbage. read_definite_string
+    // deliberately does NOT handle indefinite-length strings (see its own
+    // docs) -- reading the concatenated content back needs a real CBOR
+    // library, same as any other exotic shape.
+    let raw = find_value(records[0].map_bytes, 0).unwrap().unwrap();
+    assert_eq!(raw, &[0x7f, 0x62, 0x53, 0x53, 0x62, 0x49, 0x44, 0xff]);
 }
 
 #[test]
-fn extract_core_metadata_aborts_on_an_unrecognized_even_negative_key() {
-    let records: Vec<_> = records_from_sequence(RECORD_EVEN_NEG_KEY)
-        .collect::<Result<_, _>>()
-        .unwrap();
-    let outcome = extract_core_metadata(records[0].map_bytes).unwrap();
-    assert_eq!(outcome, CoreMetadataOutcome::Aborted(-2));
-}
-
-#[test]
-fn extract_core_metadata_silently_ignores_an_unrecognized_odd_negative_key() {
-    let records: Vec<_> = records_from_sequence(RECORD_ODD_NEG_KEY)
-        .collect::<Result<_, _>>()
-        .unwrap();
-    let outcome = extract_core_metadata(records[0].map_bytes).unwrap();
-    match outcome {
-        CoreMetadataOutcome::Ok(meta) => assert_eq!(meta.external_id, None),
-        other => panic!("expected Ok with no external_id, got {:?}", other),
-    }
+fn a_malformed_indefinite_string_chunk_sequence_is_rejected_not_silently_walked() {
+    let result: Result<Vec<_>, _> =
+        records_from_sequence(RECORD_WITH_MISMATCHED_CHUNK_MAJOR_TYPE).collect();
+    assert_eq!(
+        result.err(),
+        Some(Error::Cbor(cbor::Error::MalformedIndefiniteString))
+    );
 }
