@@ -59,8 +59,13 @@ function encodeContainer(records, discriminator) {
  *   ([localNamespace, typeIds[0]]) instead of encoding it bare. See
  *   isNamespacePairing below. Backup typeIDs (typeIds[1+]) are always
  *   encoded bare.
+ * @param {string} [record.externalId] - EXPERIMENTAL, not part of the
+ *   spec (see isExternalIdWrapper below) -- if given, adds a 1-element
+ *   array [externalId] as an additional prefix item, an NDEF-ID-style
+ *   external-reference identifier structurally separate from typeIds.
+ *   Prototyped to check feasibility only; not wired into any decision.
  */
-function encodeRecordBytes({ typeIds, fields, localNamespace }) {
+function encodeRecordBytes({ typeIds, fields, localNamespace, externalId }) {
   if (!typeIds || typeIds.length === 0) {
     throw new Error('typeIds must be a non-empty array');
   }
@@ -70,7 +75,9 @@ function encodeRecordBytes({ typeIds, fields, localNamespace }) {
       ? cbor.encodeCanonical([localNamespace, id])
       : cbor.encodeCanonical(id),
   );
-  return Buffer.concat([...typeItems, mapBytes]);
+  const externalIdItem =
+    externalId !== undefined ? [cbor.encodeCanonical([externalId])] : [];
+  return Buffer.concat([...typeItems, ...externalIdItem, mapBytes]);
 }
 
 /**
@@ -127,12 +134,17 @@ function parseRecords(items) {
   let i = 0;
 
   while (i < items.length) {
-    // Phase 1: accumulate typeIDs — contiguous run of bare typeID items
-    // and/or namespace-pairing arrays.
+    // Phase 1: accumulate typeIDs — contiguous run of bare typeID items,
+    // namespace-pairing arrays, and/or an EXPERIMENTAL external-ID wrapper
+    // (see isExternalIdWrapper below).
     const typeIds = [];
     let localNamespace; // raw, uninterpreted — from this Record's own
     // first pairing item, if any. Same "core exposes it raw, never
     // interprets it" treatment as the container discriminator.
+    let externalId; // EXPERIMENTAL, raw and uninterpreted -- from this
+    // Record's own first external-ID wrapper, if any. Not part of the
+    // spec; prototyped only to check the shape doesn't collide with
+    // anything else in this run.
     while (i < items.length) {
       if (isTypeId(items[i])) {
         typeIds.push(items[i]);
@@ -143,6 +155,11 @@ function parseRecords(items) {
         const [ns, id] = items[i];
         typeIds.push(id);
         if (localNamespace === undefined) localNamespace = ns;
+        i++;
+        continue;
+      }
+      if (isExternalIdWrapper(items[i])) {
+        if (externalId === undefined) externalId = items[i][0];
         i++;
         continue;
       }
@@ -169,6 +186,7 @@ function parseRecords(items) {
       typeIds,
       typeId: typeIds[0] ?? null,
       localNamespace,
+      externalId,
       map,
       ignored: typeIds.length === 0,
     });
@@ -228,6 +246,27 @@ function isNamespacePairing(item) {
     (typeof id === 'number' && Number.isInteger(id) && id >= 0) ||
     (typeof id === 'bigint' && id >= 0n);
   return nsValid && idValid;
+}
+
+/**
+ * EXPERIMENTAL -- not part of the spec, prototyped only to check
+ * feasibility (see the conversation this came from: whether QDEF could
+ * add an NDEF-ID-style external-reference identifier, structurally
+ * separate from typeIds, without displacing backup typeIDs).
+ *
+ * Checks if a decoded CBOR item is an external-ID wrapper: a
+ * definite-length array of exactly 1 element, a text string (mirroring
+ * NDEF's own ID field, always a URI-reference string, §3.2.11 of the
+ * NDEF spec). Disambiguated from every other prefix-item shape purely
+ * by array length -- 1 element here, 2 for namespace-pairing, bare
+ * scalar/string for an ordinary typeID -- the same "array length picks
+ * the shape before any element is inspected" pattern already used for
+ * the container discriminator's 2- vs 3-element forms. No CBOR tag
+ * involved, so this doesn't reopen the tag-number-collision risk a
+ * tag-based approach would.
+ */
+function isExternalIdWrapper(item) {
+  return Array.isArray(item) && item.length === 1 && typeof item[0] === 'string';
 }
 
 /**
