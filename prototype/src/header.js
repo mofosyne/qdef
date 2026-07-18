@@ -19,33 +19,22 @@
 //                                    common-vocabulary style)
 //   byte string                   -> Decentralized Namespace ID
 //                                    (self-certifying, no registry needed)
-//   array [uint, byte string]     -> [Allocated Namespace ID,
-//                                    Decentralized Namespace ID backup] --
-//                                    a promotion/transition pair, the same
-//                                    backup-typeID convention Records
-//                                    already use (§3.1), applied to
-//                                    namespace promotion
-//   array [id, text]              -> [Namespace ID (uint or byte string),
-//                                    Namespace Name hint] -- one shape
-//                                    covering both an Allocated ID with a
-//                                    plain recovery hint and a Decentralized
-//                                    ID with a self-certifying one;
-//                                    disambiguated purely by id's own major
-//                                    type, same recognition rule either way
-//                                    (element[1] is a text string)
-//   array [uint, byte string, text] -> [Allocated Namespace ID,
-//                                    Decentralized Namespace ID backup,
-//                                    Namespace Name hint] -- all three
-//                                    together, for a promotion in progress
-//                                    that also wants a hint
 //   map                           -> full extensible form, matching what
 //                                    used to be the Type 0 Record's own
 //                                    map: {1: namespace (uint|bstr),
 //                                    3: hint (tstr), 5: decentralized
 //                                    backup (bstr), ...future even/odd
-//                                    keys}. For cases needing more than
-//                                    the bare/pair/triple forms above.
-//   anything else                  -> unrecognized shape, degrades to "no
+//                                    keys}. The ONLY way to carry a hint
+//                                    or a backup ID -- there is no bare
+//                                    positional-array shortcut for either
+//                                    (see docs/FINDINGS.md's discriminator-
+//                                    collapse finding for why: this item
+//                                    is a one-time, per-container cost, so
+//                                    the bytes a bespoke array shape would
+//                                    have saved were never worth a fourth
+//                                    and fifth shape for a decoder to
+//                                    recognize).
+//   anything else (incl. arrays)  -> unrecognized shape, degrades to "no
 //                                    namespace" -- the same graceful
 //                                    degrade an absent or aborted Type 0
 //                                    Record already had, never a hard
@@ -74,28 +63,10 @@ function parseDiscriminator(discriminator) {
     return { namespace: discriminator };
   }
 
-  if (Array.isArray(discriminator)) {
-    if (discriminator.length === 2) {
-      const [a, b] = discriminator;
-      const aIsId = typeof a === 'number' || typeof a === 'bigint' || Buffer.isBuffer(a);
-      if ((typeof a === 'number' || typeof a === 'bigint') && Buffer.isBuffer(b)) {
-        return { namespace: a, decentralizedBackup: b };
-      }
-      if (aIsId && typeof b === 'string') {
-        return { namespace: a, hint: b };
-      }
-      return undefined; // unrecognized array shape
-    }
-    if (discriminator.length === 3) {
-      const [a, b, c] = discriminator;
-      const aIsUint = typeof a === 'number' || typeof a === 'bigint';
-      if (aIsUint && Buffer.isBuffer(b) && typeof c === 'string') {
-        return { namespace: a, decentralizedBackup: b, hint: c };
-      }
-      return undefined; // unrecognized array shape
-    }
-    return undefined; // unrecognized array length
-  }
+  // Arrays are no longer a recognized discriminator shape (see the
+  // discriminator-collapse finding in docs/FINDINGS.md) -- an array here
+  // falls through to the final "unrecognized" return below, degrading
+  // gracefully to "no namespace" like any other unrecognized shape.
 
   if (isMapLike(discriminator)) {
     const namespace = mapGet(discriminator, HEADER_NAMESPACE_KEY);
@@ -107,8 +78,8 @@ function parseDiscriminator(discriminator) {
     };
   }
 
-  // Text string, or any other shape: not currently a defined
-  // discriminator form.
+  // Text string, array, or any other shape: not a defined discriminator
+  // form -- degrades to "no namespace" (§3.5).
   return undefined;
 }
 

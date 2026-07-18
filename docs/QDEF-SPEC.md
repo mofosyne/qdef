@@ -746,8 +746,8 @@ discriminator unconditionally present — always exactly one item, always
 first, no exceptions — so a decoder never has to guess which case it's
 looking at.
 
-**Eight recognized shapes**, dispatched purely by the discriminator
-item's own CBOR major type and, for arrays, its element count:
+**Four recognized shapes**, dispatched purely by the discriminator
+item's own CBOR major type:
 
 ```
 +-----------------------------------+------------------------------------------------------------+
@@ -756,16 +756,10 @@ item's own CBOR major type and, for arrays, its element count:
 | uint 0                             | No namespace declared (cheapest legal container: 1 byte)   |
 | uint N > 0                         | Allocated Namespace ID = N (registered/common-vocabulary)  |
 | byte string                        | Decentralized Namespace ID (self-certifying, no registry)  |
-| array [uint, byte string]          | [Allocated Namespace ID, Decentralized backup] — promotion/|
-|                                     | transition pair, mirrors §3.1's backup-typeID convention   |
-| array [id, text string]            | [Namespace ID (Allocated or Decentralized), Namespace Name |
-|                                     | hint] — one shape covering both, disambiguated purely by   |
-|                                     | id's own major type                                        |
-| array [uint, byte string, text]    | [Allocated Namespace ID, Decentralized backup, Namespace   |
-|                                     | Name hint] — all three together                            |
 | map                                | Full extensible form: {1: namespace, 3: hint, 5: backup,   |
-|                                     | ...}                                                        |
-| anything else (unrecognized)       | Degrades to "no namespace" — same graceful degrade as uint 0|
+|                                     | ...} — the ONLY way to carry a hint or a backup ID          |
+| anything else (unrecognized,       | Degrades to "no namespace" — same graceful degrade as      |
+| including any array)               | uint 0                                                      |
 +-----------------------------------+------------------------------------------------------------+
 ```
 
@@ -774,46 +768,37 @@ item's own CBOR major type and, for arrays, its element count:
 
 h'a9d6e1f30b7c4482'                    // bare decentralized namespace, no hint
 
-[100, h'a7f90b3c']                     // allocated ID 100, with a decentralized
-                                        //   backup ID for older decoders
+500                                    // bare allocated namespace, no hint
 
-[h'a9d6e1f30b7c4482', "com.example/tagdrop-paper"]
-                                        // decentralized namespace with a
-                                        //   recoverable Hint name
-
-[100, "com.example/tagdrop-paper"]     // allocated ID 100, with a plain
-                                        //   recoverable Hint name (not
-                                        //   self-certifying — a uint can't
-                                        //   be hash-derived from a name —
-                                        //   just recoverable)
-
-[100, h'a7f90b3c', "com.example/tagdrop-paper"]
-                                        // allocated ID 100, decentralized
-                                        //   backup, AND a hint, all together
-
-{                                       // full extensible form
+{                                       // full extensible form -- needed for a
+                                        //   hint, a backup ID, or both
   1: h'a9d6e1f30b7c4482',              // namespace: uint or byte string,
                                         //   same convention as §3.1's Type IDs
   3: "com.example/tagdrop-paper",      // OPTIONAL: recoverable Hint name,
                                         //   same pattern as §3.1's hash-
                                         //   derivation hint
-  5: h'a7f90b3c'                       // OPTIONAL: decentralized backup ID
-                                        //   for older decoders (same role as
-                                        //   the array forms' backup slot)
+  5: h'a7f90b3c'                       // OPTIONAL: decentralized backup ID,
+                                        //   for a promotion/transition in
+                                        //   progress (mirrors §3.1's backup-
+                                        //   typeID convention)
 }
 ```
 
-The array forms exist purely for compactness in the common non-trivial
-cases (a promoted allocated ID that still wants a backup, a namespace ID
-of either kind that wants a hint, or a promotion in progress that wants
-both); the map form is the fully extensible fallback for anything future
-revisions need beyond keys `1`, `3`, and `5`, using the identical
-even/odd key convention (§3.2) as every other Record's field Map. Array
-length disambiguates the 2-element and 3-element forms from each other
-before any element is even inspected — a decoder never has to guess
-which one it's looking at. An encoder picks whichever of the eight
+An earlier draft of this section gave the hint-carrying and backup-ID
+cases their own bespoke positional array shapes (`[uint, byte string]`,
+`[id, text string]`, `[uint, byte string, text string]`), growing this
+table to eight rows. Those were cut: the discriminator is a one-time,
+per-container cost, so the few bytes those array shapes saved over the
+map form were never worth a decoder having to recognize three more
+shapes for it — see FINDINGS.md's discriminator-collapse finding for the
+full reasoning, including why the analogous per-Record mechanism
+(§3.1's typeID hints and backups) never grew this way in the first
+place. The map form is the single fallback for anything beyond a bare
+namespace, using the identical even/odd key convention (§3.2) as every
+other Record's own field Map. An encoder picks whichever of the four
 shapes is cheapest for what it actually needs to say; a decoder MUST
-recognize all eight.
+recognize all four, and MUST treat any array (or any other CBOR shape
+not listed above) as "unrecognized," degrading to no namespace.
 
 **A hint on an Allocated (uint) namespace ID is a plain recovery name,
 not a self-certifying one — worth being precise about the difference.**
@@ -831,11 +816,11 @@ but "recoverable without a registry" was already the actual goal.
 
 **Unrecognized shape degrades gracefully, exactly like `uint 0`.** A
 discriminator item that is well-formed CBOR but doesn't match any of the
-five namespace-bearing shapes above (for instance, a future revision's
-shape an old decoder doesn't yet understand) is treated identically to
-"no namespace declared" — never a hard failure. The mandatory core
-still only has to skip it as one CBOR item; it never needs to recognize
-its shape to do that.
+three namespace-bearing shapes above (including any array — arrays are
+not a defined discriminator form) is treated identically to "no
+namespace declared" — never a hard failure. The mandatory core still
+only has to skip it as one CBOR item; it never needs to recognize its
+shape to do that.
 
 **Not "zero cost when unused" — deliberately, and by design.** Because
 the discriminator is unconditionally present, every container pays for
@@ -1111,9 +1096,11 @@ logical Record Type never collide, because an even or byte string ID was
 never namespace-scoped to begin with.
 
 Prototyped in `prototype/src/header.js` and `prototype/test/header.test.js`:
-round-trip coverage for all six discriminator shapes, the
-unrecognized-shape graceful degrade, the JS falsy-zero trap guarded
-against explicitly, and cross-validated against the Rust core
+round-trip coverage for all four discriminator shapes, the
+unrecognized-shape graceful degrade (including every array form
+previously recognized, now all collapsed into it), the JS falsy-zero
+trap guarded against explicitly, and cross-validated against the Rust
+core
 (`rust/qdef-core`), which needs no discriminator-shape-specific code at
 all to split it off and route/walk the Records that follow correctly.
 

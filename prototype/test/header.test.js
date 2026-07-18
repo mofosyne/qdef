@@ -52,28 +52,6 @@ test('the default discriminator (bare uint 0) means no namespace declared', () =
   assert.equal(records[0].typeId, 100);
 });
 
-test('array [Allocated Namespace ID, Decentralized Namespace backup] discriminator round-trips', () => {
-  const decentralizedBackup = Buffer.from('a1b2c3d4', 'hex');
-  const container = core.encodeContainer([], [500, decentralizedBackup]);
-
-  const { discriminator } = core.decodeContainer(container);
-  const h = header.parseDiscriminator(discriminator);
-
-  assert.equal(h.namespace, 500);
-  assert.deepEqual(h.decentralizedBackup, decentralizedBackup);
-});
-
-test('array [Decentralized Namespace ID, Namespace Name hint] discriminator round-trips', () => {
-  const namespace = Buffer.from('663c1cf2', 'hex');
-  const container = core.encodeContainer([], [namespace, 'com.example/tagdrop-paper']);
-
-  const { discriminator } = core.decodeContainer(container);
-  const h = header.parseDiscriminator(discriminator);
-
-  assert.deepEqual(h.namespace, namespace);
-  assert.equal(h.hint, 'com.example/tagdrop-paper');
-});
-
 test('the full map-form discriminator round-trips namespace and hint, for cases needing more than a bare id/hint pair', () => {
   const namespace = 12271745624591856273n;
   const fullForm = new Map([
@@ -89,37 +67,31 @@ test('the full map-form discriminator round-trips namespace and hint, for cases 
   assert.equal(h.hint, 'com.example/tagdrop-paper');
 });
 
-test('array [Allocated Namespace ID, Namespace Name hint] discriminator round-trips -- the [id, hint] shape generalized to an Allocated id, not just Decentralized', () => {
-  const container = core.encodeContainer([], [500, 'com.example/tagdrop-paper']);
-
-  const { discriminator } = core.decodeContainer(container);
-  const h = header.parseDiscriminator(discriminator);
-
-  assert.equal(h.namespace, 500);
-  assert.equal(h.hint, 'com.example/tagdrop-paper');
-  assert.equal(h.decentralizedBackup, undefined);
-});
-
-test('array [Allocated Namespace ID, Decentralized backup, Namespace Name hint] discriminator round-trips -- all three together', () => {
+test('arrays are no longer a recognized discriminator shape (post-collapse) -- every array form degrades gracefully to no namespace, the same as any other unrecognized shape', () => {
+  // These were all previously-recognized shapes ([uint,bstr],
+  // [id,hint], [uint,bstr,hint]) -- see docs/FINDINGS.md's
+  // discriminator-collapse finding for why they were cut in favor of
+  // the map form being the only way to carry a hint or a backup.
   const decentralizedBackup = Buffer.from('a1b2c3d4', 'hex');
-  const container = core.encodeContainer([], [500, decentralizedBackup, 'com.example/tagdrop-paper']);
+  const shapes = [
+    [500, decentralizedBackup],
+    [Buffer.from('663c1cf2', 'hex'), 'com.example/tagdrop-paper'],
+    [500, 'com.example/tagdrop-paper'],
+    [500, decentralizedBackup, 'com.example/tagdrop-paper'],
+  ];
 
-  const { discriminator } = core.decodeContainer(container);
-  const h = header.parseDiscriminator(discriminator);
-
-  assert.equal(h.namespace, 500);
-  assert.deepEqual(h.decentralizedBackup, decentralizedBackup);
-  assert.equal(h.hint, 'com.example/tagdrop-paper');
+  for (const shape of shapes) {
+    const container = core.encodeContainer([], shape);
+    const { discriminator } = core.decodeContainer(container);
+    assert.equal(
+      header.parseDiscriminator(discriminator),
+      undefined,
+      `expected ${JSON.stringify(shape)} to degrade to no namespace`,
+    );
+  }
 });
 
-test('a 3-element array not matching [uint, byte string, text string] is an unrecognized shape, degrades to no namespace', () => {
-  const container = core.encodeContainer([], [500, 'not a byte string', 'hint']);
-
-  const { discriminator } = core.decodeContainer(container);
-  assert.equal(header.parseDiscriminator(discriminator), undefined);
-});
-
-test('the map form also carries the decentralized backup namespace (key 5), for the same all-three-together case as the 3-element array', () => {
+test('the map form also carries the decentralized backup namespace (key 5), for the same all-three-together case the array forms used to cover', () => {
   const namespace = 500;
   const decentralizedBackup = Buffer.from('a1b2c3d4', 'hex');
   const fullForm = new Map([

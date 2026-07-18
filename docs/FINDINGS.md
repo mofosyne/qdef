@@ -1615,3 +1615,72 @@ set is closed. See DESIGN.md for the full writeup.
 **Neither option is adopted.** Both remain feasibility prototypes,
 mutually exclusive, checked to the point of a fair side-by-side
 comparison, with no decision made to build either into the spec.
+
+### 34. The discriminator's eight shapes were the same governed/ungoverned dichotomy special-cased four times over — collapsed to four, reversing part of #30
+
+Raised directly, not from a bug report: "too many shapes to represent
+lots of different semantics is not easy for humans to reason [about]."
+Named the specific instance precisely rather than treating "the spec
+feels complex" as a vague complaint: both the namespace-ID layer (§3.5)
+and the Record-Type-ID layer (§3.1) independently implement the same
+governed(uint)/ungoverned(bytestring) identity choice, but the
+discriminator had grown to eight recognized shapes while the Type ID
+mechanism stayed at roughly two base shapes plus a repetition pattern.
+
+**Diagnosed the actual cause, not just the symptom.** The Type ID layer
+never gave "backup" or "hint" its own bespoke wire shape: a backup typeID
+is just another bare item in the same prefix-item run (no combined
+shape needed), and a hint is a *naming convention* (a hash-derivable
+string used as the ID's own Hint field, §3.1), not a companion CBOR item
+at all. The discriminator did the opposite: Finding #30 and the
+"let's be comprehensive, allow all 3 forms" decision that followed it
+gave every combination of (id-kind × hint-present × backup-present) its
+own positional array shape — `[uint, byte string]`, `[id, text string]`,
+`[uint, byte string, text string]` — on top of the map form that could
+already express all of them. Four ways to say the same handful of
+things is a direct, self-inflicted instance of the complaint, not
+something borrowed from elsewhere in the design.
+
+**Checked whether the array forms were pulling their weight before
+cutting them, rather than cutting on aesthetic grounds alone.** They
+saved a small, one-time number of bytes over the map form (a map header
+plus one to two integer key bytes per optional field present) — but the
+discriminator is paid exactly once per *container*, not once per
+Record. This is the identical "wrapper cost math" principle already
+documented for §4.1 (one-time costs don't justify the same design
+pressure as a per-Record-repeated one): a few bytes saved once isn't
+worth a decoder permanently carrying three more shapes to recognize.
+
+**Cut: the three positional array forms are no longer recognized.** Any
+array discriminator now degrades gracefully to "no namespace" — the
+same treatment any other unrecognized shape already got, so this isn't
+a new failure mode, just a narrower set of shapes that don't fail. The
+discriminator is now bare uint (`0` or Allocated `N`), bare byte string
+(Decentralized), or the map form — the map being the *only* way to carry
+a hint or backup, with no expressiveness lost, only the redundant
+compact-array shortcuts. `prototype/src/header.js`'s `parseDiscriminator`
+dropped its `Array.isArray` branch entirely (arrays now simply fall
+through to the existing "unrecognized" return); `prototype/test/
+header.test.js`'s four array-specific tests were replaced with one test
+confirming every previously-recognized array shape now degrades.
+`rust/qdef-core` needed no change — it has never interpreted the
+discriminator's contents, only skipped it as one opaque CBOR item, so
+this entire cut was invisible to it by construction.
+
+**A second thread the same conversation raised — whether decentralized
+(byte-string) *namespace* IDs are worth keeping at all — was
+deliberately not resolved here.** Unlike the discriminator-shape cut
+(a strict simplification with no expressiveness lost, decidable from
+spec-internal reasoning alone), this is a real design question about
+whether a real adopter needs the capability, the same category of
+question that resolved the analogous question for decentralized
+*Record Type* IDs earlier in this project (#20, #29) — it needs TagDrop's
+actual answer, not another guess from this side. One relevant, testable
+hypothesis was raised in that conversation, worth recording here even
+unresolved: a QR/NFC tag is typically "one file, one context," so
+namespaces (roughly one per vendor/app) are far coarser-grained than
+Record Types (many per namespace) — meaning the collision pressure that
+justified decentralized Type IDs doesn't obviously transfer to
+namespaces at the same strength, in either direction. Not decided;
+flagged for the same real-adopter-feedback loop that has resolved every
+other open governance question in this project.

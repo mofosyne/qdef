@@ -284,11 +284,18 @@ function isNamespacePairing(item) {
  * NDEF's own ID field, always a URI-reference string, §3.2.11 of the
  * NDEF spec). Disambiguated from every other prefix-item shape purely
  * by array length -- 1 element here, 2 for namespace-pairing, bare
- * scalar/string for an ordinary typeID -- the same "array length picks
- * the shape before any element is inspected" pattern already used for
- * the container discriminator's 2- vs 3-element forms. No CBOR tag
- * involved, so this doesn't reopen the tag-number-collision risk a
- * tag-based approach would.
+ * scalar/string for an ordinary typeID. No CBOR tag involved, so this
+ * doesn't reopen the tag-number-collision risk a tag-based approach
+ * would.
+ *
+ * Worth being honest about the parallel: this is itself an instance of
+ * "give this combination its own bespoke array shape" -- the exact
+ * pattern that grew the container discriminator to eight shapes before
+ * being collapsed back to four (see FINDINGS.md's discriminator-collapse
+ * finding). That's part of why this stays an unadopted experiment
+ * rather than a spec proposal -- see the competing negative-map-key
+ * prototype (CORE_METADATA_KEYS below) for the alternative that avoids
+ * adding a new prefix-item shape at all.
  */
 function isExternalIdWrapper(item) {
   return Array.isArray(item) && item.length === 1 && typeof item[0] === 'string';
