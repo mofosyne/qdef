@@ -22,8 +22,8 @@ pub enum Error {
     NotAUint,
     NotAMap,
     NotAString,
-    /// A Record map key was neither a uint (major type 0) nor a byte
-    /// string (major type 2) — all map keys in QDEF are uints.
+    /// A Record map key's major type wasn't one `read_key` recognizes at
+    /// all (uint, negint, byte string, or text string).
     NotAKey,
     /// §3.2: a Record field's value was a bare array or map (major type 4
     /// or 5), an indefinite-length string, or a tag (major type 6) wrapping
@@ -288,20 +288,53 @@ pub(crate) fn skip_any_item(buf: &[u8]) -> Result<usize, Error> {
     Ok(pos)
 }
 
-/// A Record map key: a uint, byte string, or text string (§3).
+/// A Record map key: a uint, negint, byte string, or text string.
+///
+/// Positive (Uint) keys are the ordinary, Record-Type-owned key space
+/// (§3.2's even/odd rule). Negative (NegInt) keys are CBOR-legal and were
+/// never explicitly excluded by the spec, but no Record Type is defined
+/// against them yet — see docs/FINDINGS.md's negative-key entry. This
+/// variant carries the *raw CBOR argument*, not the mathematical value:
+/// per RFC 8949 §3.1, a major-type-1 item's actual integer value is
+/// `-1 - arg`. Reconstructing that (or checking its parity) is the
+/// caller's job — see `neg_int_value`/`neg_int_is_even` below.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Key<'a> {
     Uint(u64),
+    NegInt(u64),
     ByteString(&'a [u8]),
     TextString(&'a [u8]),
 }
 
-/// Reads a Record map key at `buf[0]`: a uint (major type 0), byte
-/// string (major type 2), or text string (major type 3).
+/// Reconstructs a `Key::NegInt`'s actual mathematical value: `-1 - arg`
+/// per RFC 8949 §3.1. Saturates instead of overflowing/panicking on an
+/// `arg` near `u64::MAX` (a value with no realistic QDEF use, but this
+/// crate never panics on attacker-controlled input regardless).
+pub fn neg_int_value(arg: u64) -> i64 {
+    match i64::try_from(arg) {
+        Ok(a) => -1 - a,
+        Err(_) => i64::MIN,
+    }
+}
+
+/// Whether a `Key::NegInt`'s actual value is even, without needing the
+/// full `i64` reconstruction. `-1 - arg` is even exactly when `arg` is
+/// odd (negation and the constant -1 offset each flip parity once, which
+/// cancel: value parity == NOT(arg parity) == ... — verified directly:
+/// arg=0 -> value=-1 (odd), arg=1 -> value=-2 (even), arg=2 -> value=-3
+/// (odd); i.e. value is even iff arg is odd).
+pub fn neg_int_is_even(arg: u64) -> bool {
+    arg % 2 == 1
+}
+
+/// Reads a Record map key at `buf[0]`: a uint (major type 0), negint
+/// (major type 1), byte string (major type 2), or text string (major
+/// type 3).
 pub fn read_key<'a>(buf: &'a [u8]) -> Result<(Key<'a>, usize), Error> {
     let head = read_head(buf)?;
     match head.major {
         0 => Ok((Key::Uint(head.arg), head.head_len)),
+        1 => Ok((Key::NegInt(head.arg), head.head_len)),
         2 => {
             let len = head.arg as usize;
             let total = head

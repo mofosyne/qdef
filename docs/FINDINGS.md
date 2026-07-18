@@ -1538,3 +1538,80 @@ bare-URI-plus-label shape round-trips unaffected, the new language/action
 fields round-trip together, an unaware decoder still gets a complete
 working URI and label with both new keys silently ignored, and repeated
 siblings correctly reproduce multi-language behavior.
+
+### 33. Negative CBOR map keys — a real cross-implementation disagreement, and a competing prototype for the NDEF-`ID` question that #32 left open
+
+Raised while following up on #32's one open thread: NDEF's `ID` field
+has no QDEF equivalent, and a per-Type map key isn't architecturally the
+same thing (see DESIGN.md's "NDEF's ID field" for the full layering
+argument — a per-Type key is owned by that Type's author; a true
+`ID`-equivalent needs to be type-independent, parsed by the mandatory
+core). An array-wrapper prefix item (`[externalId]`) was already
+prototyped as one candidate shape. Asked whether a reserved *negative*
+CBOR map key could be a competing shape for the same job, and whether
+that choice could belong to "QDEF header metadata" instead.
+
+**Checked first: does CBOR even allow negative map keys, and does QDEF's
+spec already forbid them?** Yes to the first, no to the second. General
+CBOR permits any key type including negint; QDEF's spec discusses negint
+only as a typeID *prefix item value* (already resolved as "excluded, not
+reserved," see the Text-string-Type-IDs finding), never as a *map key*
+restriction — that axis was simply never addressed.
+
+**That gap was live, not theoretical: the Node and Rust prototypes
+already disagreed on it.** Checked directly in both. The Node prototype
+silently accepts a negative-integer map key and applies its existing
+even/odd check unmodified (JS's `%` preserves sign, so parity still
+comes out right). The Rust core's hand-rolled `cbor::read_key` had no
+match arm for major type 1 (negint) and returned `Err(NotAKey)` — and
+because `Records::next` treats any `parse_record` error as
+unrecoverable (a malformed item's end can't be determined, so the
+Sequence can't safely resume), that single unhandled key silently killed
+decoding of every *subsequent* Record in the same Sequence, not just the
+one that had it. Confirmed with a regression test
+(`a_negative_map_key_no_longer_kills_decoding_of_sibling_records_in_the_
+same_sequence` in `rust/qdef-core/src/tests.rs`) that reproduces exactly
+this: a two-Record Sequence where only the first Record has a negative
+key used to come back as one `Ok` followed by an `Err`.
+
+**Fixed regardless of which design direction (if any) gets adopted**,
+per the standing rule that a real Rust/JS disagreement on legal input is
+a bug independent of any pending design decision. Added
+`cbor::Key::NegInt(u64)` (storing the raw CBOR argument; RFC 8949 §3.1's
+`-1 - arg` reconstruction and its even/odd shortcut live in
+`neg_int_value`/`neg_int_is_even`), so `read_key` now reads major type 1
+instead of rejecting it. `check_criticality` (Type-level) explicitly
+skips `NegInt` keys, the same treatment it already gave byte-string/
+text-string keys — Type-owned criticality only ever applies to `Uint`
+keys. All 6 existing Rust tests plus 6 new ones pass; the `no_std`
+embedded target (`thumbv6m-none-eabi`) still builds clean.
+
+**Prototyped the negative-key shape itself as `extract_core_metadata`**
+(`rust/qdef-core/src/lib.rs`) and its Node mirror (`extractCoreMetadata`
+in `core.js`, exercised by `prototype/test/experimental-
+core-metadata-negkey.test.js`): key `-1` reserved for `externalId`, with
+an unrecognized negative key even/odd-checked at the mandatory-core
+level — critical (aborts) if even, silently ignored if odd — applied
+identically to every Record regardless of Type, distinct from that
+Type's own `check_criticality`/`applyCriticality` pass. Byte cost against
+the array-wrapper prototype was checked directly and found to be a wash
+in every case tested (both add exactly one byte of framing), disproving
+an initial hypothesis that the map-key form would amortize cheaper once
+the map already had other fields — a CBOR container header only grows
+past one byte once entry count crosses 23, and 1-to-2 never does.
+
+**One real structural argument survives, though only for one of the two
+layers it could apply to.** Reserving negative map keys for all future
+mandatory-core, per-Record metadata means Phase 1's prefix-item shape
+set (bare typeID, namespace-pairing array) never needs a new
+array-length-disambiguated shape again — every future addition lands in
+the map instead, which was already opaque to Phase 1 regardless. That
+argument does not extend to the container discriminator (§3.5): it's a
+once-per-container item, not a once-per-Record map, and several of its
+own shapes are bare scalars, not maps, so nothing about reserving
+Record-map keys says anything about whether the discriminator's shape
+set is closed. See DESIGN.md for the full writeup.
+
+**Neither option is adopted.** Both remain feasibility prototypes,
+mutually exclusive, checked to the point of a fair side-by-side
+comparison, with no decision made to build either into the spec.

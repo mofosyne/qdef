@@ -322,3 +322,120 @@ fn a_namespace_pairing_primary_still_accumulates_an_ordinary_backup_typeid() {
         other => panic!("expected ByteString backup, got {:?}", other),
     }
 }
+
+// ---------------------------------------------------------------------
+// Negative-integer map keys. CBOR permits them generally and QDEF's spec
+// never explicitly restricted map keys to non-negative uints; before the
+// `cbor::Key::NegInt` fix, `read_key` hard-errored (`NotAKey`) on any
+// negint key, and because `Records::next` treats a `parse_record` error
+// as unrecoverable (it can't know where a malformed item ends, so it
+// can't safely resume), that single unhandled key killed decoding of
+// every *subsequent* Record in the same Sequence too -- not just the one
+// Record that had it. Bytes generated from the Node prototype (which
+// already accepted negative keys silently) via an inline script, not
+// `gen-rust-fixtures.js`, since this is EXPERIMENTAL and not part of the
+// committed fixture set. See docs/FINDINGS.md.
+// ---------------------------------------------------------------------
+
+/// typeId(100) + { 0: "SSID", -1: "wifi-record-1" }
+const RECORD_WITH_NEG_KEY: &[u8] = &[
+    0x18, 0x64, 0xa2, 0x00, 0x64, 0x53, 0x53, 0x49, 0x44, 0x20, 0x6d, 0x77, 0x69, 0x66, 0x69,
+    0x2d, 0x72, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x2d, 0x31,
+];
+
+/// RECORD_WITH_NEG_KEY immediately followed by a second, ordinary Record
+/// (typeId(200) + { 0: "second" }) -- proves the Sequence survives past
+/// the negative-keyed Record, not just that Record in isolation.
+const TWO_RECORD_SEQ_WITH_NEG_KEY: &[u8] = &[
+    0x18, 0x64, 0xa2, 0x00, 0x64, 0x53, 0x53, 0x49, 0x44, 0x20, 0x6d, 0x77, 0x69, 0x66, 0x69,
+    0x2d, 0x72, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x2d, 0x31, 0x18, 0xc8, 0xa1, 0x00, 0x66, 0x73,
+    0x65, 0x63, 0x6f, 0x6e, 0x64,
+];
+
+/// typeId(100) + { 0: "SSID", -2: "unknown" } -- an unrecognized EVEN
+/// negative key, core-level-critical.
+const RECORD_EVEN_NEG_KEY: &[u8] = &[
+    0x18, 0x64, 0xa2, 0x00, 0x64, 0x53, 0x53, 0x49, 0x44, 0x21, 0x67, 0x75, 0x6e, 0x6b, 0x6e,
+    0x6f, 0x77, 0x6e,
+];
+
+/// typeId(100) + { 0: "SSID", -3: "unknown" } -- an unrecognized ODD
+/// negative key, silently ignored at the core level.
+const RECORD_ODD_NEG_KEY: &[u8] = &[
+    0x18, 0x64, 0xa2, 0x00, 0x64, 0x53, 0x53, 0x49, 0x44, 0x22, 0x67, 0x75, 0x6e, 0x6b, 0x6e,
+    0x6f, 0x77, 0x6e,
+];
+
+#[test]
+fn a_negative_map_key_no_longer_hard_errors_the_whole_record() {
+    let records: Vec<_> = records_from_sequence(RECORD_WITH_NEG_KEY)
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(records.len(), 1);
+    assert!(!records[0].ignored);
+    assert_eq!(records[0].type_id(), Some(Key::Uint(100)));
+}
+
+#[test]
+fn a_negative_map_key_no_longer_kills_decoding_of_sibling_records_in_the_same_sequence() {
+    // This is the regression this fix actually matters for: before
+    // Key::NegInt existed, this returned only one Ok(record) followed by
+    // an Err, because Records::next latches `done = true` on any
+    // parse_record error and never resumes.
+    let records: Vec<_> = records_from_sequence(TWO_RECORD_SEQ_WITH_NEG_KEY)
+        .collect::<Result<_, _>>()
+        .expect("both records parse; a negint key must not abort the Sequence");
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0].type_id(), Some(Key::Uint(100)));
+    assert_eq!(records[1].type_id(), Some(Key::Uint(200)));
+}
+
+#[test]
+fn check_criticality_silently_skips_negative_keys_they_are_not_this_types_to_interpret() {
+    let records: Vec<_> = records_from_sequence(RECORD_WITH_NEG_KEY)
+        .collect::<Result<_, _>>()
+        .unwrap();
+    // WIFI_KNOWN_KEYS = &[0, 1, 2, 4]; it has no entry for -1, but that
+    // must not matter -- check_criticality only ever looks at Key::Uint.
+    let outcome = check_criticality(records[0].map_bytes, WIFI_KNOWN_KEYS, |_| {
+        panic!("the negative key must never reach a Type's on_ignored callback")
+    })
+    .unwrap();
+    assert_eq!(outcome, CriticalityOutcome::Ok);
+}
+
+#[test]
+fn extract_core_metadata_reads_the_reserved_external_id_key() {
+    let records: Vec<_> = records_from_sequence(RECORD_WITH_NEG_KEY)
+        .collect::<Result<_, _>>()
+        .unwrap();
+    let outcome = extract_core_metadata(records[0].map_bytes).unwrap();
+    match outcome {
+        CoreMetadataOutcome::Ok(meta) => {
+            let raw = meta.external_id.expect("external_id present");
+            assert_eq!(read_definite_string(raw).unwrap(), b"wifi-record-1");
+        }
+        other => panic!("expected Ok, got {:?}", other),
+    }
+}
+
+#[test]
+fn extract_core_metadata_aborts_on_an_unrecognized_even_negative_key() {
+    let records: Vec<_> = records_from_sequence(RECORD_EVEN_NEG_KEY)
+        .collect::<Result<_, _>>()
+        .unwrap();
+    let outcome = extract_core_metadata(records[0].map_bytes).unwrap();
+    assert_eq!(outcome, CoreMetadataOutcome::Aborted(-2));
+}
+
+#[test]
+fn extract_core_metadata_silently_ignores_an_unrecognized_odd_negative_key() {
+    let records: Vec<_> = records_from_sequence(RECORD_ODD_NEG_KEY)
+        .collect::<Result<_, _>>()
+        .unwrap();
+    let outcome = extract_core_metadata(records[0].map_bytes).unwrap();
+    match outcome {
+        CoreMetadataOutcome::Ok(meta) => assert_eq!(meta.external_id, None),
+        other => panic!("expected Ok with no external_id, got {:?}", other),
+    }
+}

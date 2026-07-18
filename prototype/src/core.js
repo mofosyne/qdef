@@ -64,12 +64,28 @@ function encodeContainer(records, discriminator) {
  *   array [externalId] as an additional prefix item, an NDEF-ID-style
  *   external-reference identifier structurally separate from typeIds.
  *   Prototyped to check feasibility only; not wired into any decision.
+ * @param {string} [record.coreExternalId] - EXPERIMENTAL, not part of the
+ *   spec (see CORE_METADATA_KEYS above) -- if given, writes it into the
+ *   field map at reserved key -1, the competing "core metadata lives in
+ *   negative map keys" approach to the same externalId question above.
+ *   Mutually exclusive with `fields` already having a -1 key.
  */
-function encodeRecordBytes({ typeIds, fields, localNamespace, externalId }) {
+function encodeRecordBytes({
+  typeIds,
+  fields,
+  localNamespace,
+  externalId,
+  coreExternalId,
+}) {
   if (!typeIds || typeIds.length === 0) {
     throw new Error('typeIds must be a non-empty array');
   }
-  const mapBytes = cbor.encodeCanonical(fields || new Map());
+  let effectiveFields = fields || new Map();
+  if (coreExternalId !== undefined) {
+    effectiveFields = new Map(effectiveFields);
+    effectiveFields.set(-1, coreExternalId);
+  }
+  const mapBytes = cbor.encodeCanonical(effectiveFields);
   const typeItems = typeIds.map((id, idx) =>
     idx === 0 && localNamespace !== undefined
       ? cbor.encodeCanonical([localNamespace, id])
@@ -182,11 +198,20 @@ function parseRecords(items) {
       i++;
     }
 
+    // EXPERIMENTAL -- see extractCoreMetadata above. Computed unconditionally
+    // (zero-cost when the map has no negative keys) purely for comparison
+    // against the prefix-item externalId above; not wired into any
+    // criticality decision downstream in this prototype.
+    const coreMeta = extractCoreMetadata(map);
+
     records.push({
       typeIds,
       typeId: typeIds[0] ?? null,
       localNamespace,
       externalId,
+      coreExternalId: coreMeta.core.externalId,
+      coreAborted: coreMeta.aborted,
+      coreAbortReason: coreMeta.abortReason,
       map,
       ignored: typeIds.length === 0,
     });
@@ -267,6 +292,73 @@ function isNamespacePairing(item) {
  */
 function isExternalIdWrapper(item) {
   return Array.isArray(item) && item.length === 1 && typeof item[0] === 'string';
+}
+
+/**
+ * EXPERIMENTAL -- a second, competing prototype for the same question
+ * isExternalIdWrapper explores: whether QDEF could add a mandatory-core,
+ * type-independent external-reference identifier (an NDEF-ID equivalent).
+ * Where isExternalIdWrapper puts it in a *prefix item* (visible before
+ * Phase 2 even starts), this puts it in a *reserved negative map key* --
+ * CBOR permits negative-integer map keys generally, and QDEF's own spec
+ * never restricts map keys to non-negative uints (only the *typeID
+ * prefix item's value* excludes negint, a separate axis, see §3.1/§3.2).
+ *
+ * The reason this is worth comparing at all: it reuses the existing
+ * even/odd criticality machinery for free. Parity is well-defined on
+ * negative numbers (-1 is odd, -2 is even) and JS's `%` preserves sign,
+ * so `key % 2 === 0` keeps working unmodified. No new mandatory-core
+ * *shape* needs recognizing in Phase 1 -- the map was already opaque to
+ * it. The cost: a reserved negative key isn't visible until the map is
+ * actually parsed, one phase later than a prefix item.
+ *
+ * Reserved core keys live in CORE_METADATA_KEYS. Critically, an
+ * *unrecognized* negative key is still even/odd-checked -- but at the
+ * mandatory-core level, applied identically to every Record regardless
+ * of its Type, never deferred to that Type's own applyCriticality call
+ * (contrast with an ordinary Type-owned map key, whose criticality is
+ * entirely up to that Type's author). No Record Type can ever redefine
+ * or collide with a negative key's meaning, because the *core* claims
+ * that whole namespace, not any individual Type.
+ */
+const CORE_METADATA_KEYS = new Map([
+  [-1, 'externalId'], // NDEF-ID equivalent, prototyped for comparison only
+]);
+
+/**
+ * EXPERIMENTAL -- see CORE_METADATA_KEYS above. Walks a Record's already-
+ * parsed field map for negative-integer keys, resolving the ones this
+ * prototype recognizes and applying the even/odd rule (at the mandatory-
+ * core level) to the ones it doesn't. Does not mutate or strip entries
+ * from the caller's map -- Type-level code still sees every key exactly
+ * as before; this only *additionally* surfaces what the core layer would
+ * claim from the same map.
+ */
+function extractCoreMetadata(map) {
+  const core = {};
+  if (!map) return { core, aborted: false };
+  const entries =
+    map instanceof Map
+      ? map.entries()
+      : Object.entries(map).map(([k, v]) => [Number(k), v]);
+  for (const [key, value] of entries) {
+    if (typeof key !== 'number' || key >= 0) continue;
+    const name = CORE_METADATA_KEYS.get(key);
+    if (name !== undefined) {
+      core[name] = value;
+      continue;
+    }
+    if (key % 2 === 0) {
+      return {
+        core,
+        aborted: true,
+        abortReason: `unrecognized critical core key ${key}`,
+      };
+    }
+    // odd, unrecognized: silently ignored, same forward-compat rule as
+    // every other odd key -- just enforced by the core instead of a Type.
+  }
+  return { core, aborted: false };
 }
 
 /**

@@ -652,6 +652,123 @@ authenticity wrapper," below). NDEF conversion is a new argument for
 prioritizing it sooner, not a reason to change the existing plan or
 build it speculatively ahead of a real want.
 
+## NDEF's ID field — two competing experimental prototypes for a QDEF equivalent, neither adopted
+
+The NDEF RTD comparison above left one open question: NDEF's `ID` field
+(§3.2.11/§2.4.3 of the NFC Forum spec) is a URI-reference string every
+record can carry, letting *external* systems reference a specific
+record's payload by a stable, type-independent identity — NDEF declines
+to standardize what uses it, but Signature RTD's hashed bytes include it
+when present, as one real example. QDEF has nothing structurally
+equivalent.
+
+The first instinct — that ordinary field-map extensibility already
+covers this, since any Record Type can define whatever keys it wants —
+was checked and is wrong. A per-Type map key is owned by that Type's
+author (Fallback Hint's new `language`/`action` keys, for example). An
+NDEF-`ID` equivalent needs to be *type-independent*: any Record, of any
+Type, gets one, and no Record Type's own key numbering can collide with
+or redefine it. That puts it at the same architectural layer as the
+typeID prefix items and the namespace-pairing item (§3.1) — parsed by
+the mandatory core, before any Type-specific interpretation begins — not
+inside any one Type's map.
+
+Two structurally sound, mutually exclusive shapes were prototyped to
+check feasibility (`prototype/src/core.js`, `prototype/test/
+experimental-external-id.test.js` and `experimental-core-metadata-negkey.
+test.js`). **Neither is adopted or spec-documented** — this is
+feasibility-checking only.
+
+**Option A: a 1-element array prefix item, `[externalId]`.** Sits next to
+the existing typeID and namespace-pairing prefix items, disambiguated
+purely by array length (1 element here, 2 for namespace-pairing, bare
+scalar for an ordinary typeID) — no CBOR tag, so it doesn't reopen the
+tag-number-collision risk already rejected twice elsewhere (see "CBOR
+tag-number collision," above). Confirmed to coexist cleanly with backup
+typeIDs and namespace-pairing without displacing either. Visible in
+Phase 1, before the field map is even reached.
+
+**Option B: a reserved negative integer map key, `-1`.** CBOR permits
+negative-integer map keys generally, and the spec never restricted map
+keys to non-negative uints (only a typeID *prefix item's value*
+excludes negint — a separate axis, already resolved as "excluded, not
+reserved," see "Text string Type IDs," above). This option reuses the
+existing even/odd criticality machinery for free: parity is well-defined
+on negative numbers (`-1` odd, `-2` even), so an unrecognized negative
+key can be even/odd-checked exactly like an unrecognized positive one —
+except enforced by the mandatory core against every Record regardless of
+Type, never deferred to that Type's own criticality check. The cost:
+it's only visible once the map is actually parsed, one phase later than
+a prefix item.
+
+**Byte cost is a wash, checked directly rather than assumed.** An
+earlier hypothesis that the negative-key form would be cheaper once the
+map already has other fields (by "amortizing" into the existing map
+header instead of adding a whole separate array) was tested and
+disproven: a CBOR map or array header only grows past one byte once
+entry/element count crosses 23, and going from 1 to 2 entries never does.
+Both forms cost exactly one byte of framing (an array-of-1 header, or a
+one-byte negint key header) plus the string itself, in every case that
+was checked. Whatever these two options are actually being chosen
+between on, it isn't wire size.
+
+**A real, unrelated bug this exploration surfaced: the two prototype
+implementations disagreed on negative map keys even before either
+option existed.** The Node prototype silently accepted a negative
+integer as an ordinary map key (JS's `%` preserves sign, so its existing
+even/odd check kept working unmodified). The Rust core's hand-rolled
+`read_key` had no match arm for CBOR major type 1 (negint) and hard-
+errored (`NotAKey`) — and because the `Records` iterator treats any
+`parse_record` error as unrecoverable (it can no longer determine where
+the malformed item ends, so it can't safely resume the Sequence), a
+single negative map key anywhere silently killed decoding of every
+*subsequent* Record too, not just the one that had it. Fixed by adding
+`cbor::Key::NegInt` so `read_key` reads major type 1 instead of
+rejecting it; `check_criticality` (Type-level) now explicitly skips it,
+matching how it already skipped byte-string/text-string keys, and a new
+`extract_core_metadata` function (mirroring the Node prototype's own)
+does the mandatory-core-level even/odd check against it instead. This
+fix was needed regardless of whether Option B is ever adopted — it was
+a real cross-implementation disagreement on legal CBOR, not a consequence
+of either experimental design.
+
+**Does reserving negative keys for core metadata justify "locking in"
+the Record's prefix-item shape set, so the parser never needs to
+recognize a new shape again?** Worth separating into two different
+"header" concepts this argument could apply to:
+
+- **The per-Record prefix-item shapes (Phase 1, §3.1) — yes, genuinely.**
+  Every prefix-item mechanism added so far (namespace-pairing, and
+  experimentally, the array-wrapper externalId) has meant teaching Phase
+  1 a new array-length-disambiguated shape. That's a small, closed cost
+  each time, but it's still a growing list a decoder's prefix-scanning
+  loop has to keep recognizing, and more shapes sharing the same
+  small-array-length space raises long-run collision risk between
+  future mechanisms — the same category of concern already raised (and
+  rejected on) for CBOR tag numbers. If all *future* mandatory-core,
+  per-Record metadata is designed to live in reserved negative map keys
+  instead, Phase 1's shape set can be treated as closed for good: bare
+  typeID, namespace-pairing array, done. No new mechanism ever needs a
+  fourth shape, because the map — already fully opaque to Phase 1 either
+  way — absorbs all of that growth instead, in a space (negative
+  integers) that's unbounded and self-describing with no new parsing
+  rule required per addition.
+- **The container discriminator (§3.5) — no, not directly.** The
+  discriminator is a once-per-container item, not a once-per-Record map;
+  it isn't a map in most of its own shapes (several are bare scalars or
+  arrays). Reserving negative Record-map keys says nothing about whether
+  the discriminator's own shape set is closed — that's a separate
+  question, not addressed by this exploration, and not something this
+  finding should be read as answering.
+
+So the idea holds, but only for the layer it actually touches. It's a
+real, additional argument in favor of Option B over Option A if QDEF
+ever does adopt an NDEF-`ID` equivalent — not because of wire cost (a
+wash), but because it keeps Phase 1's parsing surface from growing
+indefinitely. It is not, by itself, a reason to freeze the discriminator,
+and no decision has been made to adopt either option or to formally close
+Phase 1's shape set.
+
 ## Why not just carry a literal NDEF message as the QR byte-mode payload, instead of a new format?
 
 It's technically possible — nothing stops encoding actual NDEF bytes into

@@ -296,7 +296,7 @@ fn parse_namespace_pairing(buf: &[u8]) -> Result<Option<(cbor::Key<'_>, u64, usi
     let ns_valid = match ns_key {
         cbor::Key::Uint(n) => n > 0,
         cbor::Key::ByteString(_) => true,
-        cbor::Key::TextString(_) => false,
+        cbor::Key::TextString(_) | cbor::Key::NegInt(_) => false,
     };
     if !ns_valid {
         return Ok(None);
@@ -329,8 +329,12 @@ pub fn check_criticality(
 ) -> Result<CriticalityOutcome, Error> {
     let mut aborted_on: Option<u64> = None;
     walk_map_pairs(map_bytes, |k, _v| {
-        // All QDEF map keys are uints (§3). Key 0 is now a regular
-        // field key like any other — no special-case skip.
+        // Record-Type-owned keys are always non-negative (Key::Uint).
+        // Key 0 is a regular field key like any other — no special-case
+        // skip. Negative keys (Key::NegInt) are mandatory-core-reserved,
+        // not this Type's to interpret — silently skipped here, exactly
+        // like ByteString/TextString already were, and handled instead
+        // by `extract_core_metadata` (EXPERIMENTAL, see there).
         if let cbor::Key::Uint(key) = k {
             if !known_keys.contains(&key) {
                 if key % 2 == 0 {
@@ -371,7 +375,12 @@ pub fn find_value<'a>(map_bytes: &'a [u8], key: u64) -> Result<Option<&'a [u8]>,
 
 /// Shared pair-walker used by criticality checking and field lookup —
 /// one generic "walk a CBOR map's key/value pairs" implementation
-/// instead of two near-duplicates. QDEF Record keys are always uints (§3).
+/// instead of two near-duplicates. Record-Type-owned keys are always
+/// non-negative; negative keys are a separate, mandatory-core-reserved
+/// space (see `extract_core_metadata`, EXPERIMENTAL) — either way, this
+/// walker itself stays key-shape-agnostic, since `cbor::read_key` already
+/// accepts every key shape QDEF allows and callers decide what to do with
+/// each one.
 fn walk_map_pairs<'a>(
     map_bytes: &'a [u8],
     mut visit: impl FnMut(cbor::Key<'a>, &'a [u8]) -> Result<ControlFlow, cbor::Error>,
@@ -411,6 +420,61 @@ fn walk_map_pairs<'a>(
         i += 1;
     }
     Ok(pos)
+}
+
+/// EXPERIMENTAL -- not part of the spec. Mirrors `extractCoreMetadata` in
+/// the Node prototype's `core.js`: a second, competing prototype (next to
+/// the array-wrapper external-ID prefix item explored elsewhere) for
+/// whether QDEF could add a mandatory-core, type-independent external-
+/// reference identifier (an NDEF-ID equivalent), this time living in
+/// reserved *negative* map keys instead of a prefix item.
+///
+/// Key -1 is the only one currently assigned (external ID). An
+/// unrecognized negative key is still even/odd-checked, exactly like
+/// `check_criticality` does for positive keys — but applied here, at the
+/// mandatory-core level, identically to every Record regardless of its
+/// Type, never deferred to that Type's own `check_criticality` call.
+pub fn extract_core_metadata<'a>(
+    map_bytes: &'a [u8],
+) -> Result<CoreMetadataOutcome<'a>, Error> {
+    let mut external_id: Option<&'a [u8]> = None;
+    let mut aborted_on: Option<i64> = None;
+    walk_map_pairs(map_bytes, |k, v| {
+        if let cbor::Key::NegInt(arg) = k {
+            let value = cbor::neg_int_value(arg);
+            if value == -1 {
+                external_id = Some(v);
+            } else if cbor::neg_int_is_even(arg) {
+                aborted_on = Some(value);
+                return Ok(ControlFlow::Stop);
+            }
+            // odd, unrecognized: silently ignored — same forward-compat
+            // rule as any other odd key, just enforced by the core
+            // instead of a Type.
+        }
+        Ok(ControlFlow::Continue)
+    })
+    .map_err(Error::Cbor)?;
+
+    Ok(match aborted_on {
+        Some(k) => CoreMetadataOutcome::Aborted(k),
+        None => CoreMetadataOutcome::Ok(CoreMetadata { external_id }),
+    })
+}
+
+/// EXPERIMENTAL -- see `extract_core_metadata`.
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Default)]
+pub struct CoreMetadata<'a> {
+    pub external_id: Option<&'a [u8]>,
+}
+
+/// EXPERIMENTAL -- see `extract_core_metadata`.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum CoreMetadataOutcome<'a> {
+    Ok(CoreMetadata<'a>),
+    /// §3.2's even/odd rule, applied at the mandatory-core level: carries
+    /// the unrecognized even negative key's actual (reconstructed) value.
+    Aborted(i64),
 }
 
 /// Re-exported for callers that want to read a simple text/byte string
