@@ -10,13 +10,16 @@ found that prose review didn't.
 ## Done
 
 **The core is validated, not just written.** Magic framing, the
-CBOR-Sequence-of-Records layout, key-`0`-only routing, and the even/odd
-criticality rule have each been built twice, independently — a Node
-prototype covering the full design, and a `#![no_std]`, zero-dependency
-Rust prototype of just the mandatory core that also builds for a
-bare-metal Cortex-M0 target. Cross-validated against each other (the Rust
-decoder parses containers the Node encoder produced, not just its own
-output), 31 Node tests and 10 Rust tests passing.
+mandatory container discriminator, the CBOR-Sequence-of-Records layout,
+per-Record prefix typeID routing, and the even/odd criticality rule have
+each been built twice, independently — a Node prototype covering the
+full design, and a `#![no_std]`, zero-dependency Rust prototype of just
+the mandatory core that also builds for a bare-metal Cortex-M0 target.
+Cross-validated against each other (the Rust decoder parses containers
+the Node encoder produced, not just its own output); test counts have
+grown substantially past any specific number quoted here — see each
+prototype's own `test/` directory for current coverage rather than
+trusting a number in this document to stay current.
 
 **The standard library is complete and tested**, not aspirational:
 
@@ -33,17 +36,22 @@ output), 31 Node tests and 10 Rust tests passing.
 - **App Route** (letting a generic scanner offer to launch a specific
   handling application, comparable to NFC's Android Application Record,
   using a domain-verified identifier rather than an unverifiable string
-  claim — plus a second, decentralized form for scanners that just need
+  claim — plus a second, hash-derived form for scanners that just need
   a fast, no-authority misread pre-filter ahead of reassembly)
 
 Every one of these round-trips in the Node prototype; none is spec-text
 only.
 
-**Two format-wide mechanisms are resolved and prototyped:** Type Hint
-(key `1`, a decentralized-ID-to-name bridge that costs the mandatory core
-nothing) and canonical encoding (§3.4, RFC 8949's deterministic CBOR
-rules as a MUST for encoders, closing a live gap in `group_id`'s
-integrity guarantee before it saw real use).
+**Format-wide mechanisms resolved and prototyped:** the NDEF-ID-
+equivalent (a bare text string following a Record's typeID, mirroring
+NDEF's own `ID` field, costing the mandatory core nothing beyond
+recognizing one more prefix-item shape), namespace-scoped Type IDs and
+their hash-derivation self-certification (§3.5, the general-purpose
+primitive Type Hint originally introduced before being retired
+alongside decentralized Type IDs — see FINDINGS.md), and canonical
+encoding (§3.4, RFC 8949's deterministic CBOR rules as a MUST for
+encoders, closing a live gap in `group_id`'s integrity guarantee before
+it saw real use).
 
 **Checked against a real adopter, not just designed in the abstract.**
 `mofosyne/tagdrop` — the project QDEF's design was first worked out
@@ -68,10 +76,11 @@ declaration — a genuine scope boundary, not a bug (FINDINGS.md #13).
   application Type IDs (`100`+) officially, for either the
   Specification Required (`100`–`32767`) or First Come First Served
   (`32768`+) tier; everything in the spec today is an illustrative
-  placeholder, or uses a decentralized byte string ID, which needs no
-  authority at all, ever, by design — see `DESIGN.md`'s "Governed vs.
-  ungoverned, made explicit" for the full breakdown of which tier needs
-  what. See "Where this is headed" below.
+  placeholder — unless an adopter instead declares its own namespace
+  (§3.5, always a self-chosen byte string) and uses namespace-scoped
+  odd uints, which need no authority at all, ever, by design — see
+  `DESIGN.md`'s "Governed vs. ungoverned, made explicit" for the full
+  breakdown of which tier needs what. See "Where this is headed" below.
 - **Split's general per-code capacity flexibility.** Costs nothing
   against TagDrop's own design specifically; an adopter needing
   heterogeneous fragment sizes across physically different codes still

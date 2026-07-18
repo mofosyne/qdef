@@ -14,7 +14,7 @@ const rt = require('../src/recordTypes');
 test('Type 100 (Wi-Fi) record round-trips through a full container', () => {
   const container = core.encodeContainer([
     {
-      typeIds: [rt.WIFI_TYPE],
+      typeId: rt.WIFI_TYPE,
       fields: new Map([
         [0, 'My Coffee Shop'],
         [2, 'guest123'],
@@ -54,7 +54,7 @@ test('Type 900 (TagDrop registration) round-trips an opaque nested CBOR Sequence
 
   const container = core.encodeContainer([
     {
-      typeIds: [rt.TAGDROP_REGISTRATION_TYPE],
+      typeId: rt.TAGDROP_REGISTRATION_TYPE,
       fields: new Map([[0, fakeTagDropSeq]]),
     },
   ]);
@@ -79,13 +79,13 @@ test('Type 900 (TagDrop registration) round-trips an opaque nested CBOR Sequence
 // ---------------------------------------------------------------------
 function buildPgpBackupCodes(secretKeyBytes, aesKey) {
   const innerRecordBytes = core.encodeRecordBytes({
-    typeIds: [rt.PGP_BACKUP_TYPE],
+    typeId: rt.PGP_BACKUP_TYPE,
     fields: new Map([[0, secretKeyBytes]]),
   });
 
-  const { typeIds: encTypeIds, fields: encFields } = wrappers.encryptEncode(innerRecordBytes, aesKey);
+  const { typeId: encTypeId, fields: encFields } = wrappers.encryptEncode(innerRecordBytes, aesKey);
   const encryptRecordBytes = core.encodeRecordBytes({
-    typeIds: encTypeIds,
+    typeId: encTypeId,
     fields: encFields,
   });
 
@@ -163,7 +163,7 @@ test('PGP backup worked example: 2 dropped fragments is unrecoverable (single XO
 test('unrecognized EVEN key aborts the record', () => {
   const container = core.encodeContainer([
     {
-      typeIds: [rt.WIFI_TYPE],
+      typeId: rt.WIFI_TYPE,
       fields: new Map([
         [0, 'SSID'],
         [2, 'pass'],
@@ -183,7 +183,7 @@ test('unrecognized EVEN key aborts the record', () => {
 test('unrecognized ODD key is silently ignored, rest of record still processes', () => {
   const container = core.encodeContainer([
     {
-      typeIds: [rt.WIFI_TYPE],
+      typeId: rt.WIFI_TYPE,
       fields: new Map([
         [0, 'SSID'],
         [2, 'pass'],
@@ -205,11 +205,11 @@ test('unrecognized ODD key is silently ignored, rest of record still processes',
 test('one aborted record does not affect sibling records in the same Sequence', () => {
   const container = core.encodeContainer([
     {
-      typeIds: [rt.WIFI_TYPE],
+      typeId: rt.WIFI_TYPE,
       fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2], [6, 'unknown critical']]),
     },
     {
-      typeIds: [rt.TAGDROP_REGISTRATION_TYPE],
+      typeId: rt.TAGDROP_REGISTRATION_TYPE,
       fields: new Map([[0, Buffer.from('unaffected sibling record')]]),
     },
   ]);

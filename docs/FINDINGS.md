@@ -48,36 +48,32 @@ unrecognized-critical-key abort of that Record.
 
 §4.1's Type-2 example shows the *fields* of a Split fragment (`group_id`,
 `index`, `count`, `fragment bytes`, `total_bytes`, `parity_scheme`) but
-never says how the original bytes get sliced into fragments in the first
-place. That's invisible right up until you need two independent
-encoders/decoders to agree on it — which `parity_scheme` does, immediately:
-XOR parity needs every fragment zero-padded to a common length before
-XOR'ing, and recovering a missing fragment needs to know *that fragment's*
-true length, which nothing in the spec provides if it's simply absent.
+never says how the original bytes get sliced into fragments. That's
+invisible until two independent encoders/decoders need to agree on it —
+which `parity_scheme` does immediately: XOR parity needs every fragment
+zero-padded to a common length, and recovering a missing fragment needs
+to know *that fragment's* true length, which nothing provides if it's
+simply absent.
 
 **Fix applied in the prototype:** fixed, deterministic chunking —
-`chunkLen = ceil(total_bytes / count)`, fragments sliced sequentially, last
-fragment shorter if `total_bytes` isn't an exact multiple of `count`. Any
-two independent implementations that follow this formula agree without
-coordination — the same content-addressing goal `group_id` already serves.
+`chunkLen = ceil(total_bytes / count)`, fragments sliced sequentially,
+last fragment shorter if `total_bytes` isn't an exact multiple of
+`count`. Any two independent implementations following this formula
+agree without coordination.
 
-**Real tradeoff this exposes, left as an open question (see below):**
-uniform chunking is what makes single-fragment XOR recovery well-defined,
-but it's also *less* flexible than what a real encoder probably wants —
-different physical codes (different QR versions/ECC levels, an NFC tag with
-a smaller capacity than a QR sibling) plausibly need different-sized
-fragments, chosen per-code rather than by one global formula. Uniform
-chunking and per-code-flexible sizing are in tension, and the spec needs to
-pick one (or specify a length manifest that survives a missing fragment) —
-it currently does neither.
+**Real tradeoff this exposes, left as an open question:** uniform
+chunking is what makes single-fragment XOR recovery well-defined, but
+it's less flexible than what a real encoder probably wants — different
+physical codes (different QR versions/ECC levels, an NFC tag smaller
+than a QR sibling) plausibly need different-sized fragments, chosen
+per-code. Uniform chunking and per-code-flexible sizing are in tension;
+the spec picks neither yet.
 
-**Update:** checked against a real adopter rather than left purely
-hypothetical — `mofosyne/tagdrop`'s own sectorization already assumes
-uniform chunk length within a split group (verified directly against
-`mofosyne/tagdrop`'s SPEC.md), so this tension doesn't cost that
-adopter anything; QDEF's rule matches what its format already does. That's
-evidence for one usage pattern, not a general resolution — see
-DESIGN.md's updated entry.
+**Update:** checked against a real adopter — `mofosyne/tagdrop`'s own
+sectorization already assumes uniform chunk length within a split group,
+so this tension costs that adopter nothing; QDEF's rule matches what its
+format already does. Evidence for one usage pattern, not a general
+resolution — see DESIGN.md's updated entry.
 
 ### 4. `total_bytes` (key 9) is documented OPTIONAL but isn't, once `parity_scheme` is set
 
@@ -190,7 +186,19 @@ code** (see #9 below for why that number moved), with **zero `unsafe`** and
 area is genuinely small was previously just prose confidence; it's now a
 measured, reproducible number tied to a real embedded target.
 
-### 9. Unbounded recursion depth wasn't just bounded — it was designed away entirely
+### 9. Unbounded recursion depth wasn't just bounded — it was designed away entirely (historical: the field-value-shape rule this produced was later dropped)
+
+**Later superseded.** The field-value-shape rule this finding produced
+(MUST be a scalar or definite-length string, never a bare array/map/tag)
+was itself dropped entirely in a later redesign — a field value MAY now
+be any well-formed CBOR item (see the "Field-value-shape rule" entry
+below, and DESIGN.md). The *mechanism* this finding is really about —
+skip-safety without true recursion, via a bounded explicit stack instead
+of a shape restriction — survived and is exactly what made that later
+relaxation safe to do: `skip_value`'s non-recursive arithmetic became
+`skip_any_item`'s bounded-stack walk, generalized to arbitrary shapes
+rather than eliminating the need to walk them. Kept here as the real
+trail for how that mechanism was first discovered and validated.
 
 First pass: skipping past a Record field (or an entire Record) the parser
 doesn't recognize requires generically walking arbitrarily-nested CBOR
@@ -248,25 +256,22 @@ smaller, simpler to reason about, and cheaper to run, not merely safer.
 ### 10. A malformed (not just unrecognized) Record can desync the whole Sequence — the spec's "isolated failure" promise has an unstated precondition
 
 §3.2 promises an aborted Record doesn't affect its siblings in the same
-Sequence. That promise silently assumes the Record is at least *well-formed*
-CBOR — its byte length needs to be determinable to know where the next
-Record starts. A genuinely malformed byte stream (truncated, an invalid
-length prefix, a reserved additional-info value) means the parser can no
-longer find that boundary, so it can't safely resume the Sequence at all —
-a fundamentally different, worse failure than "this Record's Type/keys
-aren't recognized." The same is now also true of a Record that violates
-finding #9's field-value-shape rule (a bare array/map/tag as a field
-value): by construction, its length can't be determined without doing the
-recursive walk the rule exists to avoid, so it's classified the same way —
-Sequence-fatal, not Record-isolated. This distinction was invisible in the
-Node prototype, where `cbor.decodeAllSync` either decodes the whole
-sequence or throws for all of it — there was never a point where "resume
-after this specific byte-level failure" was an explicit decision to make.
-Writing the Rust `Records` iterator by hand forced the decision: it now
-distinguishes "Record aborted but Sequence continues" (missing prefix
-typeIDs — see findings #1–#2) from "Sequence itself is unrecoverable"
-(malformed CBOR, or a field-value-shape violation), and only the former
-lets iteration continue.
+Sequence. That promise silently assumes the Record is at least
+*well-formed* CBOR — its byte length needs to be determinable to know
+where the next Record starts. A genuinely malformed byte stream
+(truncated, an invalid length prefix, a reserved additional-info value)
+means the parser can no longer find that boundary, so it can't safely
+resume the Sequence at all — a fundamentally different, worse failure
+than "this Record's Type/keys aren't recognized." (At the time this was
+found, the same was also true of a Record violating finding #9's
+field-value-shape rule; that rule was later dropped, so this second
+case no longer applies — see finding #9's own update.) This distinction
+was invisible in the Node prototype, where `cbor.decodeAllSync` either
+decodes the whole sequence or throws for all of it. Writing the Rust
+`Records` iterator by hand forced the decision: it distinguishes
+"Record aborted but Sequence continues" (missing prefix typeIDs — see
+findings #1–#2) from "Sequence itself is unrecoverable" (malformed
+CBOR), and only the former lets iteration continue.
 
 **Fix:** §3.2 should state this precondition explicitly rather than leave
 it implicit — an aborted-but-well-formed Record doesn't affect siblings;
@@ -300,20 +305,15 @@ the Smart Route exists to serve, is entitled to reject or mangle it, and
 wrapping an actual Record map in tag 0 demonstrably does mangle it.
 
 The follow-up question — does Hardware Parity's *other* route, key `0`,
-have the same problem? — was worth checking rather than assuming, since
-"QDEF picked a number that collides with something" was already true once.
-It does not, and the reason is structural, not luck: CBOR's IANA
-Considerations register tag numbers and simple values — there is no
-registry for map keys, because a bare CBOR map carries no built-in semantic
-layer the way a tag does. A generic decoder has nothing to coerce key `0`
-into; it's just data until something that knows the surrounding schema (a
-QDEF-aware parser) gives it meaning. Verified: encoding the identical
-Record map with *no* tag at all round-trips through a generic decoder as
-inert data (`map.get(0) === 100`, no coercion), while the same map wrapped
-in tag `0` decodes to `Invalid Date`. The asymmetry is exactly the
-asymmetry the format's own layering predicts — key `0` is the mandatory
-Constrained Route for a reason, and this is a second, independent reason
-beyond §1's "not every CBOR library exposes tags."
+have the same problem? — was checked, not assumed. It does not, and the
+reason is structural: CBOR's IANA Considerations register tag numbers
+and simple values, but there is no registry for map keys, because a
+bare CBOR map carries no built-in semantic layer the way a tag does. A
+generic decoder has nothing to coerce key `0` into; it's just data until
+a QDEF-aware parser gives it meaning. Verified: encoding the identical
+Record map with *no* tag round-trips through a generic decoder as inert
+data (`map.get(0) === 100`, no coercion), while the same map wrapped in
+tag `0` decodes to `Invalid Date`.
 
 **Fix:** at the time this was written, left open pending a decision between
 three wire-format resolutions. Superseded — see finding #12: the tag route
@@ -501,6 +501,17 @@ after actually surveying what the rest of the tag registry looks like,
 rather than assuming a wider rule was automatically unsafe.
 
 ### 16. The "only tag 24" restriction was itself overly cautious — surveyed the registry instead of assuming
+
+**Later superseded again, more fully this time.** The content-shape
+check this finding widened tag-24's restriction into (any tag number,
+but content must be a definite-length string directly) was itself
+dropped along with the rest of the field-value-shape rule (finding #9's
+update) — a field value MAY now be any well-formed CBOR item, including
+a tag wrapping an array or map. The bounded, non-recursive skip
+mechanism this finding validated (`skip_any_item`'s explicit stack)
+still does the safety work; it's just no longer paired with a content-
+shape restriction on top of it. Kept for the real trail of how "any tag
+number is safe, not just 24" was established.
 
 Asked directly, rather than left as an assumption: does the rest of the
 IANA CBOR tag registry (tags under ~1000) actually need excluding, or was
@@ -730,6 +741,15 @@ jobs across two pushes (the second push fixing exactly the fixture-sync
 failure the first one caused).
 
 ### 20. Namespace-scoped Type IDs resolved — TagDrop's concrete want, not a hypothetical one, is what unblocked it
+
+**Historical, partially superseded.** The magnitude-based "always-global
+floor" this finding works out (`100` → `1000` → `32768`) was itself
+later dropped entirely, replaced by pure even/odd parity: every even
+uint is always global, every odd uint is always namespace-scoped,
+regardless of magnitude — no floor to consult at all. The compound-key
+`(namespace, TypeID)` resolution and the sharp-edge/truncation findings
+below carried forward into that later design unchanged; only "which
+Type IDs are scopable" stopped being a magnitude question.
 
 §3.5 shipped with the `100`+ scoping question deliberately open. Asked
 directly by TagDrop, with a concrete want (shrinking four existing
@@ -1094,6 +1114,18 @@ of delegated to a library call.
 
 ## 23. Prefix typeIDs: replacing the three-tier integer system with a three-type classification
 
+**Historical, superseded.** The three-row classification this finding
+introduces (uint even / uint odd / byte string) later collapsed to two
+rows: decentralized byte string Type IDs were retired entirely once a
+declared namespace turned out to give every odd uint inside it the
+identical zero-coordination collision safety at a fraction of the
+per-ID cost (see the record-architecture-redesign entries further
+below, and DESIGN.md). What this finding gets right and still holds:
+self-describing classification by CBOR major type and parity, no magic
+threshold constants, explicit truncation visibility — all carried
+forward into the two-row design unchanged. Kept for the real trail of
+why key-0-only integer tiers were replaced with prefix typeIDs at all.
+
 The original design used three tiers of integer Type IDs in key 0
 (`1`–`99` standard record types, `100`–`32767` common vocabulary, `32768`+ private-use),
 all encoded as CBOR uints. Namespace scoping was determined by a magnitude
@@ -1317,6 +1349,14 @@ namespace-scoping" for the full writeup.
 
 ### 29. A namespace can be implied by an isolated carrier instead of transmitted — strictly better than self-allocated even IDs at the same cost, and it resolves whether decentralized Record IDs still need to be the general "cheap ID" recommendation
 
+**Later superseded further.** This finding narrowed decentralized
+(byte string) Type IDs down to one remaining niche job: standing alone
+as a self-certifying identity with no namespace involved. A later pass
+checked whether any concrete case (TagDrop or otherwise) actually
+exercised that niche — none did — and retired decentralized Type IDs
+entirely rather than keeping a mechanism nothing used. See the
+record-architecture-redesign entries further below.
+
 Asked TagDrop directly what their own decoder does internally with
 content that arrives via a carrier implying isolation (their `tagdrop:`
 URI), rather than assuming the answer — Finding #28 had just established
@@ -1433,3 +1473,642 @@ whichever registry eventually governs the Allocated tier (or looking at
 older content predating one), can read the namespace's own name straight
 off the wire instead of guessing or needing external lookup. Same job
 Type Hint (§3.1) already does for Record Type IDs, one level up.
+
+### 31. Three documentation-clarity gaps, surfaced by implementer-experience-shaped feedback: a buried cost-math distinction, no decision guide for six Type ID mechanisms, and no single scannable list of assigned IDs
+
+None of these change the wire format or any decoder's behavior — all
+three are about a reader/implementer being able to find and apply
+information that was already correct, just hard to locate.
+
+**A Wrapper-wrapped Record's inner Type ID is never bare and never
+repeated the way a plain sibling Record's is, and that changes
+namespace-scoping cost math — the fact was already present, but only as
+a parenthetical aside on one specific worked example ("Namespace
+repetition across a multi-code Split group," above), not stated as its
+own general principle.** A plain sibling Record's namespace-scoped Type
+ID is typically repeated on every code, so shrinking it saves the shrink
+*N times*; a Type ID only reachable after a Wrapper stack fully resolves
+exists exactly once for the whole group, so shrinking it saves the
+shrink *exactly once* — never something that scales with code count.
+Conflating the two overstates how quickly a repeating discriminator's
+own per-code cost gets cleared. Stated as its own clearly-labeled
+principle in both `DESIGN.md` and spec §3.5, rather than left implicit
+in a footnote about a different correction.
+
+**Six Type ID mechanisms (§4's range table) with no guide for picking
+among them — real feedback was that the taxonomy took multiple
+clarifying rounds even with direct access to ask.** Added a step-by-step
+decision tree to spec §4, ordered so most application Record Types
+resolve at step 3 (a declared namespace, implied or explicit, with small
+sequential odd uints inside it) — matching where this project's own
+analysis (Findings #29/#30) already concluded most real usage should
+land, now made discoverable without having to reconstruct the reasoning
+from scattered sections.
+
+**No single place listing every currently-assigned standard Record Type
+ID, only prose scattered across §4.1–§4.4 — a real implementation-
+mistake risk, not just an inconvenience.** A typo here (the wrong number
+for a standard Type) collides silently with whatever real ID that number
+belongs to, rather than failing loudly the way an unrecognized ID would.
+Added a compact, scannable table gathering all six assigned IDs (Split
+`2`, Encrypt `4`, Media Payload `6`, Compress `8`, Fallback Hint `10`,
+App Route `12`) in one place at the top of §4, cross-referencing each
+one's full definition rather than duplicating it.
+
+### 32. Checking QDEF against every real NDEF RTD, not just NDEF in the abstract, surfaced one cheap gap worth closing and confirmed several others are correctly out of scope
+
+Asked directly whether QDEF and NDEF content should convert in both
+directions, with an explicit escape hatch stated up front: not
+converting is an acceptable outcome where closing the gap would cost
+more decoder/design complexity than it's worth. `DESIGN.md`'s
+"Relationship to existing standards" had discussed NDEF at an
+architectural level since early in this project, but had never actually
+checked QDEF's standard record types (§4) against the NFC Forum's real,
+published RTD list one by one. Did that directly against the actual
+specifications rather than from memory.
+
+**One real, cheap gap: Smart Poster's language tag and action code.**
+Fallback Hint (§4.2) had a URI and a label, but nowhere to put a BCP 47
+language tag or Smart Poster's action code (perform/save/open). Closed
+it with two new odd/optional fields (keys `3` and `5`) — cheap
+specifically because both are optional: a decoder that doesn't recognize
+either still gets a fully working URI and label, the exact same
+graceful-degrade guarantee Fallback Hint already made for its original
+two fields. Multiple languages or multiple URIs (Smart Poster's
+multi-title behavior, Multiple URI RTD) needed no new mechanism at all —
+QDEF already permits repeated same-Type sibling Records, so repeating
+Fallback Hint once per variant already reproduces both behaviors for
+free.
+
+**One real efficiency trick checked and correctly declined, not just
+skipped for being unfamiliar.** NDEF URI RTD's 1-byte prefix-code scheme
+(standing in for common prefixes like `"http://www."`) is exactly the
+kind of external table QDEF has borrowed before when it was worth it
+(CoAP Content-Formats, COSE Algorithm IDs) — so the instinct to check it
+seriously was right. It doesn't transfer cleanly: representing
+`[prefix code, remainder]` as one field value needs either a bare array
+(legal now that §3.2's field-value-shape rule was later dropped, but it
+would silently change the field's type out from under any decoder
+expecting a plain URI string there) or a CBOR tag standing in for the
+code (reopening the tag-number-collision risk already rejected once for
+container routing, Finding #11). Splitting the URI field into a
+separate code-plus-remainder pair would work structurally, but at a real
+cost: a decoder recognizing Fallback Hint's Type but not that specific
+split would see a broken, prefix-less string instead of a working URI —
+undermining the one guarantee Fallback Hint exists to make. Declined,
+for a stated, checked reason, not because efficiency doesn't matter here
+(it clearly does everywhere else in this project) — this was the "not
+worth the complexity" escape hatch actually exercised, not left
+theoretical.
+
+**Confirmed, not just asserted, that Connection Handover (Alternative
+Carrier, Handover Request/Select/Mediation), Device Information RTD, and
+Verb RTD are correctly out of scope.** All three are tied to live,
+bidirectional device-pairing negotiation — multiple devices exchanging
+messages to agree on a Bluetooth/WiFi carrier. QDEF has no session, no
+response, no multi-message exchange concept anywhere in its design; it's
+static and scan-once by construction. Representing Handover's state
+machine would require growing a concept foreign to the format's entire
+model, for a use case QDEF was never aimed at. Signature RTD maps onto
+QDEF's own already-decided, already-tracked Sign wrapper (not built,
+waiting for a real adopter) — NDEF conversion is a new argument for
+prioritizing it sooner, not new scope. AAR was already covered by App
+Route.
+
+Prototyped in `prototype/test/fallback-hint.test.js`: the pre-existing
+bare-URI-plus-label shape round-trips unaffected, the new language/action
+fields round-trip together, an unaware decoder still gets a complete
+working URI and label with both new keys silently ignored, and repeated
+siblings correctly reproduce multi-language behavior.
+
+### 33. Negative CBOR map keys — a real cross-implementation disagreement, and a competing prototype for the NDEF-`ID` question that #32 left open
+
+Raised while following up on #32's one open thread: NDEF's `ID` field
+has no QDEF equivalent, and a per-Type map key isn't architecturally the
+same thing (see DESIGN.md's "NDEF's ID field" for the full layering
+argument — a per-Type key is owned by that Type's author; a true
+`ID`-equivalent needs to be type-independent, parsed by the mandatory
+core). An array-wrapper prefix item (`[externalId]`) was already
+prototyped as one candidate shape. Asked whether a reserved *negative*
+CBOR map key could be a competing shape for the same job, and whether
+that choice could belong to "QDEF header metadata" instead.
+
+**Checked first: does CBOR even allow negative map keys, and does QDEF's
+spec already forbid them?** Yes to the first, no to the second. General
+CBOR permits any key type including negint; QDEF's spec discusses negint
+only as a typeID *prefix item value* (already resolved as "excluded, not
+reserved," see the Text-string-Type-IDs finding), never as a *map key*
+restriction — that axis was simply never addressed.
+
+**That gap was live, not theoretical: the Node and Rust prototypes
+already disagreed on it.** Checked directly in both. The Node prototype
+silently accepts a negative-integer map key and applies its existing
+even/odd check unmodified (JS's `%` preserves sign, so parity still
+comes out right). The Rust core's hand-rolled `cbor::read_key` had no
+match arm for major type 1 (negint) and returned `Err(NotAKey)` — and
+because `Records::next` treats any `parse_record` error as
+unrecoverable (a malformed item's end can't be determined, so the
+Sequence can't safely resume), that single unhandled key silently killed
+decoding of every *subsequent* Record in the same Sequence, not just the
+one that had it. Confirmed with a regression test
+(`a_negative_map_key_no_longer_kills_decoding_of_sibling_records_in_the_
+same_sequence` in `rust/qdef-core/src/tests.rs`) that reproduces exactly
+this: a two-Record Sequence where only the first Record has a negative
+key used to come back as one `Ok` followed by an `Err`.
+
+**Fixed regardless of which design direction (if any) gets adopted**,
+per the standing rule that a real Rust/JS disagreement on legal input is
+a bug independent of any pending design decision. Added
+`cbor::Key::NegInt(u64)` (storing the raw CBOR argument; RFC 8949 §3.1's
+`-1 - arg` reconstruction and its even/odd shortcut live in
+`neg_int_value`/`neg_int_is_even`), so `read_key` now reads major type 1
+instead of rejecting it. `check_criticality` (Type-level) explicitly
+skips `NegInt` keys, the same treatment it already gave byte-string/
+text-string keys — Type-owned criticality only ever applies to `Uint`
+keys. All 6 existing Rust tests plus 6 new ones pass; the `no_std`
+embedded target (`thumbv6m-none-eabi`) still builds clean.
+
+**Prototyped the negative-key shape itself as `extract_core_metadata`**
+(`rust/qdef-core/src/lib.rs`) and its Node mirror (`extractCoreMetadata`
+in `core.js`, exercised by `prototype/test/experimental-
+core-metadata-negkey.test.js`): key `-1` reserved for `externalId`, with
+an unrecognized negative key even/odd-checked at the mandatory-core
+level — critical (aborts) if even, silently ignored if odd — applied
+identically to every Record regardless of Type, distinct from that
+Type's own `check_criticality`/`applyCriticality` pass. Byte cost against
+the array-wrapper prototype was checked directly and found to be a wash
+in every case tested (both add exactly one byte of framing), disproving
+an initial hypothesis that the map-key form would amortize cheaper once
+the map already had other fields — a CBOR container header only grows
+past one byte once entry count crosses 23, and 1-to-2 never does.
+
+**One real structural argument survives, though only for one of the two
+layers it could apply to.** Reserving negative map keys for all future
+mandatory-core, per-Record metadata means Phase 1's prefix-item shape
+set (bare typeID, namespace-pairing array) never needs a new
+array-length-disambiguated shape again — every future addition lands in
+the map instead, which was already opaque to Phase 1 regardless. That
+argument does not extend to the container discriminator (§3.5): it's a
+once-per-container item, not a once-per-Record map, and several of its
+own shapes are bare scalars, not maps, so nothing about reserving
+Record-map keys says anything about whether the discriminator's shape
+set is closed. See DESIGN.md for the full writeup.
+
+**Neither option is adopted.** Both remain feasibility prototypes,
+mutually exclusive, checked to the point of a fair side-by-side
+comparison, with no decision made to build either into the spec.
+
+### 34. The discriminator's eight shapes were the same governed/ungoverned dichotomy special-cased four times over — collapsed to four, reversing part of #30
+
+Raised directly, not from a bug report: "too many shapes to represent
+lots of different semantics is not easy for humans to reason [about]."
+Named the specific instance precisely rather than treating "the spec
+feels complex" as a vague complaint: both the namespace-ID layer (§3.5)
+and the Record-Type-ID layer (§3.1) independently implement the same
+governed(uint)/ungoverned(bytestring) identity choice, but the
+discriminator had grown to eight recognized shapes while the Type ID
+mechanism stayed at roughly two base shapes plus a repetition pattern.
+
+**Diagnosed the actual cause, not just the symptom.** The Type ID layer
+never gave "backup" or "hint" its own bespoke wire shape: a backup typeID
+is just another bare item in the same prefix-item run (no combined
+shape needed), and a hint is a *naming convention* (a hash-derivable
+string used as the ID's own Hint field, §3.1), not a companion CBOR item
+at all. The discriminator did the opposite: Finding #30 and the
+"let's be comprehensive, allow all 3 forms" decision that followed it
+gave every combination of (id-kind × hint-present × backup-present) its
+own positional array shape — `[uint, byte string]`, `[id, text string]`,
+`[uint, byte string, text string]` — on top of the map form that could
+already express all of them. Four ways to say the same handful of
+things is a direct, self-inflicted instance of the complaint, not
+something borrowed from elsewhere in the design.
+
+**Checked whether the array forms were pulling their weight before
+cutting them, rather than cutting on aesthetic grounds alone.** They
+saved a small, one-time number of bytes over the map form (a map header
+plus one to two integer key bytes per optional field present) — but the
+discriminator is paid exactly once per *container*, not once per
+Record. This is the identical "wrapper cost math" principle already
+documented for §4.1 (one-time costs don't justify the same design
+pressure as a per-Record-repeated one): a few bytes saved once isn't
+worth a decoder permanently carrying three more shapes to recognize.
+
+**Cut: the three positional array forms are no longer recognized.** Any
+array discriminator now degrades gracefully to "no namespace" — the
+same treatment any other unrecognized shape already got, so this isn't
+a new failure mode, just a narrower set of shapes that don't fail. The
+discriminator is now bare uint (`0` or Allocated `N`), bare byte string
+(Decentralized), or the map form — the map being the *only* way to carry
+a hint or backup, with no expressiveness lost, only the redundant
+compact-array shortcuts. `prototype/src/header.js`'s `parseDiscriminator`
+dropped its `Array.isArray` branch entirely (arrays now simply fall
+through to the existing "unrecognized" return); `prototype/test/
+header.test.js`'s four array-specific tests were replaced with one test
+confirming every previously-recognized array shape now degrades.
+`rust/qdef-core` needed no change — it has never interpreted the
+discriminator's contents, only skipped it as one opaque CBOR item, so
+this entire cut was invisible to it by construction.
+
+**A second thread the same conversation raised — whether decentralized
+(byte-string) *namespace* IDs are worth keeping at all — was
+deliberately not resolved here.** Unlike the discriminator-shape cut
+(a strict simplification with no expressiveness lost, decidable from
+spec-internal reasoning alone), this is a real design question about
+whether a real adopter needs the capability, the same category of
+question that resolved the analogous question for decentralized
+*Record Type* IDs earlier in this project (#20, #29) — it needs TagDrop's
+actual answer, not another guess from this side. One relevant, testable
+hypothesis was raised in that conversation, worth recording here even
+unresolved: a QR/NFC tag is typically "one file, one context," so
+namespaces (roughly one per vendor/app) are far coarser-grained than
+Record Types (many per namespace) — meaning the collision pressure that
+justified decentralized Type IDs doesn't obviously transfer to
+namespaces at the same strength, in either direction. Not decided;
+flagged for the same real-adopter-feedback loop that has resolved every
+other open governance question in this project.
+
+### 35. `resolveStack`'s multi-code namespace-consistency check used reference equality on Buffers — every existing test only exercised the uint path, so it went uncaught
+
+Surfaced while reasoning through finding #34's follow-up question:
+leaning toward dropping the Allocated (uint) namespace tier entirely and
+making namespace IDs always Decentralized (byte string), the question
+came up whether namespace matching needs to check length *and* content
+as two separate things. It doesn't — byte-string equality already
+requires equal length as a precondition (two different-length byte
+strings can never be byte-for-byte equal), so this is a free structural
+property, not a mechanism to build. Worth noting because of what it
+implied for a question from the previous exchange: since different-
+length namespaces can never collide with each other, a shorter namespace
+ID minted early is never retroactively endangered by other adopters
+later choosing longer ones — only by other adopters choosing the *same*
+length. That resolves the objection raised against letting namespace
+length grow over time as adoption grows (informed by a live registry of
+observed usage, an idea raised in the same conversation): the "already-
+printed tags become unsafe later" risk this project was worried about
+doesn't apply across length classes, only within one.
+
+Checking whether the implementation actually does content-based
+comparison (not something weaker) surfaced a real, pre-existing bug:
+`wrappers.js`'s `resolveStack` checked multi-code namespace agreement
+with a bare `groupHeader.namespace !== codeHeader.namespace`. For a
+Buffer (Decentralized namespace), `!==` is reference identity, not
+content equality — two independently `core.decodeContainer`'d Buffers
+holding byte-for-byte identical namespace values are never the same
+object, so this check always reported them as different. Every
+multi-code Split/Wrapper group repeating a byte-string namespace across
+its physical codes (exactly the pattern `multi-code-namespace.test.js`
+exists to verify, spec §3.5) would have incorrectly thrown "codes in
+this group declare inconsistent namespaces," even when every code
+declared byte-for-byte the same namespace. A second, narrower version of
+the same class of bug exists for uint namespaces too: `500 === 500n` is
+`false` in JS even though they're the same logical value, so a group
+mixing a `number`-typed and a `bigint`-typed encoding of the identical
+namespace would also have spuriously failed.
+
+**Why no existing test caught this:** every prior multi-code-namespace
+test used a single bigint namespace constant (`NAMESPACE =
+12271745624591856273n`) reused as the literal JS value on every code, so
+`!==` happened to work by accident — a literal reused across `encode`
+calls is still the same bigint value, and there was never a Buffer-typed
+or cross-type case to exercise the actual bug.
+
+**Fixed with a dedicated `header.namespaceEquals(a, b)`**: content
+comparison (`Buffer.equals`) when either side is a Buffer, `BigInt(a) ===
+BigInt(b)` otherwise (normalizing away the number/bigint representation
+difference, the same trick `parseDiscriminator`'s own zero-check already
+used for exactly this reason). `wrappers.js`'s `resolveStack` now calls
+it instead of `!==`. Verified the fix actually matters, not just that
+tests pass: reverted the one-line fix, confirmed the new regression test
+fails exactly as predicted, then restored it.
+
+Prototyped in `prototype/test/multi-code-namespace.test.js`: a
+byte-string namespace repeated identically (via separate `Buffer.from()`
+calls, guaranteeing distinct object identity) across a multi-code Split
+group now resolves correctly; codes genuinely disagreeing on a
+byte-string namespace (different content, same length) are still
+correctly rejected; and `namespaceEquals` is checked directly against a
+number/bigint pair for the same value.
+
+### 36. The Allocated (uint) namespace tier was dropped — namespace IDs are always Decentralized now
+
+Continuing the same "too many shapes to reason about" thread that
+produced #34's discriminator collapse: does the namespace layer actually
+need the same governed/ungoverned choice §3.1 gives Record Type IDs, or
+was that duplication inherited from Type IDs without checking whether it
+earns its own keep one level up? Resolved with a concrete data point
+rather than more abstract reasoning: TagDrop, the project's one real
+adopter, already treats its namespace as always decentralized in
+practice. Combined with recognizing a namespace is architecturally
+different from a Type ID — it's the *global root of trust* for
+everything scoped inside it, and it's exactly the value most likely to
+end up baked into physical, already-printed QR/NFC media with no way to
+retroactively fix a bad choice — the Allocated (uint) namespace tier was
+dropped entirely. A namespace value is now always a byte string.
+
+**Cascading effects, all fixed together rather than left to drift:** the
+container discriminator's shape table drops to three real shapes (`uint
+0`, byte string, map) — any nonzero uint now degrades gracefully to "no
+namespace" instead of meaning "Allocated Namespace ID." §3.1's
+namespace-*pairing* prefix item followed the identical uint-or-
+byte-string convention, so it needed the identical fix: a uint in the
+`namespace` slot of `[namespace, typeId]` is no longer recognized as a
+pairing item at all, meaningfully different from before, since the
+Record now loses its only typeID (not just its namespace) and becomes
+unroutable. Fixed identically in `prototype/src/core.js`'s
+`isNamespacePairing` and `rust/qdef-core`'s `parse_namespace_pairing`,
+with `rust/qdef-core/src/fixtures.rs` regenerated to match (the old
+`ALLOCATED_NAMESPACE_PAIRING_CONTAINER` fixture is now
+`UINT_NAMESPACE_SLOT_UNRECOGNIZED_CONTAINER`, same bytes, corrected
+meaning and assertions). A namespace Hint is now always the fully
+self-certifying case too (§3.1's hash-verification strengthening applies
+to every namespace, since every namespace is a byte string) — one fewer
+distinction to track versus Type ID hints, which stay split between the
+plain (uint) and self-certifying (byte string) cases.
+
+**Byte-length policy, grounded in the actual birthday-bound math rather
+than picked by feel.** The naive read of keyspace size is wrong for
+self-allocated IDs with no coordination — the population a width safely
+supports is governed by `√N`, not `N`. Checked directly: 3 bytes (`2^24`)
+reaches ~3% collision risk at just 1,000 independent picks and is
+essentially guaranteed to collide by 10,000; 4 bytes (`2^32`) stays
+comfortable into the tens of thousands. **Resolution: self-certify
+freely at 4 bytes or longer (no coordination needed); shorter is
+reserved, not self-allocatable** — safe only with uniqueness guaranteed
+by direct coordination, which has no formal registry process today,
+deliberately (see DESIGN.md's "Standard library governance," expanded
+alongside this finding: a QDEF registry's real value is growing §4's
+shared standard record types, not allocating namespace or app-specific
+Type IDs that self-certification already handles for free).
+
+**A hybrid was considered and rejected: registry-curated allocation
+specifically for a 1–3 byte range, self-certification above it.**
+Structurally sound — curated allocation sidesteps the birthday bound
+entirely, getting the full keyspace instead of `√N`, the same way any
+reviewed numeric tier does — but rejected for reintroducing the exact
+governed/ungoverned split this whole pass was cutting, for a
+self-admittedly niche need, without a real operating authority to run
+it. Same "don't build registry infrastructure ahead of real demand"
+discipline already applied to Type IDs and App Route elsewhere in this
+project.
+
+**The 4-byte floor deliberately doesn't bend toward a smaller, more
+"honest" population estimate**, even though one was raised directly:
+QDEF being a niche format, the real long-run namespace count might
+plausibly be closer to 10–20 than 1,000+. Not disputed as a median
+guess — but the two ways to be wrong about it aren't symmetric.
+Over-provisioning costs a few bytes, once, forever negligible.
+Under-provisioning is unfixable the moment it's printed on physical
+media the format succeeds beyond the humble estimate. That asymmetry is
+why the floor is sized for a plausible-upside scenario, not the median
+one. Separately confirmed and load-bearing for this whole resolution:
+different-length byte strings can never be byte-for-byte equal, so
+cross-length collision is structurally impossible — a namespace minted
+short and early is never retroactively endangered by other adopters
+later choosing longer lengths, only by other adopters choosing that same
+short length. That's what makes "self-certify at 4+ bytes, no
+coordination, no need to track ecosystem-wide adoption over time"
+durable rather than a ticking clock.
+
+Full reasoning, the birthday-math table, and the rejected-hybrid
+analysis in DESIGN.md's "Namespace IDs are always Decentralized"
+section. Prototyped and cross-validated in both `prototype/src/core.js`
+/ `prototype/src/header.js` and `rust/qdef-core`, all tests updated
+in-place to construct namespace values as byte strings throughout rather
+than left pointing at a now-nonexistent shape.
+
+### 37. Decentralized Type IDs, backup typeIDs, and Type Hint all retired — a namespace-scoped odd uint does every job they did, cheaper
+
+Continuing the same reality-check discipline that produced #36:
+decentralized (byte string) Record Type IDs were the one Type ID form
+namespace-scoped odd uints didn't obviously subsume, since they alone
+could stand as a self-certifying identity with no namespace, registry,
+or reachable-author trust involved at all. Raised directly: does any
+concrete case — TagDrop or otherwise — actually need that property
+today, or was it carried forward from an earlier design generation
+without checking whether it still earns its keep? No concrete case did.
+Once a declared namespace (§3.5) gives every odd uint inside it the
+identical zero-coordination collision safety at 1 byte instead of 4+
+per Record Type, forever, decentralized Type IDs stopped being the
+cheaper option for the case they were actually being reached for in
+practice — they only remained the *only* option for standing alone with
+zero namespace involved, a property nobody was using.
+
+**Three mechanisms retired together, not independently, because their
+survival was interlinked:**
+
+- **Decentralized (byte string) and reserved (text string) Record Type
+  IDs.** The classification table collapses to two rows: uint even
+  (Standard, always global) and uint odd (Scoped, namespace-required).
+  Byte string and text string are no longer valid typeID forms at all —
+  a Record's prefix now recognizes exactly two shapes, a bare uint or a
+  namespace-pairing array wrapping one.
+- **Backup typeIDs.** Their only remaining job — promotion between a
+  decentralized form and a later-registered numeric one — evaporated
+  the moment decentralized Type IDs did; there was nothing left to
+  promote *from*. A Record's prefix now carries exactly one
+  typeID-bearing item; a second typeID-shaped item after it is no
+  longer accumulated, just silently skipped as an unrecognized prefix
+  item, identical to any other unrecognized forward-compat padding.
+- **Type Hint.** Existed only to attach a recoverable name to a
+  decentralized Type ID and let the binding be independently verified.
+  With nothing left to name, it was retired outright rather than kept
+  as an orphaned mechanism. The underlying hash-derivation *algorithm*
+  survives and was relocated to spec §3.5 (namespace IDs and App
+  Route's hash-derived form, §4.4, are its remaining direct users) —
+  only its Type-ID-specific application went away, not the primitive
+  itself.
+
+**Deliberately not built, and explicitly noted as future-evolution
+ideas instead, per direct instruction:** a structured/subscoped Type ID
+as a multi-element array (`[typeId, subscope, subscope, ...]`), for
+hierarchical organization without strict sequential numbering — set
+aside over parser-complexity concerns (unclear even/odd semantics for
+subscope elements, and disambiguating the shape from the surviving
+namespace-pairing array needs care); and a namespace "quick-select"
+mechanism — a short (1–3 byte) back-reference letting a Record cheaply
+select a namespace declared earlier in the same container instead of
+repeating its full bytes — rejected for conflicting with the project's
+standing "no cross-code/cross-record state, every physical code parsed
+independently from a blank slate" invariant, the same one that already
+killed CBOR reference/value-sharing tags and Type-ID-inheritance
+(DESIGN.md's "Reference/value-sharing tags for intra-Sequence
+repetition"). Neither is built; both are recorded in DESIGN.md as
+deferred ideas, not silently dropped.
+
+Verified, not just asserted: Node prototype rewritten
+(`prototype/src/core.js`'s `isTypeId`/`isNamespacePairing`/
+`parseRecords`), `rust/qdef-core` rewritten in lockstep
+(`lib.rs`'s `parse_record`, `cbor.rs`), roughly a dozen Node test files
+mechanically and manually updated (`typeIds: [X]` → `typeId: X`
+throughout, plus rewritten assertions for backup-typeID and byte-
+string-typeID tests), `rust/qdef-core/src/tests.rs` rewritten (28
+tests), `rust/qdef-core/src/fixtures.rs` regenerated from the Node
+encoder and confirmed byte-identical on re-generation both immediately
+after and again after all subsequent code changes (no drift). Final
+counts: 93 Node tests, 28 Rust tests, all passing;
+`cargo clippy --all-targets` and a `thumbv6m-none-eabi` build both
+clean.
+
+### 38. NDEF-ID-equivalent: the freed prefix slot got one clear meaning instead of staying split between two retired ones
+
+#33 explored two competing, mutually exclusive designs for an NDEF-`ID`
+equivalent (a stable, type-independent external reference any Record
+can carry) — a 1-element array prefix item, and a reserved negative map
+key — and left the question open, adopting neither. #37's retirement of
+decentralized Type IDs and Type Hint surfaced a third option neither
+prototype anticipated, because the slot it reuses didn't exist yet at
+the time: the bare CBOR text string immediately following the
+typeID-bearing item, previously split between two purposes (a
+reserved-for-future "Named ID" typeID form, and Type Hint's own
+verification string), both retired and freed at the same time.
+
+**Zero incremental design cost, the deciding property over both #33
+options.** Phase 1 already needed to check "is there a text string
+right after the typeID" for reasons predating this feature (Type Hint
+used to live there); repurposing that check for a general external-ID
+reference added no new prefix-item shape, no new CBOR major-type
+dispatch, and no reserved negative map key. It's parsed by the
+mandatory core, before any Type-specific interpretation, at the same
+architectural layer as the typeID prefix items and the namespace-
+pairing item — exactly the property #33 established the NDEF-`ID`
+equivalent needed and that ordinary field-map extensibility couldn't
+provide.
+
+Both #33's experimental prototypes (`prototype/test/
+experimental-external-id.test.js`, `experimental-core-metadata-negkey.
+test.js`) were deleted as dead code once this shipped; the negative-key
+cross-implementation bug #33 surfaced (`cbor::Key::NegInt`, `NotAKey`
+hard-erroring the whole Sequence) was a genuine, independent fix and is
+unaffected — it stays fixed regardless of which NDEF-`ID` design, if
+any, ultimately landed.
+
+Prototyped in `prototype/test/ndef-id.test.js` (6 tests: round-trip
+alongside an ordinary typeID, coexistence with namespace-pairing,
+zero-cost absence, a stray-text-string-with-no-typeID edge case, an
+only-the-first-of-two-text-strings-is-recognized edge case, and a
+byte-cost FINDING confirming no wrapper overhead over the bare string
+itself) and `rust/qdef-core/src/tests.rs` (3 tests covering the
+identical cases). See spec §3.1's "NDEF-ID-equivalent" and DESIGN.md's
+"NDEF's ID field" entry for the full resolution.
+
+### 39. The field-value-shape rule was dropped entirely — `skip_any_item`'s existing bounded-stack mechanism already covered the case that mattered
+
+§3.2 used to restrict a Record field's value to flat scalars,
+definite-length strings, or a tag wrapping a definite-length string
+directly — anything more structured had to be pre-encoded separately
+and carried as an opaque byte string, decoded again by hand. Raised
+directly, prompted by the observation that a QR code's own physical
+size (around 800 bytes at practical error-correction levels) already
+bounds real-world complexity: is "no recursion at all, not even
+bounded" a property most real decoders actually need, given that
+bound, or one this project kept enforcing past the point it earned its
+cost?
+
+**Checked against the actual implementation before deciding, not
+assumed safe.** The concern the old rule guarded against was
+unstructured recursion overflowing a constrained embedded parser's
+stack. But `skip_any_item` — the function already used to skip prefix
+items (namespace-pairing arrays, tag-wrapped content) — never used true
+recursion for that job; it already walked with a bounded explicit stack
+(`MAX_DEPTH`, a `rust/qdef-core` implementation choice, not a
+wire-format requirement). The stricter, definite-length-string-only
+`skip_value` used specifically for field values was a separate,
+narrower function living alongside it, enforcing a shape restriction
+`skip_any_item` didn't need for its own safety. Merging field-value
+skipping into `skip_any_item` and deleting `skip_value` didn't reopen
+the "constrained embedded scanner, no true recursion" property this
+project has repeatedly protected elsewhere — it just meant field values
+now go through the identical bounded-stack mechanism prefix items
+already trusted.
+
+**One genuinely new capability was needed, not just a rule relaxation:
+skipping indefinite-length (chunked) strings.** Previously only
+indefinite-length *containers* were supported (a `u64::MAX` stack
+sentinel); an indefinite-length byte or text string needs its own
+chunk-walking loop, since each chunk carries its own length and the
+terminator is a bare `0xFF` byte, not a container element count.
+Implemented as an inline loop inside `skip_any_item`'s existing
+byte/text-string branch; a new `cbor::Error::MalformedIndefiniteString`
+catches a chunk sequence with a mismatched major type or a
+nested-indefinite chunk (both illegal per RFC 8949) rather than walking
+into it. §3.4's canonical-encoding requirement is unchanged — conformant
+*encoders* still MUST produce definite-length forms; this is a
+decoder-robustness improvement only.
+
+**No hard depth cap at the spec level, by explicit decision — advisory
+guidance instead.** Encoders SHOULD NOT nest field values more deeply
+than genuinely useful content needs; a decoder MAY enforce its own
+practical bound as an implementation choice (`rust/qdef-core` keeps its
+existing `MAX_DEPTH: usize = 16`, now documented as this decoder's own
+choice, not a wire-format mandate). The format's own physical medium is
+the real-world limiter, the same reasoning that motivated dropping the
+rule in the first place.
+
+Prototyped in `prototype/test/nested-field-values.test.js` (5 tests: a
+bare nested array field value, a bare nested map field value, multi-
+level nesting, and criticality proven unaffected by value shape for
+both even and odd keys) and `rust/qdef-core/src/tests.rs` (three tests
+inverted from asserting `DisallowedFieldValueShape` errors to asserting
+success, plus two new tests for indefinite-length chunked strings — one
+confirming a well-formed chunk sequence skips cleanly, one confirming a
+malformed one is rejected, not silently walked). Cross-validated via
+`rust/qdef-core/src/fixtures.rs` regeneration (`arrayValueContainer`,
+`nestedTag24Container`, and others renamed from their old
+`disallowed*`/pre-relaxation names to reflect their now-legal status).
+
+### 40. `verifyNamespaceHint` had silently disappeared from the prototype months before anyone noticed — a cited function name is a checkable claim, not just prose
+
+While relocating §3.1's hash-derivation algorithm description to §3.5
+during #37's redesign (namespace IDs are its primary surviving direct
+user once Type Hint was retired), a routine check of the specific claim
+being carried forward — "prototyped in `prototype/src/header.js`'s
+`verifyNamespaceHint`" — against the actual current file turned up
+nothing: the function didn't exist. `header.js` had no hash-derivation
+code at all.
+
+**Traced to a real, years-old regression, not a wording error in this
+redesign.** `verifyNamespaceHint` was implemented for the first time in
+the commit that pinned the hash-derivation algorithm and fixed a live
+64-bit verification bug (`01bb2a9`, see #22's entry above — "Pinning
+the hash algorithm"). A later, unrelated commit (`f31737d`, "prefix-
+based typeID routing, drop Type Hint") deleted `prototype/src/typeHint.js`
+as part of moving Type Hint from the field Map into the prefix, and
+`verifyNamespaceHint` — which called into `typeHint.js`'s
+`deriveHashId` — was deleted alongside it, with no corresponding note
+in DESIGN.md or QDEF-SPEC.md that the namespace-Hint-verification
+capability itself had gone away, not just been relocated. Both
+documents kept citing it as prototyped across every redesign pass
+since, including this session's own §3.5 rewrite, until this specific
+check caught it.
+
+**Restored, not just corrected in prose.** Namespace Hint verification
+is real, load-bearing functionality — the self-certifying strengthening
+§3.5 describes is only actually true if something in the prototype
+checks it — so the fix was re-implementing the function, not lowering
+the doc's claim to match reality. Reimplemented directly in
+`prototype/src/header.js` as a small, self-contained function (no
+`typeHint.js` to depend on anymore, since Type Hint itself is gone):
+`deriveHashId(name, byteWidth)` using Node's `crypto` module, and
+`verifyNamespaceHint(namespace, hint)` returning `'verified'` /
+`'unverified'` / `'not-applicable'`. `N` is simply the candidate
+namespace's own byte length now (a namespace value is always a byte
+string, §3.5) rather than a magnitude-inferred uint width the way the
+original, Type-Hint-era version needed — one fewer inference step,
+since there's no uint form to guess a width from anymore.
+
+Six new tests added to `prototype/test/header.test.js`: narrow (4-byte)
+and wide (8-byte) verification, an unverified-Hint case (wrong name),
+an unverified case for a namespace with no hash-derivation backing it
+at all, a not-applicable case for a namespace or Hint that's absent,
+and a real decode-to-verify round trip through `parseDiscriminator`.
+All pass; full Node suite confirmed at 93/93 afterward.
+
+**The general lesson, worth stating plainly:** a design document citing
+a specific file and function name as evidence a mechanism is real is
+making a falsifiable claim, not writing prose — and that claim can go
+stale silently across many later, unrelated commits if nothing
+re-checks it against the actual source. This project's own stated
+discipline ("verify every claim directly, not by memory of what used to
+be true") caught this one; it's worth treating any DESIGN.md or
+QDEF-SPEC.md sentence naming a specific function as due for exactly
+this kind of periodic re-check, not a one-time fact.

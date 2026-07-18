@@ -15,27 +15,19 @@ function run(cmd) {
 
 console.log('=== Registry Example Output ===\n');
 
-console.log('$ node scripts/gen-type-id.js com.example.myapp/route');
-console.log(run('node gen-type-id.js com.example.myapp/route'));
+console.log('$ node scripts/gen-type-id.js com.example/myapp-paper');
+console.log(run('node gen-type-id.js com.example/myapp-paper'));
 console.log();
 
-console.log('$ node scripts/validate-type-id.js com.example.myapp/route "h\'216e6add\'"');
-console.log(run('node validate-type-id.js com.example.myapp/route "h\'216e6add\'"'));
-console.log();
-
-console.log('$ node scripts/gen-type-id.js --namespace --width 4 com.example/myapp-paper');
-console.log(run('node gen-type-id.js --namespace --width 4 com.example/myapp-paper'));
-console.log();
-
-console.log('$ node scripts/validate-type-id.js --namespace com.example/myapp-paper "h\'3cf2360e\'"');
-console.log(run('node validate-type-id.js --namespace com.example/myapp-paper "h\'3cf2360e\'"'));
+console.log('$ node scripts/validate-type-id.js com.example/myapp-paper "h\'3cf2360e\'"');
+console.log(run('node validate-type-id.js com.example/myapp-paper "h\'3cf2360e\'"'));
 console.log();
 
 console.log('=== CBOR Wire Encoding ===\n');
-console.log('Byte string h\'216e6add\' encodes as: 44 21 6e 6a dd');
-console.log('  44 = CBOR major type 2 (byte string), length 4');
-console.log('  21 6e 6a dd = the 4 bytes of data');
-console.log();
 console.log('Byte string h\'3cf2360e\' encodes as: 44 3c f2 36 0e');
 console.log('  44 = CBOR major type 2 (byte string), length 4');
 console.log('  3c f2 36 0e = the 4 bytes of data');
+console.log();
+console.log('uint(105) (a common-vocabulary global Type ID) encodes as: 18 69');
+console.log('  18 = CBOR major type 0 (unsigned int), 1-byte argument follows');
+console.log('  69 = 105');

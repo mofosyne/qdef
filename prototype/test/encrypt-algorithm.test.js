@@ -18,7 +18,7 @@ test('Encrypt with no Algorithm/Key Algorithm fields round-trips exactly as befo
   const key = crypto.randomBytes(32);
   const innerBytes = Buffer.from('some secret payload bytes');
 
-  const { typeIds, fields } = wrappers.encryptEncode(innerBytes, key);
+  const { fields } = wrappers.encryptEncode(innerBytes, key);
   assert.equal(fields.has(3), false);
   assert.equal(fields.has(5), false);
 
@@ -60,11 +60,11 @@ test('a decoder that pre-dates keys 3/5 silently ignores them instead of abortin
   const key = crypto.randomBytes(32);
   const innerBytes = Buffer.from('some secret payload bytes');
 
-  const { typeIds, fields } = wrappers.encryptEncode(innerBytes, key, {
+  const { typeId, fields } = wrappers.encryptEncode(innerBytes, key, {
     algorithm: wrappers.COSE_ALG_A256GCM,
     keyAlgorithm: wrappers.COSE_ALG_DIRECT_HKDF_SHA_256,
   });
-  const encoded = core.encodeRecordBytes({ typeIds, fields });
+  const encoded = core.encodeRecordBytes({ typeId, fields });
 
   const rec = core.decodeRecordBytes(encoded);
   const checked = core.applyCriticality(rec, OLD_ENCRYPT_KNOWN_KEYS);

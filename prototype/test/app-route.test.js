@@ -12,7 +12,7 @@ const wrappers = require('../src/wrappers');
 test('App Route with a domain and a human-readable label round-trips', () => {
   const container = core.encodeContainer([
     {
-      typeIds: [wrappers.APP_ROUTE_TYPE],
+      typeId: wrappers.APP_ROUTE_TYPE,
       fields: new Map([
         [0, 'example.com'],
         [1, 'Open in Example App'],
@@ -30,7 +30,7 @@ test('App Route with a domain and a human-readable label round-trips', () => {
 
 test('the label is optional — a domain alone is a complete App Route Record', () => {
   const container = core.encodeContainer([
-    { typeIds: [wrappers.APP_ROUTE_TYPE], fields: new Map([[0, 'example.com']]) },
+    { typeId: wrappers.APP_ROUTE_TYPE, fields: new Map([[0, 'example.com']]) },
   ]);
 
   const { records } = core.decodeContainer(container);
@@ -43,12 +43,12 @@ test('the label is optional — a domain alone is a complete App Route Record', 
 
 test('App Route is not positionally special — routes the same whether first or last in the Sequence', () => {
   const routeFirst = core.encodeContainer([
-    { typeIds: [wrappers.APP_ROUTE_TYPE], fields: new Map([[0, 'example.com']]) },
-    { typeIds: [100], fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) },
+    { typeId: wrappers.APP_ROUTE_TYPE, fields: new Map([[0, 'example.com']]) },
+    { typeId: 100, fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) },
   ]);
   const routeLast = core.encodeContainer([
-    { typeIds: [100], fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) },
-    { typeIds: [wrappers.APP_ROUTE_TYPE], fields: new Map([[0, 'example.com']]) },
+    { typeId: 100, fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) },
+    { typeId: wrappers.APP_ROUTE_TYPE, fields: new Map([[0, 'example.com']]) },
   ]);
 
   for (const container of [routeFirst, routeLast]) {
@@ -62,8 +62,8 @@ test('App Route is not positionally special — routes the same whether first or
 
 test('an application with no interest in App Route skips the whole Record cleanly by Type ID alone', () => {
   const container = core.encodeContainer([
-    { typeIds: [wrappers.APP_ROUTE_TYPE], fields: new Map([[0, 'example.com']]) },
-    { typeIds: [100], fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) },
+    { typeId: wrappers.APP_ROUTE_TYPE, fields: new Map([[0, 'example.com']]) },
+    { typeId: 100, fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) },
   ]);
 
   const { records } = core.decodeContainer(container);
@@ -80,7 +80,7 @@ test('an application with no interest in App Route skips the whole Record cleanl
 test('App Route decentralized form (private-use uint + Hint name) round-trips', () => {
   const container = core.encodeContainer([
     {
-      typeIds: [wrappers.APP_ROUTE_TYPE],
+      typeId: wrappers.APP_ROUTE_TYPE,
       fields: new Map([
         [0, 12271745624591856273n],
         [1, 'com.example/tagdrop-paper'],
@@ -99,7 +99,7 @@ test('App Route decentralized form (private-use uint + Hint name) round-trips', 
 test('a scanner that only understands the domain form still skips a decentralized-form Record cleanly by Type ID alone', () => {
   const container = core.encodeContainer([
     {
-      typeIds: [wrappers.APP_ROUTE_TYPE],
+      typeId: wrappers.APP_ROUTE_TYPE,
       fields: new Map([[0, 12271745624591856273n], [1, 'com.example/tagdrop-paper']]),
     },
   ]);
@@ -112,7 +112,7 @@ test('a scanner that only understands the domain form still skips a decentralize
 
 test('encoding the same App Route fields twice produces identical bytes', () => {
   const fields = new Map([[0, 'example.com'], [1, 'Open in Example App']]);
-  const a = core.encodeRecordBytes({ typeIds: [wrappers.APP_ROUTE_TYPE], fields });
-  const b = core.encodeRecordBytes({ typeIds: [wrappers.APP_ROUTE_TYPE], fields: new Map(fields) });
+  const a = core.encodeRecordBytes({ typeId: wrappers.APP_ROUTE_TYPE, fields });
+  const b = core.encodeRecordBytes({ typeId: wrappers.APP_ROUTE_TYPE, fields: new Map(fields) });
   assert.deepEqual(a, b);
 });

@@ -10,24 +10,23 @@ in the Validation section.
 ---
 
 Pick **one** of the two ID patterns below, depending on whether your
-Record Type ID stands alone (a byte string, always global, spec §3.1)
-or is namespace-scoped (a small odd uint, requiring a declared namespace
-in the container discriminator, spec §3.5). Don't fill in both unless
+Record Type ID is common-vocabulary global (an even uint, spec §3.1) or
+namespace-scoped (a small odd uint, requiring a declared namespace in
+the container discriminator, spec §3.5). Don't fill in both unless
 you're genuinely registering two different things.
 
-**Option A — standalone global Type ID** (byte string, no namespace
-needed):
+**Option A — common-vocabulary global Type ID** (even uint `100`–`32767`,
+no namespace needed; no hash-derivation involved, just a number):
 
 ```
-Record Type ID:             h'4b1f561b'
-Record Type Name:           com.example.smartlight/status
-Variable Name:              Smart Light Status
-Full SHA-256:               h'4b1f561b8df976781a3d74c35eafbfb6483d4f511bae5573ab35ebba8f0e0333'
+Record Type ID:              105
+Record Type Name:            com.example.smartlight/status
+Variable Name:               Smart Light Status
 
-Data item:                  map { 2: uint (on/off), 4: uint (brightness 0-100) }
-Semantics:                  Reports current state of a smart light fixture
-Point of contact:           <your email or URL>
-Reference:                  <link to spec/README defining this Type>
+Data item:                   map { 2: uint (on/off), 4: uint (brightness 0-100) }
+Semantics:                   Reports current state of a smart light fixture
+Point of contact:            <your email or URL>
+Reference:                   <link to spec/README defining this Type>
 ```
 
 **Option B — namespace-scoped Type ID** (small odd uint, cheaper on the
@@ -35,17 +34,18 @@ wire once you have more than one Record Type; requires the container
 discriminator to declare the namespace, spec §3.5):
 
 ```
-Namespace ID:               h'c103df40'
-Namespace Name:             com.example.smartlight
-Variable Name:              Smart Light
-Full SHA-256:               h'c103df40c55c77a3bb6a9342dbc81389bb3a7315f20a92c73a7f8cfc226a1bf0'
+Namespace ID:                h'c103df40'
+Namespace Name:              com.example/smartlight
+Variable Name:               Smart Light
 
-Scoped Type ID:             1
+Full SHA-256:                h'c103df40c55c77a3bb6a9342dbc81389bb3a7315f20a92c73a7f8cfc226a1bf0'
 
-Data item:                  map { 2: uint (on/off), 4: uint (brightness 0-100) }
-Semantics:                  Reports current state of a smart light fixture
-Point of contact:           <your email or URL>
-Reference:                  <link to spec/README defining this Type>
+Scoped Type ID:               1
+
+Data item:                   map { 2: uint (on/off), 4: uint (brightness 0-100) }
+Semantics:                   Reports current state of a smart light fixture
+Point of contact:            <your email or URL>
+Reference:                   <link to spec/README defining this Type>
 ```
 
 **Variable Name** is a space-separated word sequence for generating
@@ -60,38 +60,25 @@ identifiers in any language:
 
 ## Validation
 
-Paste the output of these commands:
+Option A (a plain number) needs no validation command — there's nothing
+to hash-derive. If you're using Option B, paste the output of:
 
 ```bash
-# Validate Record Type ID
-node scripts/validate-type-id.js com.example.smartlight/status "h'4b1f561b'"
-
 # Validate Namespace ID
-node scripts/validate-type-id.js --namespace com.example.smartlight "h'c103df40'"
+node scripts/validate-type-id.js com.example/smartlight "h'c103df40'"
 ```
 
 Expected output:
 
 ```
-Validating: Record Type ID for "com.example.smartlight/status"
-  Candidate ID:  h'4b1f561b' (4 bytes)
-  Expected hash: h'4b1f561b' (4 bytes)
-
-  ✓ Hash derivation matches.
-  ✓ Name is reverse-domain qualified.
-  ✓ Name avoids known collision-prone patterns.
-  ✓ Byte length 4 is adequate for global use.
-
-Validation passed.
-
-Validating: Namespace ID for "com.example.smartlight"
+Validating: Namespace ID for "com.example/smartlight"
   Candidate ID:  h'c103df40' (4 bytes)
   Expected hash: h'c103df40' (4 bytes)
 
   ✓ Hash derivation matches.
   ✓ Name is reverse-domain qualified.
   ✓ Name avoids known collision-prone patterns.
-  ✓ Byte length 4 is adequate for global use.
+  ✓ Byte length 4 is adequate to self-certify freely.
 
 Validation passed.
 ```
@@ -106,41 +93,41 @@ One to three sentences is fine.>
 If you have a sample CBOR encoding of a Record using this Type ID,
 paste the hex dump or link to it here. Otherwise delete this section.
 
-A Record is a prefix typeID followed by a flat field Map (spec §3) — the
+A Record is a prefix typeID followed by a field Map (spec §3) — the
 typeID is never a map key:
 
 ```
-44 4b1f561b                     # bytes(4) — prefix typeID: h'4b1f561b'
-a2                               # map(2) — the Record's field Map
-   02                            # unsigned(2) — brightness
-   18 64                         # unsigned(100)
-   04                            # unsigned(4) — color temp
-   19 0fa0                       # unsigned(4000)
+18 69                            # unsigned(105) — prefix typeID: 105
+a2                                # map(2) — the Record's field Map
+   02                             # unsigned(2) — brightness
+   18 64                          # unsigned(100)
+   04                             # unsigned(4) — color temp
+   19 0fa0                        # unsigned(4000)
 ```
 
-If this Type ID is namespace-scoped (an odd uint, not a byte string),
-show the container discriminator (spec §3.5) that declares the
-namespace it's scoped under too:
+If this Type ID is namespace-scoped (an odd uint), show the container
+discriminator (spec §3.5) that declares the namespace it's scoped under
+too:
 
 ```
-44 c103df40                     # bytes(4) — discriminator: decentralized
-                                 #   namespace h'c103df40', bare form
-01                               # unsigned(1) — prefix typeID: 1 (namespace-scoped)
-a2                               # map(2) — the Record's field Map
-   02  18 64                     # brightness: 100
-   04  19 0fa0                   # color temp: 4000
+44 c103df40                      # bytes(4) — discriminator: namespace
+                                  #   h'c103df40', bare form
+01                                # unsigned(1) — prefix typeID: 1 (namespace-scoped)
+a2                                # map(2) — the Record's field Map
+   02  18 64                      # brightness: 100
+   04  19 0fa0                    # color temp: 4000
 ```
 
 ---
 
 ## Checklist
 
-- [ ] Record Type ID is a valid hex byte string (4+ bytes for global use, 2 bytes acceptable within a declared namespace)
-- [ ] Record Type Name is reverse-domain qualified (e.g. `com.example.myapp/route`)
+- [ ] Record Type ID is either a plain even uint (Option A) or a small
+      odd uint scoped to a declared namespace (Option B)
+- [ ] Record Type Name is reverse-domain qualified (e.g. `com.example/myapp-route`)
 - [ ] Variable Name is a space-separated word sequence
-- [ ] Full SHA-256 is pasted from gen-type-id output
-- [ ] `validate-type-id.js` passes for Record Type ID
-- [ ] `validate-type-id.js --namespace` passes for Namespace ID (if applicable)
+- [ ] (Option B only) Full SHA-256 is pasted from `gen-type-id.js` output
+- [ ] (Option B only) `validate-type-id.js` passes for the Namespace ID
 - [ ] Data item shape is described (map keys and value types)
 - [ ] Point of contact is provided
 - [ ] Reference link to your spec/README is provided

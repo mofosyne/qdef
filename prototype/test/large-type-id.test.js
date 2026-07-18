@@ -25,7 +25,7 @@ test('cbor.encode (plain, NOT what this prototype uses) always tag-2-wraps a Big
 
 test('a large (BigInt-class) Type ID encodes as a native uint, never a CBOR tag', () => {
   const bigTypeId = 11040522420225562824n;
-  const bytes = core.encodeRecordBytes({ typeIds: [bigTypeId], fields: new Map([[0, 'x']]) });
+  const bytes = core.encodeRecordBytes({ typeId: bigTypeId, fields: new Map([[0, 'x']]) });
 
   // First bytes are the typeID encoding: major type 0, 8-byte argument
   // (0x1b), never 0xc2 (tag 2, bignum).
@@ -37,7 +37,7 @@ test('a large (BigInt-class) Type ID encodes as a native uint, never a CBOR tag'
 });
 
 test('a small BigInt Type ID also encodes as a native uint, not tag-2', () => {
-  const bytes = core.encodeRecordBytes({ typeIds: [100n], fields: new Map() });
+  const bytes = core.encodeRecordBytes({ typeId: 100n, fields: new Map() });
   // typeID 100 as CBOR uint: 0x18 0x64, then empty map: 0xa0
   assert.deepEqual(bytes, Buffer.from([0x18, 0x64, 0xa0]));
 });
@@ -45,7 +45,7 @@ test('a small BigInt Type ID also encodes as a native uint, not tag-2', () => {
 test('a full container carrying a 64-bit-class private-use Type ID round-trips through decodeContainer', () => {
   const bigTypeId = 2n ** 64n - 1n;
   const container = core.encodeContainer([
-    { typeIds: [bigTypeId], fields: new Map([[0, 'private-use content']]) },
+    { typeId: bigTypeId, fields: new Map([[0, 'private-use content']]) },
   ]);
 
   const { records } = core.decodeContainer(container);

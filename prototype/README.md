@@ -8,11 +8,20 @@ found.
 
 ## Layout
 
-- `src/core.js` — the mandatory core: magic/version framing, CBOR-Sequence
-  encode/decode, `map[0]` routing, the even/odd criticality rule
-  (spec §2–§3). No knowledge of any specific Record Type. Encodes every
-  Record with RFC 8949 §4.2.1 canonical CBOR (spec §3.4), not just
-  whatever the `cbor` package's default encoder happens to produce.
+- `src/core.js` — the mandatory core: magic framing, the mandatory
+  container discriminator, CBOR-Sequence encode/decode, per-Record
+  prefix typeID recognition (a bare uint, or a namespace-pairing array)
+  plus the optional NDEF-ID-equivalent text string, and the even/odd
+  criticality rule (spec §2–§3). No knowledge of any specific Record
+  Type. Encodes every Record with RFC 8949 §4.2.1 canonical CBOR
+  (spec §3.4), not just whatever the `cbor` package's default encoder
+  happens to produce.
+- `src/header.js` — interprets the container discriminator (spec §3.5):
+  namespace parsing, namespace-Hint hash-derivation verification, and
+  Type ID lookup-key resolution (even = always global, odd = requires a
+  declared namespace, with a per-Record namespace-pairing override).
+  Record-Type-interpretation-specific handling, never a mandatory-core
+  concern — `core.js` needs zero namespace knowledge to do its job.
 - `src/wrappers.js` — the optional standard library's Wrapper Records:
   Split (with XOR single-fragment parity), Compress, Encrypt, plus a
   generic recursive `resolveStack` resolver (spec §4.1). Also carries the
@@ -23,24 +32,41 @@ found.
 - `src/recordTypes.js` — the small set of application Record Type schemas
   used by the tests (Wi-Fi §5, a generic third-party-payload registration
   §6, a secret-key backup §8).
-- `src/typeHint.js` — the optional, self-certifying strengthening for
-  key 1's Type Hint (spec §3.1): deriving a private-use-random Type ID from
-  a truncated hash of its own name, and opportunistically verifying that
-  binding without needing a version marker.
+- `scripts/gen-type-id.js` / `scripts/validate-type-id.js` — derive and
+  verify a hash-derived Namespace ID from a name (spec §3.5). Decentralized
+  Record Type IDs no longer exist as a mechanism, so these are
+  namespace-only now.
+- `scripts/gen-rust-fixtures.js` — generates `rust/qdef-core/src/fixtures.rs`
+  from this prototype's own canonical encoder, so the independently
+  hand-rolled Rust decoder is cross-validated against independently
+  produced bytes, not just self-consistency.
 - `test/roundtrip.test.js` — the four required scenarios: a plain Record,
   a Record wrapping an opaque third-party payload, the full
   Split(parity)→Encrypt→plain stack with fragment-drop recovery, and the
   even/odd criticality rule.
-- `test/core.test.js` — Record Type ID routing edge cases (missing key 0,
-  a CBOR-tagged item as malformed input now that key 0 is the sole
-  routing mechanism), the NDEF no-magic path, and the streaming-decode
-  claim.
+- `test/core.test.js` — Record Type ID routing edge cases, the NDEF
+  no-magic path, and the streaming-decode claim.
+- `test/header.test.js` — the container discriminator's recognized
+  shapes and graceful degrade, namespace-Hint hash-derivation
+  verification, and namespace-scoped Type ID lookup-key resolution.
+- `test/record-namespace-pairing.test.js` — the per-Record
+  namespace-pairing prefix item (spec §3.1/§3.5): overriding the
+  container's ambient namespace for one Record, and the byte-cost
+  comparison against a bare typeID.
+- `test/multi-code-namespace.test.js` — namespace consistency checking
+  across a multi-code Split group via `resolveStack`.
+- `test/custom-scheme-carrier.test.js` — the implied-namespace pattern
+  for an isolated carrier (own URI scheme / own NDEF MIME type): a
+  namespace fixed by the carrier itself, never transmitted.
+- `test/ndef-id.test.js` — the NDEF-ID-equivalent bare text string
+  (spec §3.1): round-trips alongside an ordinary typeID and alongside a
+  namespace-pairing item, absent at zero cost, and its edge cases.
+- `test/nested-field-values.test.js` — §3.2's field-value-shape rule
+  relaxation: a field value may be any well-formed CBOR item now (bare
+  arrays, nested maps, multi-level nesting), and criticality is
+  unaffected by value shape.
 - `test/nesting-order.test.js` — whether a generic decoder can detect a
   non-conformant Wrapper nesting order (spec finding: it can't).
-- `test/type-hint.test.js` — proves key 1 needs zero special-case code in
-  the core (a decoder that's never heard of Type Hint just skips it via
-  the ordinary unrecognized-odd-key path), the old-reader/promoted-Type
-  recognition scenario, and the hash-derivation verify/degrade behavior.
 - `test/encrypt-algorithm.test.js` — Encrypt's optional Algorithm/Key
   Algorithm fields (keys 5/7, spec §4.1): both COSE-numeric and
   plain-string forms round-trip, and a decoder built before these fields
@@ -50,6 +76,9 @@ found.
   byte-identical output, so a content hash like `group_id` means "same
   logical content" across independent encoders, not just "same encoder,
   same run."
+- `test/fallback-hint.test.js` — Fallback Hint (Type 10, spec §4.2):
+  language/action fields, and graceful degrade for a decoder that
+  doesn't recognize them.
 - `test/media-payload.test.js` — Media Payload's (Type 6, spec §4.3)
   Media Type field in both forms (a CoAP Content-Format uint, and the
   plain-MIME-string fallback using `text/vcard` — confirmed genuinely

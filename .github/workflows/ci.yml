@@ -22,6 +22,13 @@ jobs:
       - run: npm test
       - name: smoke-test gen-type-id and validate-type-id scripts
         run: |
+          # Namespace-only now: decentralized (byte string) Record Type
+          # IDs were retired entirely (spec §3.1), so these scripts no
+          # longer have a separate --namespace flag or Record-Type-ID
+          # mode -- every derivation is a Namespace ID derivation (spec
+          # §3.5). The hash-derivation algorithm itself is unchanged, so
+          # these are the same known test vectors as before.
+
           # gen-type-id: known test vector (4-byte derivation)
           output=$(node scripts/gen-type-id.js com.example.tagdrop/route)
           echo "$output"
@@ -32,8 +39,8 @@ jobs:
           echo "$output"
           echo "$output" | grep -q "h'34e1e4af986c74e2'" || { echo "::error::gen-type-id 8-byte output mismatch"; exit 1; }
 
-          # gen-type-id: namespace mode
-          output=$(node scripts/gen-type-id.js --namespace com.example/tagdrop-paper)
+          # gen-type-id: another known test vector
+          output=$(node scripts/gen-type-id.js --width 8 com.example/tagdrop-paper)
           echo "$output"
           echo "$output" | grep -q "h'21bb10277228cfe2'" || { echo "::error::gen-type-id namespace output mismatch"; exit 1; }
 
@@ -46,8 +53,8 @@ jobs:
             exit 1
           fi
 
-          # validate-type-id: namespace mode
-          node scripts/validate-type-id.js --namespace com.example/tagdrop-paper 21BB10277228CFE2
+          # validate-type-id: another known-good ID
+          node scripts/validate-type-id.js com.example/tagdrop-paper 21BB10277228CFE2
 
           # validate-type-id: --reverse mode
           node scripts/validate-type-id.js --reverse 34E1E4AF986C74E2 com.example.tagdrop/route

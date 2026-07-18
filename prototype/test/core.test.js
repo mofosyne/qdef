@@ -8,10 +8,10 @@ const core = require('../src/core');
 const rt = require('../src/recordTypes');
 
 // ---------------------------------------------------------------------
-// Record Type ID routing (§3.1): typeID prefix items are the routing
-// mechanism. The parser accumulates typeIDs (contiguous run of uint/
-// byte-string at the start), skips unknown items, and stops at the
-// first map (the record delimiter).
+// Record Type ID routing (§3.1): a single typeID prefix item (a bare
+// uint, or a namespace-pairing array) is the routing mechanism. The
+// parser recognizes it, skips unknown items, and stops at the first map
+// (the record delimiter).
 // ---------------------------------------------------------------------
 
 test('a record with no typeID before the map is ignored (not routed)', () => {
@@ -51,8 +51,8 @@ test('NDEF path: a bare CBOR Sequence (no magic) still routes via decodeSequence
 // ---------------------------------------------------------------------
 test('a totally unrecognized Record Type is skippable without inspecting its keys', () => {
   const container = core.encodeContainer([
-    { typeIds: [12345], fields: new Map([[0, 'whatever'], [2, 'nested-app-data']]) },
-    { typeIds: [rt.WIFI_TYPE], fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) },
+    { typeId: 12345, fields: new Map([[0, 'whatever'], [2, 'nested-app-data']]) },
+    { typeId: rt.WIFI_TYPE, fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) },
   ]);
   const { records } = core.decodeContainer(container);
 
@@ -97,19 +97,22 @@ test('records decode incrementally off a byte stream, confirming the no-bufferin
 });
 
 // ---------------------------------------------------------------------
-// Backup typeIDs for transitional routing
+// There is no backup-typeID mechanism anymore -- at most one typeID-
+// bearing item per Record (see docs/FINDINGS.md). A second typeID-shaped
+// item is just an ordinary unrecognized prefix item now.
 // ---------------------------------------------------------------------
-test('backup typeIDs are accumulated and accessible via typeIds array', () => {
-  const oldId = Buffer.from('A7F90B3C', 'hex');
-  const container = core.encodeContainer([
-    { typeIds: [100, oldId], fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) },
-  ]);
+test('a second, would-be-backup typeID is not accumulated -- silently skipped as an unrecognized item', () => {
+  const discBytes = cbor.encodeCanonical(0); // no namespace
+  const typeBytes = cbor.encodeCanonical(100);
+  const secondUint = cbor.encodeCanonical(900); // would have been a backup, once
+  const mapBytes = cbor.encodeCanonical(new Map([[0, 'SSID']]));
+  const recordBytes = Buffer.concat([typeBytes, secondUint, mapBytes]);
+  const container = Buffer.concat([core.MAGIC, discBytes, recordBytes]);
 
   const { records } = core.decodeContainer(container);
-  assert.equal(records[0].typeIds.length, 2);
+  assert.equal(records.length, 1);
   assert.equal(records[0].typeId, 100);
-  assert.ok(Buffer.isBuffer(records[0].typeIds[1]));
-  assert.deepEqual(records[0].typeIds[1], oldId);
+  assert.equal(records[0].map.get(0), 'SSID');
 });
 
 test('unknown items between typeIDs and map are skipped transparently', () => {

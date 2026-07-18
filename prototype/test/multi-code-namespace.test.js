@@ -19,8 +19,9 @@ const assert = require('node:assert/strict');
 
 const core = require('../src/core');
 const wrappers = require('../src/wrappers');
+const header = require('../src/header');
 
-const NAMESPACE = 12271745624591856273n;
+const NAMESPACE = Buffer.from('a9d6e1f30b7c4482', 'hex');
 const NAMESPACE_SCOPED_TYPE = 32769; // odd uint -- requires a declared namespace
 const KNOWN_KEYS = new Map([
   [wrappers.SPLIT_TYPE, wrappers.SPLIT_KNOWN_KEYS],
@@ -29,7 +30,7 @@ const KNOWN_KEYS = new Map([
 
 function buildCodes({ repeatNamespaceOnEveryCode }) {
   const innerBytes = core.encodeRecordBytes({
-    typeIds: [NAMESPACE_SCOPED_TYPE],
+    typeId: NAMESPACE_SCOPED_TYPE,
     fields: new Map([[0, 'namespace-scoped payload']]),
   });
   const fragmentRecords = wrappers.splitEncode(innerBytes, {
@@ -48,7 +49,7 @@ test('a namespace repeated on every code resolves correctly after full Split rea
   const terminal = wrappers.resolveStack(codes, {}, KNOWN_KEYS);
 
   assert.equal(terminal.typeId, NAMESPACE_SCOPED_TYPE);
-  assert.equal(terminal.namespace, NAMESPACE);
+  assert.ok(terminal.namespace.equals(NAMESPACE));
   assert.equal(terminal.map.get(0), 'namespace-scoped payload');
 });
 
@@ -60,7 +61,7 @@ test('the repeated namespace survives losing any one code, same as the data it d
   const droppedOneCode = [codes[0], codes[1], codes[3]];
 
   const terminal = wrappers.resolveStack(droppedOneCode, {}, KNOWN_KEYS);
-  assert.equal(terminal.namespace, NAMESPACE);
+  assert.ok(terminal.namespace.equals(NAMESPACE));
   assert.equal(terminal.map.get(0), 'namespace-scoped payload');
 });
 
@@ -82,18 +83,18 @@ test('FINDING: a namespace declared on only one code is a single point of failur
   // are both present.
   const keepingTheNamespaceCode = [codes[0], codes[1], codes[3]];
   const terminal = wrappers.resolveStack(keepingTheNamespaceCode, {}, KNOWN_KEYS);
-  assert.equal(terminal.namespace, NAMESPACE);
+  assert.ok(terminal.namespace.equals(NAMESPACE));
 });
 
 test('codes disagreeing on the declared namespace is rejected, not silently resolved one way or the other', () => {
   const innerBytes = core.encodeRecordBytes({
-    typeIds: [NAMESPACE_SCOPED_TYPE],
+    typeId: NAMESPACE_SCOPED_TYPE,
     fields: new Map([[0, 'payload']]),
   });
   const fragmentRecords = wrappers.splitEncode(innerBytes, { count: 2 });
   const codes = [
-    core.encodeContainer([fragmentRecords[0]], 111n),
-    core.encodeContainer([fragmentRecords[1]], 222n),
+    core.encodeContainer([fragmentRecords[0]], Buffer.from('11111111', 'hex')),
+    core.encodeContainer([fragmentRecords[1]], Buffer.from('22222222', 'hex')),
   ];
 
   assert.throws(
@@ -104,7 +105,7 @@ test('codes disagreeing on the declared namespace is rejected, not silently reso
 
 test('a namespace-scoped Type ID with no namespace declared anywhere in the group still aborts, same as the single-code case', () => {
   const innerBytes = core.encodeRecordBytes({
-    typeIds: [NAMESPACE_SCOPED_TYPE],
+    typeId: NAMESPACE_SCOPED_TYPE,
     fields: new Map([[0, 'payload']]),
   });
   const fragmentRecords = wrappers.splitEncode(innerBytes, { count: 2 });
@@ -114,4 +115,73 @@ test('a namespace-scoped Type ID with no namespace declared anywhere in the grou
     () => wrappers.resolveStack(codes, {}, KNOWN_KEYS),
     /odd uint Type ID .* requires a declared namespace/,
   );
+});
+
+// ---------------------------------------------------------------------
+// A real bug found while checking a namespace-matching question: the
+// group-consistency check above used to compare namespaces with a bare
+// `!==`. That's correct for a plain uint but silently wrong for a
+// Decentralized (byte string) namespace -- two independently-decoded
+// Buffers holding identical bytes are never `===`, so `!==` always
+// reported them as different, and every multi-code group repeating a
+// byte-string namespace across its codes would incorrectly throw
+// "inconsistent namespaces." No existing test caught this because every
+// prior multi-code-namespace test above only ever used a bigint
+// namespace. Fixed via header.namespaceEquals (content comparison for
+// Buffers, BigInt-normalized comparison for number/bigint so the same
+// numeric value never spuriously mismatches by JS type either).
+// ---------------------------------------------------------------------
+
+test('a decentralized (byte string) namespace repeated identically across every code resolves correctly -- regression for the !== reference-equality bug', () => {
+  const decentralizedNamespace = Buffer.from('a9d6e1f30b7c4482', 'hex');
+  const innerBytes = core.encodeRecordBytes({
+    typeId: NAMESPACE_SCOPED_TYPE,
+    fields: new Map([[0, 'namespace-scoped payload']]),
+  });
+  const fragmentRecords = wrappers.splitEncode(innerBytes, { count: 2 });
+  const codes = fragmentRecords.map((f) =>
+    core.encodeContainer(
+      [f],
+      // Buffer.from() on each call produces a fresh instance -- exactly
+      // the "same content, different object identity" shape the old
+      // `!==` check got wrong.
+      Buffer.from('a9d6e1f30b7c4482', 'hex'),
+    ),
+  );
+
+  const terminal = wrappers.resolveStack(codes, {}, KNOWN_KEYS);
+
+  assert.equal(terminal.typeId, NAMESPACE_SCOPED_TYPE);
+  assert.ok(terminal.namespace.equals(decentralizedNamespace));
+});
+
+test('codes disagreeing on a decentralized namespace (different bytes, same length) are still correctly rejected', () => {
+  const innerBytes = core.encodeRecordBytes({
+    typeId: NAMESPACE_SCOPED_TYPE,
+    fields: new Map([[0, 'payload']]),
+  });
+  const fragmentRecords = wrappers.splitEncode(innerBytes, { count: 2 });
+  const codes = [
+    core.encodeContainer([fragmentRecords[0]], Buffer.from('a9d6e1f30b7c4482', 'hex')),
+    core.encodeContainer([fragmentRecords[1]], Buffer.from('ffffffffffffffff', 'hex')),
+  ];
+
+  assert.throws(
+    () => wrappers.resolveStack(codes, {}, KNOWN_KEYS),
+    /inconsistent namespace/,
+  );
+});
+
+test('namespaceEquals stays defensively correct for number/bigint even though a real container can never carry one as a namespace anymore', () => {
+  // There is no Allocated (uint) namespace tier (docs/FINDINGS.md) -- a
+  // uint discriminator now always degrades to "no namespace"
+  // (header.test.js covers that), so this scenario can't arise through
+  // any real encodeContainer/resolveStack path. Checked directly against
+  // namespaceEquals itself only as defensive-correctness insurance for
+  // the map form's namespace key (`1`), which is never type-checked at
+  // the structural-decode layer -- a non-conformant encoder could still
+  // put a uint there, and this makes sure that degrades to a safe
+  // comparison instead of a silent bug.
+  assert.equal(header.namespaceEquals(500, 500n), true);
+  assert.equal(header.namespaceEquals(500n, 500), true);
 });
