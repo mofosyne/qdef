@@ -265,7 +265,7 @@ function resolveStack(codesBytesList, ctx, knownKeysRegistry) {
     if (codeHeader) {
       if (groupHeader === undefined) {
         groupHeader = codeHeader;
-      } else if (groupHeader.namespace !== codeHeader.namespace) {
+      } else if (!header.namespaceEquals(groupHeader.namespace, codeHeader.namespace)) {
         throw new Error('codes in this group declare inconsistent namespaces');
       }
     }

@@ -1684,3 +1684,65 @@ justified decentralized Type IDs doesn't obviously transfer to
 namespaces at the same strength, in either direction. Not decided;
 flagged for the same real-adopter-feedback loop that has resolved every
 other open governance question in this project.
+
+### 35. `resolveStack`'s multi-code namespace-consistency check used reference equality on Buffers — every existing test only exercised the uint path, so it went uncaught
+
+Surfaced while reasoning through finding #34's follow-up question:
+leaning toward dropping the Allocated (uint) namespace tier entirely and
+making namespace IDs always Decentralized (byte string), the question
+came up whether namespace matching needs to check length *and* content
+as two separate things. It doesn't — byte-string equality already
+requires equal length as a precondition (two different-length byte
+strings can never be byte-for-byte equal), so this is a free structural
+property, not a mechanism to build. Worth noting because of what it
+implied for a question from the previous exchange: since different-
+length namespaces can never collide with each other, a shorter namespace
+ID minted early is never retroactively endangered by other adopters
+later choosing longer ones — only by other adopters choosing the *same*
+length. That resolves the objection raised against letting namespace
+length grow over time as adoption grows (informed by a live registry of
+observed usage, an idea raised in the same conversation): the "already-
+printed tags become unsafe later" risk this project was worried about
+doesn't apply across length classes, only within one.
+
+Checking whether the implementation actually does content-based
+comparison (not something weaker) surfaced a real, pre-existing bug:
+`wrappers.js`'s `resolveStack` checked multi-code namespace agreement
+with a bare `groupHeader.namespace !== codeHeader.namespace`. For a
+Buffer (Decentralized namespace), `!==` is reference identity, not
+content equality — two independently `core.decodeContainer`'d Buffers
+holding byte-for-byte identical namespace values are never the same
+object, so this check always reported them as different. Every
+multi-code Split/Wrapper group repeating a byte-string namespace across
+its physical codes (exactly the pattern `multi-code-namespace.test.js`
+exists to verify, spec §3.5) would have incorrectly thrown "codes in
+this group declare inconsistent namespaces," even when every code
+declared byte-for-byte the same namespace. A second, narrower version of
+the same class of bug exists for uint namespaces too: `500 === 500n` is
+`false` in JS even though they're the same logical value, so a group
+mixing a `number`-typed and a `bigint`-typed encoding of the identical
+namespace would also have spuriously failed.
+
+**Why no existing test caught this:** every prior multi-code-namespace
+test used a single bigint namespace constant (`NAMESPACE =
+12271745624591856273n`) reused as the literal JS value on every code, so
+`!==` happened to work by accident — a literal reused across `encode`
+calls is still the same bigint value, and there was never a Buffer-typed
+or cross-type case to exercise the actual bug.
+
+**Fixed with a dedicated `header.namespaceEquals(a, b)`**: content
+comparison (`Buffer.equals`) when either side is a Buffer, `BigInt(a) ===
+BigInt(b)` otherwise (normalizing away the number/bigint representation
+difference, the same trick `parseDiscriminator`'s own zero-check already
+used for exactly this reason). `wrappers.js`'s `resolveStack` now calls
+it instead of `!==`. Verified the fix actually matters, not just that
+tests pass: reverted the one-line fix, confirmed the new regression test
+fails exactly as predicted, then restored it.
+
+Prototyped in `prototype/test/multi-code-namespace.test.js`: a
+byte-string namespace repeated identically (via separate `Buffer.from()`
+calls, guaranteeing distinct object identity) across a multi-code Split
+group now resolves correctly; codes genuinely disagreeing on a
+byte-string namespace (different content, same length) are still
+correctly rejected; and `namespaceEquals` is checked directly against a
+number/bigint pair for the same value.

@@ -83,6 +83,32 @@ function parseDiscriminator(discriminator) {
   return undefined;
 }
 
+/**
+ * Compares two namespace values for equality -- number, bigint, and
+ * Buffer are all legal namespace value types (§3.5), and none of them
+ * are safely comparable with a bare `===`/`!==`:
+ *   - Buffer: `===` is reference identity, not content equality -- two
+ *     independently-decoded Buffers holding identical bytes are never
+ *     `===`, so a bare `!==` check always reports them as different.
+ *   - number vs. bigint: `500 === 500n` is `false` in JS even though
+ *     they represent the identical namespace value, if one code in a
+ *     group happened to encode/decode as a small number and another as
+ *     a bigint for the same magnitude.
+ * A namespace's true identity is its exact byte content (for a
+ * Decentralized/byte-string namespace) or its exact numeric value (for
+ * an Allocated/uint one) -- length is already part of that identity for
+ * free, since two different-length byte strings can never be
+ * byte-for-byte equal to begin with; nothing extra needs checking for
+ * that beyond an ordinary content comparison.
+ */
+function namespaceEquals(a, b) {
+  if (a === undefined || b === undefined) return a === b;
+  const aBuf = Buffer.isBuffer(a);
+  const bBuf = Buffer.isBuffer(b);
+  if (aBuf || bBuf) return aBuf && bBuf && a.equals(b);
+  return BigInt(a) === BigInt(b);
+}
+
 function isMapLike(item) {
   if (item instanceof Map) return true;
   return (
@@ -158,6 +184,7 @@ module.exports = {
   HEADER_NAMESPACE_HINT_KEY,
   HEADER_NAMESPACE_BACKUP_KEY,
   parseDiscriminator,
+  namespaceEquals,
   resolveLookupKey,
   resolveLookupKeyForRecord,
 };
