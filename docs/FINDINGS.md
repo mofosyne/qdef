@@ -48,36 +48,32 @@ unrecognized-critical-key abort of that Record.
 
 §4.1's Type-2 example shows the *fields* of a Split fragment (`group_id`,
 `index`, `count`, `fragment bytes`, `total_bytes`, `parity_scheme`) but
-never says how the original bytes get sliced into fragments in the first
-place. That's invisible right up until you need two independent
-encoders/decoders to agree on it — which `parity_scheme` does, immediately:
-XOR parity needs every fragment zero-padded to a common length before
-XOR'ing, and recovering a missing fragment needs to know *that fragment's*
-true length, which nothing in the spec provides if it's simply absent.
+never says how the original bytes get sliced into fragments. That's
+invisible until two independent encoders/decoders need to agree on it —
+which `parity_scheme` does immediately: XOR parity needs every fragment
+zero-padded to a common length, and recovering a missing fragment needs
+to know *that fragment's* true length, which nothing provides if it's
+simply absent.
 
 **Fix applied in the prototype:** fixed, deterministic chunking —
-`chunkLen = ceil(total_bytes / count)`, fragments sliced sequentially, last
-fragment shorter if `total_bytes` isn't an exact multiple of `count`. Any
-two independent implementations that follow this formula agree without
-coordination — the same content-addressing goal `group_id` already serves.
+`chunkLen = ceil(total_bytes / count)`, fragments sliced sequentially,
+last fragment shorter if `total_bytes` isn't an exact multiple of
+`count`. Any two independent implementations following this formula
+agree without coordination.
 
-**Real tradeoff this exposes, left as an open question (see below):**
-uniform chunking is what makes single-fragment XOR recovery well-defined,
-but it's also *less* flexible than what a real encoder probably wants —
-different physical codes (different QR versions/ECC levels, an NFC tag with
-a smaller capacity than a QR sibling) plausibly need different-sized
-fragments, chosen per-code rather than by one global formula. Uniform
-chunking and per-code-flexible sizing are in tension, and the spec needs to
-pick one (or specify a length manifest that survives a missing fragment) —
-it currently does neither.
+**Real tradeoff this exposes, left as an open question:** uniform
+chunking is what makes single-fragment XOR recovery well-defined, but
+it's less flexible than what a real encoder probably wants — different
+physical codes (different QR versions/ECC levels, an NFC tag smaller
+than a QR sibling) plausibly need different-sized fragments, chosen
+per-code. Uniform chunking and per-code-flexible sizing are in tension;
+the spec picks neither yet.
 
-**Update:** checked against a real adopter rather than left purely
-hypothetical — `mofosyne/tagdrop`'s own sectorization already assumes
-uniform chunk length within a split group (verified directly against
-`mofosyne/tagdrop`'s SPEC.md), so this tension doesn't cost that
-adopter anything; QDEF's rule matches what its format already does. That's
-evidence for one usage pattern, not a general resolution — see
-DESIGN.md's updated entry.
+**Update:** checked against a real adopter — `mofosyne/tagdrop`'s own
+sectorization already assumes uniform chunk length within a split group,
+so this tension costs that adopter nothing; QDEF's rule matches what its
+format already does. Evidence for one usage pattern, not a general
+resolution — see DESIGN.md's updated entry.
 
 ### 4. `total_bytes` (key 9) is documented OPTIONAL but isn't, once `parity_scheme` is set
 
@@ -190,7 +186,19 @@ code** (see #9 below for why that number moved), with **zero `unsafe`** and
 area is genuinely small was previously just prose confidence; it's now a
 measured, reproducible number tied to a real embedded target.
 
-### 9. Unbounded recursion depth wasn't just bounded — it was designed away entirely
+### 9. Unbounded recursion depth wasn't just bounded — it was designed away entirely (historical: the field-value-shape rule this produced was later dropped)
+
+**Later superseded.** The field-value-shape rule this finding produced
+(MUST be a scalar or definite-length string, never a bare array/map/tag)
+was itself dropped entirely in a later redesign — a field value MAY now
+be any well-formed CBOR item (see the "Field-value-shape rule" entry
+below, and DESIGN.md). The *mechanism* this finding is really about —
+skip-safety without true recursion, via a bounded explicit stack instead
+of a shape restriction — survived and is exactly what made that later
+relaxation safe to do: `skip_value`'s non-recursive arithmetic became
+`skip_any_item`'s bounded-stack walk, generalized to arbitrary shapes
+rather than eliminating the need to walk them. Kept here as the real
+trail for how that mechanism was first discovered and validated.
 
 First pass: skipping past a Record field (or an entire Record) the parser
 doesn't recognize requires generically walking arbitrarily-nested CBOR
@@ -248,25 +256,22 @@ smaller, simpler to reason about, and cheaper to run, not merely safer.
 ### 10. A malformed (not just unrecognized) Record can desync the whole Sequence — the spec's "isolated failure" promise has an unstated precondition
 
 §3.2 promises an aborted Record doesn't affect its siblings in the same
-Sequence. That promise silently assumes the Record is at least *well-formed*
-CBOR — its byte length needs to be determinable to know where the next
-Record starts. A genuinely malformed byte stream (truncated, an invalid
-length prefix, a reserved additional-info value) means the parser can no
-longer find that boundary, so it can't safely resume the Sequence at all —
-a fundamentally different, worse failure than "this Record's Type/keys
-aren't recognized." The same is now also true of a Record that violates
-finding #9's field-value-shape rule (a bare array/map/tag as a field
-value): by construction, its length can't be determined without doing the
-recursive walk the rule exists to avoid, so it's classified the same way —
-Sequence-fatal, not Record-isolated. This distinction was invisible in the
-Node prototype, where `cbor.decodeAllSync` either decodes the whole
-sequence or throws for all of it — there was never a point where "resume
-after this specific byte-level failure" was an explicit decision to make.
-Writing the Rust `Records` iterator by hand forced the decision: it now
-distinguishes "Record aborted but Sequence continues" (missing prefix
-typeIDs — see findings #1–#2) from "Sequence itself is unrecoverable"
-(malformed CBOR, or a field-value-shape violation), and only the former
-lets iteration continue.
+Sequence. That promise silently assumes the Record is at least
+*well-formed* CBOR — its byte length needs to be determinable to know
+where the next Record starts. A genuinely malformed byte stream
+(truncated, an invalid length prefix, a reserved additional-info value)
+means the parser can no longer find that boundary, so it can't safely
+resume the Sequence at all — a fundamentally different, worse failure
+than "this Record's Type/keys aren't recognized." (At the time this was
+found, the same was also true of a Record violating finding #9's
+field-value-shape rule; that rule was later dropped, so this second
+case no longer applies — see finding #9's own update.) This distinction
+was invisible in the Node prototype, where `cbor.decodeAllSync` either
+decodes the whole sequence or throws for all of it. Writing the Rust
+`Records` iterator by hand forced the decision: it distinguishes
+"Record aborted but Sequence continues" (missing prefix typeIDs — see
+findings #1–#2) from "Sequence itself is unrecoverable" (malformed
+CBOR), and only the former lets iteration continue.
 
 **Fix:** §3.2 should state this precondition explicitly rather than leave
 it implicit — an aborted-but-well-formed Record doesn't affect siblings;
@@ -300,20 +305,15 @@ the Smart Route exists to serve, is entitled to reject or mangle it, and
 wrapping an actual Record map in tag 0 demonstrably does mangle it.
 
 The follow-up question — does Hardware Parity's *other* route, key `0`,
-have the same problem? — was worth checking rather than assuming, since
-"QDEF picked a number that collides with something" was already true once.
-It does not, and the reason is structural, not luck: CBOR's IANA
-Considerations register tag numbers and simple values — there is no
-registry for map keys, because a bare CBOR map carries no built-in semantic
-layer the way a tag does. A generic decoder has nothing to coerce key `0`
-into; it's just data until something that knows the surrounding schema (a
-QDEF-aware parser) gives it meaning. Verified: encoding the identical
-Record map with *no* tag at all round-trips through a generic decoder as
-inert data (`map.get(0) === 100`, no coercion), while the same map wrapped
-in tag `0` decodes to `Invalid Date`. The asymmetry is exactly the
-asymmetry the format's own layering predicts — key `0` is the mandatory
-Constrained Route for a reason, and this is a second, independent reason
-beyond §1's "not every CBOR library exposes tags."
+have the same problem? — was checked, not assumed. It does not, and the
+reason is structural: CBOR's IANA Considerations register tag numbers
+and simple values, but there is no registry for map keys, because a
+bare CBOR map carries no built-in semantic layer the way a tag does. A
+generic decoder has nothing to coerce key `0` into; it's just data until
+a QDEF-aware parser gives it meaning. Verified: encoding the identical
+Record map with *no* tag round-trips through a generic decoder as inert
+data (`map.get(0) === 100`, no coercion), while the same map wrapped in
+tag `0` decodes to `Invalid Date`.
 
 **Fix:** at the time this was written, left open pending a decision between
 three wire-format resolutions. Superseded — see finding #12: the tag route
@@ -501,6 +501,17 @@ after actually surveying what the rest of the tag registry looks like,
 rather than assuming a wider rule was automatically unsafe.
 
 ### 16. The "only tag 24" restriction was itself overly cautious — surveyed the registry instead of assuming
+
+**Later superseded again, more fully this time.** The content-shape
+check this finding widened tag-24's restriction into (any tag number,
+but content must be a definite-length string directly) was itself
+dropped along with the rest of the field-value-shape rule (finding #9's
+update) — a field value MAY now be any well-formed CBOR item, including
+a tag wrapping an array or map. The bounded, non-recursive skip
+mechanism this finding validated (`skip_any_item`'s explicit stack)
+still does the safety work; it's just no longer paired with a content-
+shape restriction on top of it. Kept for the real trail of how "any tag
+number is safe, not just 24" was established.
 
 Asked directly, rather than left as an assumption: does the rest of the
 IANA CBOR tag registry (tags under ~1000) actually need excluding, or was
@@ -730,6 +741,15 @@ jobs across two pushes (the second push fixing exactly the fixture-sync
 failure the first one caused).
 
 ### 20. Namespace-scoped Type IDs resolved — TagDrop's concrete want, not a hypothetical one, is what unblocked it
+
+**Historical, partially superseded.** The magnitude-based "always-global
+floor" this finding works out (`100` → `1000` → `32768`) was itself
+later dropped entirely, replaced by pure even/odd parity: every even
+uint is always global, every odd uint is always namespace-scoped,
+regardless of magnitude — no floor to consult at all. The compound-key
+`(namespace, TypeID)` resolution and the sharp-edge/truncation findings
+below carried forward into that later design unchanged; only "which
+Type IDs are scopable" stopped being a magnitude question.
 
 §3.5 shipped with the `100`+ scoping question deliberately open. Asked
 directly by TagDrop, with a concrete want (shrinking four existing
@@ -1094,6 +1114,18 @@ of delegated to a library call.
 
 ## 23. Prefix typeIDs: replacing the three-tier integer system with a three-type classification
 
+**Historical, superseded.** The three-row classification this finding
+introduces (uint even / uint odd / byte string) later collapsed to two
+rows: decentralized byte string Type IDs were retired entirely once a
+declared namespace turned out to give every odd uint inside it the
+identical zero-coordination collision safety at a fraction of the
+per-ID cost (see the record-architecture-redesign entries further
+below, and DESIGN.md). What this finding gets right and still holds:
+self-describing classification by CBOR major type and parity, no magic
+threshold constants, explicit truncation visibility — all carried
+forward into the two-row design unchanged. Kept for the real trail of
+why key-0-only integer tiers were replaced with prefix typeIDs at all.
+
 The original design used three tiers of integer Type IDs in key 0
 (`1`–`99` standard record types, `100`–`32767` common vocabulary, `32768`+ private-use),
 all encoded as CBOR uints. Namespace scoping was determined by a magnitude
@@ -1317,6 +1349,14 @@ namespace-scoping" for the full writeup.
 
 ### 29. A namespace can be implied by an isolated carrier instead of transmitted — strictly better than self-allocated even IDs at the same cost, and it resolves whether decentralized Record IDs still need to be the general "cheap ID" recommendation
 
+**Later superseded further.** This finding narrowed decentralized
+(byte string) Type IDs down to one remaining niche job: standing alone
+as a self-certifying identity with no namespace involved. A later pass
+checked whether any concrete case (TagDrop or otherwise) actually
+exercised that niche — none did — and retired decentralized Type IDs
+entirely rather than keeping a mechanism nothing used. See the
+record-architecture-redesign entries further below.
+
 Asked TagDrop directly what their own decoder does internally with
 content that arrives via a carrier implying isolation (their `tagdrop:`
 URI), rather than assuming the answer — Finding #28 had just established
@@ -1507,9 +1547,11 @@ kind of external table QDEF has borrowed before when it was worth it
 (CoAP Content-Formats, COSE Algorithm IDs) — so the instinct to check it
 seriously was right. It doesn't transfer cleanly: representing
 `[prefix code, remainder]` as one field value needs either a bare array
-(disallowed by §3.2's field-value-shape rule) or a CBOR tag standing in
-for the code (reopening the tag-number-collision risk already rejected
-once for container routing, Finding #11). Splitting the URI field into a
+(legal now that §3.2's field-value-shape rule was later dropped, but it
+would silently change the field's type out from under any decoder
+expecting a plain URI string there) or a CBOR tag standing in for the
+code (reopening the tag-number-collision risk already rejected once for
+container routing, Finding #11). Splitting the URI field into a
 separate code-plus-remainder pair would work structurally, but at a real
 cost: a decoder recognizing Fallback Hint's Type but not that specific
 split would see a broken, prefix-less string instead of a working URI —
