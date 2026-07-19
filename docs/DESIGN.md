@@ -960,6 +960,22 @@ some version of "a boundary has to be inferred from context because
 nothing declares it explicitly." An explicit-length array around every
 Record means a boundary is never inferred again, at any nesting depth.
 
+**The same principle, for a different audience: a human or an LLM
+reading raw diagnostic notation with zero protocol knowledge.** Before
+subrecords existed, "the Map is the Record's own end" was a reliable,
+always-true visual rule — nothing ever followed a Record's Map in any
+earlier design. A reader could partition `uint, map, uint, map, ...`
+into Records correctly just by counting Map closes, no understanding of
+Type IDs or namespaces required. Subrecords silently broke that rule:
+`uint, map, uint, map` became genuinely ambiguous to a naive reader —
+is the second pair a new sibling Record, or a subrecord nested inside
+the first? — since telling them apart requires tracking nesting depth,
+which a glance doesn't give you. Bracket matching restores the same
+"reliable at a glance" property for the now-recursive case: `[uint,
+map, [uint, map]]` is unambiguous on sight, since bracket-matching is a
+structural primitive both humans and LLMs are already good at, where
+"did that Map belong to the current nesting level" isn't.
+
 **A genuine, unplanned robustness improvement fell out of this for
 free.** The previous design's `Records` iterator had a documented
 limitation: a malformed Record made the rest of the Sequence
