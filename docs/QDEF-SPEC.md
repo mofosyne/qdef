@@ -256,6 +256,37 @@ definite-length CBOR text string. Comparison, if an application layer
 does any, is exact and byte-for-byte over the raw UTF-8 encoding — no
 Unicode normalization, case-folding, or whitespace trimming.
 
+**Embedded Records (`ID[]{}`).** Immediately following the typeID/
+NDEF-ID prefix items and before the field Map, a Record's prefix MAY
+hold exactly one definite-length CBOR array (major type 4): the
+**embedded-Records array**. Its elements MUST parse with the exact same
+Record grammar defined in this section — prefix item(s), then exactly
+one Map, repeated until the array is exhausted — applied recursively to
+the array's own elements rather than to a top-level byte Sequence. An
+element that doesn't conform (a prefix item with no following Map, or
+leftover unconsumed elements) MUST be rejected the same way a malformed
+top-level Sequence would be, not silently reinterpreted.
+
+The array is optional; the field Map remains mandatory and unconditional
+— present, possibly empty, whether or not an embedded-Records array
+precedes it. A Record's terminator is always exactly one Map.
+
+```
+Prefix: 20, [2, {0: h'<group_id>', 2: 0, 4: 3, 6: h'<fragment>', 7: 9}]
+Map:    {0: "image/png", 3: "map.png"}
+```
+
+Each element of the embedded-Records array dispatches independently by
+its own typeID, exactly like a top-level sibling Record — never by
+position or array index.
+
+**Implementer caution for the embedded-Records array:** only a
+definite-length array is recognized. An indefinite-length array at this
+position is not this shape; it falls through to Phase 2's forward-compat
+skip. A decoder MUST NOT recognize an array appearing *after* the field
+Map as a trailing embedded-Records array — that position is already the
+start of the next Record.
+
 ### 3.2 The Extensibility Rule (Even/Odd Keys)
 
 Borrowed from PNG's critical/ancillary chunk convention. Note: this even/odd

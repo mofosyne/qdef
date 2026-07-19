@@ -495,3 +495,129 @@ fn a_malformed_indefinite_string_chunk_sequence_is_rejected_not_silently_walked(
         Some(Error::Cbor(cbor::Error::MalformedIndefiniteString))
     );
 }
+
+// ---------------------------------------------------------------------
+// Embedded Records (§3.1's `ID[]{}` shape): an optional array of Records
+// positioned between a Record's typeID/NDEF-ID prefix items and its
+// mandatory field Map, parsed with the exact same Record grammar as the
+// top-level Sequence (`Records`, reused recursively via
+// `Record::embedded_records`) — not a new grammar. Resolves the TagDrop
+// Media Preview/Payload correlation problem without relying on Record
+// position. See docs/DESIGN.md and docs/FINDINGS.md.
+// ---------------------------------------------------------------------
+
+#[test]
+fn an_embedded_record_round_trips_dispatched_by_its_own_typeid() {
+    let container = Container::parse(EMBEDDED_RECORDS_CONTAINER).expect("valid container");
+    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
+    assert_eq!(records.len(), 1);
+    let outer = &records[0];
+    assert_eq!(outer.type_id(), Some(Key::Uint(20)));
+
+    let embedded: Vec<_> = outer
+        .embedded_records()
+        .expect("embedded-Records array present")
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(embedded.len(), 1);
+    assert_eq!(embedded[0].type_id(), Some(Key::Uint(2)));
+    let payload = find_value(embedded[0].map_bytes, 0).unwrap().unwrap();
+    assert_eq!(read_definite_string(payload).unwrap(), b"fragment");
+}
+
+#[test]
+fn a_record_with_no_embedded_records_array_has_it_absent_zero_cost_when_unused() {
+    let container = Container::parse(WIFI_CONTAINER).expect("valid container");
+    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
+    assert!(records[0].embedded_records().is_none());
+}
+
+#[test]
+fn an_embedded_record_can_itself_carry_an_ndef_id_and_a_namespace_pairing_typeid() {
+    let container = Container::parse(EMBEDDED_RECORDS_WITH_NDEF_ID_AND_NAMESPACE_CONTAINER)
+        .expect("valid container");
+    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
+    let outer = &records[0];
+    assert_eq!(outer.type_id(), Some(Key::Uint(21)));
+
+    let embedded: Vec<_> = outer
+        .embedded_records()
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(embedded.len(), 1);
+    let inner = &embedded[0];
+    assert_eq!(inner.type_id(), Some(Key::Uint(1)));
+    match inner.local_namespace() {
+        Some(Key::ByteString(bytes)) => assert_eq!(bytes, &[0xcd, 0xcd, 0xcd, 0xcd]),
+        other => panic!("expected ByteString local_namespace, got {:?}", other),
+    }
+    assert_eq!(inner.ndef_id(), Some(&b"inner-record-1"[..]));
+}
+
+#[test]
+fn an_array_between_two_sibling_top_level_records_is_not_swallowed_as_a_trailing_embedded_array() {
+    // The rejected `ID{}[]` shape: once a record's map closes, an array
+    // right after it is the start of the NEXT record (namespace-pairing
+    // here), never this record's own embedded-Records array — that slot
+    // only exists BEFORE the map, never after.
+    let container = Container::parse(EMBEDDED_RECORDS_SIBLING_NOT_SWALLOWED_CONTAINER)
+        .expect("valid container");
+    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0].type_id(), Some(Key::Uint(22)));
+    assert!(records[0].embedded_records().is_none());
+    match records[1].local_namespace() {
+        Some(Key::ByteString(bytes)) => assert_eq!(bytes, &[0xcd, 0xcd, 0xcd, 0xcd]),
+        other => panic!("expected ByteString local_namespace, got {:?}", other),
+    }
+}
+
+/// typeId(23) + [] + {} -- an explicitly empty embedded-Records array,
+/// distinct from no array at all. Hand-constructed (not via
+/// gen-rust-fixtures.js): this specific 8-byte record is short enough
+/// that rustfmt collapses its containing const onto one line, which
+/// would put it permanently out of sync with the generator's own raw
+/// multi-line output that CI's rust-fixtures-in-sync job compares
+/// against -- so this one edge case is built directly here instead, same
+/// as the negative-map-key fixtures above.
+const RECORD_WITH_EMPTY_EMBEDDED_ARRAY: &[u8] = &[0x17, 0x80, 0xa0];
+
+#[test]
+fn an_explicitly_empty_embedded_records_array_is_present_but_yields_zero_members() {
+    let records: Vec<_> = records_from_sequence(RECORD_WITH_EMPTY_EMBEDDED_ARRAY)
+        .collect::<Result<_, _>>()
+        .unwrap();
+    let embedded: Vec<_> = records[0]
+        .embedded_records()
+        .expect("array present, even though empty")
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(embedded.len(), 0);
+}
+
+#[test]
+fn an_unrecognized_item_inside_an_embedded_records_array_is_skipped_same_forward_compat_tolerance_as_top_level(
+) {
+    let container =
+        Container::parse(EMBEDDED_RECORDS_STRAY_ITEM_CONTAINER).expect("valid container");
+    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
+    let embedded: Vec<_> = records[0]
+        .embedded_records()
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(embedded.len(), 1);
+    assert_eq!(embedded[0].type_id(), Some(Key::Uint(2)));
+    let payload = find_value(embedded[0].map_bytes, 0).unwrap().unwrap();
+    assert_eq!(read_definite_string(payload).unwrap(), b"payload");
+}
+
+#[test]
+fn the_field_map_stays_mandatory_even_when_an_embedded_records_array_is_present_and_empty() {
+    let records: Vec<_> = records_from_sequence(RECORD_WITH_EMPTY_EMBEDDED_ARRAY)
+        .collect::<Result<_, _>>()
+        .unwrap();
+    // An empty map is still a map: 1 byte (0xa0), present in map_bytes.
+    assert_eq!(records[0].map_bytes, &[0xa0]);
+}

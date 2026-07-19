@@ -765,6 +765,132 @@ existed that neither was checked against, because the prefix-item slot
 it reuses didn't become available until a much later, unrelated
 redesign freed it.
 
+## Embedded Records (§3.1's `ID[]{}` shape) — resolved, replacing a TagDrop proposal that relied on Record position
+
+TagDrop proposed a Media Preview standard record type (identification:
+media type, content hash, filename) as a plain sibling Record, correlated
+with its Body (a Media Payload or a Split fragment) **positionally**:
+"the first Record in the Sequence is always the Preview, the second is
+always the Body."
+
+**Positional correlation doesn't survive two things already true of
+QDEF.** First, §3.2's abort is per-Record, not per-container: an
+unrecognized critical Preview drops out of the Sequence, and the real
+Body — previously "index 1" — is now sitting at "index 0," with no
+coherent way to say what "index 0 means Preview" should do once the
+thing that used to occupy index 0 is gone. Every other QDEF correlation
+mechanism (`group_id`, namespace pairing, NDEF-ID) survives partial loss
+because none of them depend on index. Second, Fallback Hint (§4.2) is
+already a real, shipped plain sibling Record with no position
+requirement — an encoder emitting it before the content Records (a
+reasonable choice) silently breaks "Record 0 is Preview," and TagDrop
+already uses Fallback Hint today, so this isn't hypothetical. Both
+failures are the same shape as FINDINGS.md #26's retired optional
+Type-`0` header: implicit meaning inferred from position, invisible on
+the happy path, discoverable only by tracing a failure.
+
+**The common case needs nothing new.** One content item per container —
+Preview and Body/fragment as ordinary plain siblings, each dispatched by
+its own Type ID, any order — already fixes both problems at zero extra
+bytes, the same way Fallback Hint already coexists with anything else.
+The only case plain sibling dispatch can't resolve is more than one
+content item sharing a container (two files multiplexed into one NFC
+payload, two Split groups sharing a code): nothing then disambiguates
+which Preview belongs to which Body. That's the one place explicit
+grouping is structurally required.
+
+**Resolved as a new optional Phase-1 item, not a new Wrapper Type ID.**
+A definite-length array positioned between the typeID/NDEF-ID prefix
+items and the mandatory field Map, whose elements parse with the *same*
+Record grammar already defined for the top-level Sequence — recursion,
+not a second grammar. This was checked against, and preferred over,
+generalizing Wrapper Records (§4.1) into a "Bundle" holding a nested
+CBOR Sequence inside an opaque byte string: the array form needs no
+Type ID allocation, no byte-string re-parse pass, and stays fully
+legible to a generic CBOR viewer at any nesting depth, where the
+byte-string form is opaque until a QDEF-aware tool re-decodes it.
+
+**Why the field Map stays mandatory, even when an embedded-Records array
+precedes it.** The alternative considered — letting the array itself
+optionally *replace* the Map, terminating the Record with no Map at all
+— was rejected because it makes a Record's terminator shape
+state-dependent: a schema-blind tool wanting only the simplest possible
+rule for finding Record boundaries ("a Record always ends at a Map")
+would need the full Phase-1 state machine to avoid misreading one
+terminator shape as the other. Keeping the Map unconditional preserves
+that invariant at a cost of one byte (`0xA0`) on a Record with nothing
+else to say — the same trade the mandatory container discriminator
+already made once, for the same reason (replacing the optional Type-`0`
+header, FINDINGS.md #26).
+
+**Why this is safe to add: it doesn't collide with anything already
+legal.** `typeID, [array]` with no Map yet was already malformed under
+the pre-existing grammar — a bare typeID has always required its own Map
+before anything else could start — so this claims previously-invalid
+byte patterns, not currently-valid ones.
+
+**Rejected: an array appearing *after* the Map (`ID{}[]`).** Once a
+Record's Map closes, Phase 1 resets and expects the next Record's typeID
+or namespace-pairing array — an array right there is already how a
+namespace-paired Record legitimately starts today. `Map, then array` is
+not an ambiguous pattern needing a tiebreaker; it already has a shipped
+meaning, and a second meaning for the same bytes would either silently
+reinterpret real containers or need its own marker — strictly worse than
+putting the array before the Map instead.
+
+**Rejected: a reserved negative map key signaling "this field is an
+embedded-Records array."** Two variants were considered: one fixed key
+(bakes in one parity, hence one fixed criticality, and collapses
+multiple embedded roles into one undifferentiated bag) and any negative
+key (more flexible, but claims the entire negative-key space for a
+per-Type convenience). Both were dropped in favor of recognizing the
+shape structurally instead — the negative-key space stays reserved for
+genuine mandatory-core, type-independent metadata (FINDINGS.md #33's
+`extract_core_metadata` groundwork), not repurposed as a general
+per-Type "I have embedded content" flag.
+
+**Rejected: reserving key `0` as a Record's own typeID**, i.e. a
+self-contained `{0: typeId, ...}` Record with no separate prefix item at
+all. Every shipped standard record type already uses key `0` as an
+ordinary CRITICAL data field (Split's `group_id`, Compress's deflate
+bytes, Encrypt's nonce, Fallback Hint's URI) — reserving it for typeID
+would break all four, or force each to carry two different
+field-numbering schemes depending on whether it's top-level or embedded.
+
+**Rejected: an anonymous Record with no typeID at all** (`[]{}` or bare
+`{}`). A different kind of cut than the others — it removes the typeID
+itself, not just its framing, taking three load-bearing things with it
+simultaneously: routing (§3.1's dispatch has nothing to look up),
+criticality (even/odd lives entirely on the typeID; an anonymous Record
+can't tell an unaware decoder whether it's safe to skip or must abort),
+and field meaning (a Map's key numbering is Type-owned; with no Type, no
+key means anything to anyone). §3.5 already establishes the applicable
+precedent: an application MAY omit the *namespace* and rely on carrier
+isolation, but the typeID itself stays mandatory even there. An
+application wanting genuinely zero QDEF framing, meaning entirely
+implied by context, already has that option today — carry the bytes as
+their own NDEF record outside any QDEF Sequence entirely, rather than a
+QDEF Record shape that pays QDEF's framing cost with none of its
+benefits.
+
+**Field-embedded Records, kept only as a fallback.** A Type needing more
+than one independently-named embedded slot (both a "payload" and a
+separately-purposed "thumbnail", say) can still host the same
+embedded-Records array shape as an ordinary field's value inside its own
+Map, at a Type-owned key. This isn't a second mechanism — it's the same
+array shape, just hosted at a Type-owned position instead of the
+universal Phase-1 one. Most Types won't need it, since dispatch-by-
+typeID inside the Phase-1 array already covers "more than one embedded
+thing" as long as they don't need separate names.
+
+Prototyped end to end in `prototype/src/core.js` (`parseRecords`,
+`recordToItems`, called recursively) and `rust/qdef-core`
+(`Record::embedded_records`, reusing the `Records` iterator on the
+array's own element bytes at zero extra parsing cost — a definite-length
+CBOR array's payload is byte-for-byte identical in shape to a CBOR
+Sequence of the same items). See `prototype/test/embedded-records.test.js`
+and the embedded-Records tests in `rust/qdef-core/src/tests.rs`.
+
 ## Why not just carry a literal NDEF message as the QR byte-mode payload, instead of a new format?
 
 It's technically possible — nothing stops encoding actual NDEF bytes into

@@ -2112,3 +2112,79 @@ discipline ("verify every claim directly, not by memory of what used to
 be true") caught this one; it's worth treating any DESIGN.md or
 QDEF-SPEC.md sentence naming a specific function as due for exactly
 this kind of periodic re-check, not a one-time fact.
+
+### 41. TagDrop's Media Preview/Payload proposal relied on Record position — tracing the failure paths (not the happy path) found the actual break, resolved as a new Phase-1 array shape instead of a Wrapper Type ID
+
+TagDrop, integrating the spec for real, proposed a Media Preview
+standard record type correlated with its Body (a Media Payload or a
+Split fragment) **positionally**: "the first Record in the Sequence is
+always the Preview, the second is always the Body." Evaluated by tracing
+what actually happens along failure paths already defined elsewhere in
+the spec, not just the happy-path example the proposal itself gave.
+
+**Two concrete breaks, neither hypothetical.** First: §3.2's abort is
+per-Record, not per-container. An unrecognized critical Preview drops
+out of the Sequence and the real Body — previously "index 1" — becomes
+"index 0," with no coherent reading of "index 0 is Preview" once the
+thing that used to hold index 0 is gone. Every other QDEF correlation
+mechanism (`group_id`, namespace pairing, NDEF-ID) survives this because
+none of them depend on index. Second: Fallback Hint (§4.2) is an
+already-shipped plain sibling Record with no position requirement, and
+TagDrop already uses it — an encoder emitting it before the content
+Records (entirely reasonable) silently breaks "Record 0 is Preview."
+Both are the same bug shape as #26's retired optional Type-`0` header:
+correct on the example given, wrong once a failure path already defined
+elsewhere in the spec is actually traced.
+
+**The common case turned out to need no new mechanism at all.** One
+content item per container — Preview and Body/fragment as ordinary
+plain siblings, dispatched by their own Type IDs, any order — already
+fixes both breaks at zero extra bytes. Only multiplexing more than one
+content item into a single container genuinely needs explicit grouping,
+since nothing else then disambiguates which Preview belongs to which
+Body.
+
+**Resolved as `ID[]{}`: a new optional Phase-1 item, not a new Wrapper
+Type ID.** A definite-length array positioned between a Record's
+typeID/NDEF-ID prefix items and its mandatory field Map, parsed
+recursively with the *same* Record grammar already defined for the
+top-level Sequence. Checked directly for safety before adopting: the
+byte pattern `typeID, [array], no Map yet` was already malformed under
+the pre-existing grammar (a bare typeID always required its own Map
+first), so this claims previously-invalid space, not currently-valid
+space — confirmed by both the Node and Rust decoders accepting it with
+no change to existing fixture behavior.
+
+**Considered and rejected, each for a concrete reason, not aesthetics:**
+an array *after* the Map (`ID{}[]`) — collides with the already-legal
+"Map closes, next Record starts namespace-paired" pattern, not just
+ambiguous but already spoken for; letting the array replace the Map
+entirely, no terminator required — makes a Record's terminator
+state-dependent, so a schema-blind tool relying on "a Record always ends
+at a Map" would need the full Phase-1 state machine to avoid
+misreading it; a reserved negative map key signaling the shape — claims
+either one fixed criticality or the entire negative-key space for a
+per-Type convenience, when FINDINGS #33's negative-key groundwork was
+earmarked for genuine mandatory-core metadata instead; reserving key `0`
+as a Record's own typeID — collides with all four shipped standard
+record types, which already use key `0` as an ordinary CRITICAL field;
+an anonymous Record with no typeID at all — removes routing,
+criticality, and field meaning simultaneously, one layer further than
+§3.5 has ever allowed an application to omit (namespace only, never the
+typeID itself).
+
+**Prototyped and cross-validated in both decoders.** Node:
+`parseRecords`/`recordToItems` in `core.js`, called recursively — an
+embedded array is parsed by literally the same function as the
+top-level Sequence, since a definite-length CBOR array's elements and a
+CBOR Sequence's items are byte-for-byte the same shape once decoded.
+Rust: `Record::embedded_records` in `rust/qdef-core` reuses the existing
+`Records` iterator directly on the array's own element-byte range
+(computed via the already-existing `skip_any_item`), at zero additional
+parsing cost — no second buffer, no new iteration mode. 106 Node tests
+and 35 Rust tests pass, including the specific regression this whole
+finding turns on: an array between two sibling top-level Records (one
+namespace-paired) is confirmed to start the next Record, never get
+misread as a trailing embedded-Records array belonging to the first.
+See DESIGN.md's "Embedded Records" entry for the full writeup and
+QDEF-SPEC.md §3.1 for the normative shape.
