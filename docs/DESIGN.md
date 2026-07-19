@@ -389,7 +389,7 @@ map. Found broken on two independent grounds, not one:
    §3.4), and the low numbers QDEF's standard record types picked are already assigned:
   tag `2`/`3` are bignums, tag `4` is a decimal fraction, tag `5` is a
   bigfloat — exactly Types 2 (Split), 3 (Compress), 4 (Encrypt), 5
-  (Fallback Hint). Type `100` (Wi-Fi) collides with RFC 8943's
+  (Open/Hint URI). Type `100` (Wi-Fi) collides with RFC 8943's
   days-since-epoch date; tag `0` additionally makes Type ID `0` unusable.
   Reproduced against a real decoder, not just asserted: `Tagged(2, <byte
   string>)` decodes to a `BigInt`, and wrapping an actual Record Map in
@@ -595,17 +595,17 @@ record types (§4) already cover:
 +------------------------+---------------------------+----------------------------------------------+
 | Text RTD                | Plain text + language tag | Covered -- Media Payload (§4.3), a text/*     |
 |                          |                            | MIME type; no dedicated Text type needed      |
-| URI RTD                 | Compact URI encoding      | Partial -- Fallback Hint (§4.2) covers the    |
-|                          |                            | fallback case; general "URI as primary        |
-|                          |                            | content" falls to Media Payload or an app     |
-|                          |                            | Type. Not an exact duplicate, not a gap       |
-| Smart Poster RTD        | URI + Text + action code  | Closed -- Fallback Hint gained language (key  |
+| URI RTD                 | Compact URI encoding      | Covered -- Open/Hint URI (§4.2) handles both  |
+|                          |                            | roles identically: a lone primary URI record, |
+|                          |                            | or an accompanying fallback alongside other   |
+|                          |                            | Records. No separate "primary URI" type needed|
+| Smart Poster RTD        | URI + Text + action code  | Closed -- Open/Hint URI gained language (key  |
 |                          |                            | 3) and action (key 5) fields, below           |
 | Signature RTD           | Cryptographic signing     | Known gap, already tracked -- QDEF's own Sign |
 |                          |                            | wrapper, decided but unbuilt (see below)      |
 | Device Information RTD  | Device model/identity     | Out of scope -- device pairing, not content   |
 |                          |                            | distribution                                  |
-| Multiple URI RTD        | List of URIs, one record  | Not needed -- repeated Fallback Hint siblings |
+| Multiple URI RTD        | List of URIs, one record  | Not needed -- repeated Open/Hint URI siblings |
 |                          |                            | already generalize this, no new mechanism     |
 | Verb RTD                 | Handover service verbs    | Out of scope -- tied to Connection Handover    |
 | Connection Handover      | Live, bidirectional       | Out of scope entirely -- see below            |
@@ -619,17 +619,17 @@ record types (§4) already cover:
 ```
 
 **Closed: Smart Poster's language tag and action code, both cheap and
-additive.** Fallback Hint gained two new odd/optional fields — `3`
+additive.** Open/Hint URI gained two new odd/optional fields — `3`
 (BCP 47 language tag for the label) and `5` (action code: `0` = perform
 the action, `1` = save for later, `2` = open for editing, borrowed
 directly from Smart Poster's own three values rather than inventing a
 new enum). Both are odd/optional specifically so a decoder that doesn't
 recognize either still gets a fully working URI and label — the
-graceful-degrade guarantee Fallback Hint already made for its original
+graceful-degrade guarantee Open/Hint URI already made for its original
 two fields, now extended rather than compromised. Multiple languages or
 multiple URIs need no new mechanism at all: QDEF already allows any
 number of same-Type sibling Records in one Sequence, so repeating
-Fallback Hint once per language/URI variant reproduces Smart Poster's
+Open/Hint URI once per language/URI variant reproduces Smart Poster's
 multi-title behavior and Multiple URI RTD's list behavior for free.
 
 **Deliberately not adopted: NDEF URI RTD's compact prefix-code trick** (a
@@ -642,9 +642,9 @@ but it would silently change the field's type out from under any
 decoder that already expects a plain URI string there — the same
 graceful-degrade break the remaining option (splitting the URI field
 into a separate prefix-code field plus remainder) causes on purpose: a
-decoder recognizing Fallback Hint's Type but not that specific field
+decoder recognizing Open/Hint URI's Type but not that specific field
 split would see a broken, prefix-less string instead of a working URI.
-That undermines the one property Fallback Hint exists to guarantee —
+That undermines the one property Open/Hint URI exists to guarantee —
 any decoder recognizing the Type gets a complete, usable URI. A few
 bytes saved on an already-short field isn't worth trading that away.
 
@@ -802,11 +802,11 @@ Body — previously "index 1" — is now sitting at "index 0," with no
 coherent way to say what "index 0 means Preview" should do once the
 thing that used to occupy index 0 is gone. Every other QDEF correlation
 mechanism (`group_id`, namespace pairing, NDEF-ID) survives partial loss
-because none of them depend on index. Second, Fallback Hint (§4.2) is
+because none of them depend on index. Second, Open/Hint URI (§4.2) is
 already a real, shipped plain sibling Record with no position
 requirement — an encoder emitting it before the content Records (a
 reasonable choice) silently breaks "Record 0 is Preview," and TagDrop
-already uses Fallback Hint today, so this isn't hypothetical. Both
+already uses Open/Hint URI today, so this isn't hypothetical. Both
 failures are the same shape as FINDINGS.md #26's retired optional
 Type-`0` header: implicit meaning inferred from position, invisible on
 the happy path, discoverable only by tracing a failure.
@@ -814,7 +814,7 @@ the happy path, discoverable only by tracing a failure.
 **The common case needs nothing new.** One content item per container —
 Preview and Body/fragment as ordinary plain siblings, each dispatched by
 its own Type ID, any order — already fixes both problems at zero extra
-bytes, the same way Fallback Hint already coexists with anything else.
+bytes, the same way Open/Hint URI already coexists with anything else.
 The only case plain sibling dispatch can't resolve is more than one
 content item sharing a container (two files multiplexed into one NFC
 payload, two Split groups sharing a code): nothing then disambiguates
@@ -875,7 +875,7 @@ per-Type "I have embedded content" flag.
 self-contained `{0: typeId, ...}` Record with no separate prefix item at
 all. Every shipped standard record type already uses key `0` as an
 ordinary CRITICAL data field (Split's `group_id`, Compress's deflate
-bytes, Encrypt's nonce, Fallback Hint's URI) — reserving it for typeID
+bytes, Encrypt's nonce, Open/Hint URI's URI) — reserving it for typeID
 would break all four, or force each to carry two different
 field-numbering schemes depending on whether it's top-level or embedded.
 
@@ -1054,7 +1054,7 @@ parallel one.
 **Scope of this change, stated plainly:** unlike `ID[]{}` (purely
 additive, nothing existing changed shape), this changes the wire shape
 of every existing standard record type — Wi-Fi, Split, Compress,
-Encrypt, Fallback Hint, Media Payload, App Route — in both prototype
+Encrypt, Open/Hint URI, Media Payload, App Route — in both prototype
 languages, requiring a full re-implementation rather than an add-on.
 Undertaken deliberately, with explicit confirmation, given this document
 predates any real-world release.
@@ -1301,7 +1301,7 @@ it first looks like, and that is the finding:
   parallel. It cannot achieve "sign a Wi-Fi record and keep it readable" —
   being readable and being a wrapper payload are mutually exclusive.
 - **Sign-as-sibling (detached form).** The signature is a *separate*
-  Record (like the Fallback Hint spec §4.2 is a sibling, not a wrapper),
+  Record (like the Open/Hint URI spec §4.2 is a sibling, not a wrapper),
   carrying a reference to which Record(s) it covers plus the signature
   bytes. The signed Records stay plain and readable; an unaware parser
   reads them normally and skips the unrecognized signature Record by Type

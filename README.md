@@ -33,7 +33,7 @@ unrelated Records, each independently routable, in one 74-byte payload
       04   02                            #     key 4: 2 (WPA2)
 
 82                                        # Record 2: array(2)
-   0a                                    #   typeID: 10 (Fallback Hint,
+   0a                                    #   typeID: 10 (Open/Hint URI,
                                           #     standard record type)
    a1                                    #   field map(1)
       00   78 1f 68 74 74 70 73 3a 2f 2f 65 78 61 6d 70
@@ -64,7 +64,7 @@ already solves for NFC (see the FAQ below). Full grammar in
 
 **Draft, not yet implemented as a reference library — but the design is
 validated, not just written.** The core wire format and the full standard
-library (Split, Compress, Encrypt, Fallback Hint, Media Payload) are all
+library (Split, Compress, Encrypt, Open/Hint URI, Media Payload) are all
 round-trip tested, across two independent throwaway prototypes:
 
 - [`/prototype`](prototype) (Node) — real code encoding and decoding real
@@ -103,9 +103,9 @@ QDEF is:
 - **Layered**, on purpose: a minimal mandatory *core* (routing and
   criticality only) plus a separate, optional *standard library*
   (splitting a payload across multiple codes, compression, encryption, a
-  generic fallback hint) — the same relationship C-the-language has with
-  libc. A minimal implementer never needs a compression or reassembly
-  library just to route Records.
+  URI to open or fall back to) — the same relationship C-the-language
+  has with libc. A minimal implementer never needs a compression or
+  reassembly library just to route Records.
 - **Usable by a deeply constrained scanner.** Every Record's type is
   readable at zero decode cost from a plain map key — no CBOR tag support
   needed, no semantic-tag-aware library at all. QDEF doesn't use CBOR tags

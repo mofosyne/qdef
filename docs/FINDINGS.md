@@ -1188,7 +1188,7 @@ Costs:
 - **Breaking wire format change.** All existing fixtures must be
   regenerated. Containers using old odd-numbered types (3, 5, 7, 105)
   without a Type 0 header will be rejected.
-- **Standard record type renumbering.** Types 3→8 (Compress), 5→10 (Fallback Hint),
+- **Standard record type renumbering.** Types 3→8 (Compress), 5→10 (Open/Hint URI),
   7→12 (App Route), 105→106 (Event Ticket) to ensure all standard record
   type IDs are even.
 - **Prefix-typeID routing.** Parsers must now read the prefix typeID
@@ -1523,7 +1523,7 @@ mistake risk, not just an inconvenience.** A typo here (the wrong number
 for a standard Type) collides silently with whatever real ID that number
 belongs to, rather than failing loudly the way an unrecognized ID would.
 Added a compact, scannable table gathering all six assigned IDs (Split
-`2`, Encrypt `4`, Media Payload `6`, Compress `8`, Fallback Hint `10`,
+`2`, Encrypt `4`, Media Payload `6`, Compress `8`, Open/Hint URI `10`,
 App Route `12`) in one place at the top of §4, cross-referencing each
 one's full definition rather than duplicating it.
 
@@ -1540,16 +1540,16 @@ published RTD list one by one. Did that directly against the actual
 specifications rather than from memory.
 
 **One real, cheap gap: Smart Poster's language tag and action code.**
-Fallback Hint (§4.2) had a URI and a label, but nowhere to put a BCP 47
+Open/Hint URI (§4.2) had a URI and a label, but nowhere to put a BCP 47
 language tag or Smart Poster's action code (perform/save/open). Closed
 it with two new odd/optional fields (keys `3` and `5`) — cheap
 specifically because both are optional: a decoder that doesn't recognize
 either still gets a fully working URI and label, the exact same
-graceful-degrade guarantee Fallback Hint already made for its original
+graceful-degrade guarantee Open/Hint URI already made for its original
 two fields. Multiple languages or multiple URIs (Smart Poster's
 multi-title behavior, Multiple URI RTD) needed no new mechanism at all —
 QDEF already permits repeated same-Type sibling Records, so repeating
-Fallback Hint once per variant already reproduces both behaviors for
+Open/Hint URI once per variant already reproduces both behaviors for
 free.
 
 **One real efficiency trick checked and correctly declined, not just
@@ -1565,9 +1565,9 @@ expecting a plain URI string there) or a CBOR tag standing in for the
 code (reopening the tag-number-collision risk already rejected once for
 container routing, Finding #11). Splitting the URI field into a
 separate code-plus-remainder pair would work structurally, but at a real
-cost: a decoder recognizing Fallback Hint's Type but not that specific
+cost: a decoder recognizing Open/Hint URI's Type but not that specific
 split would see a broken, prefix-less string instead of a working URI —
-undermining the one guarantee Fallback Hint exists to make. Declined,
+undermining the one guarantee Open/Hint URI exists to make. Declined,
 for a stated, checked reason, not because efficiency doesn't matter here
 (it clearly does everywhere else in this project) — this was the "not
 worth the complexity" escape hatch actually exercised, not left
@@ -1587,7 +1587,7 @@ waiting for a real adopter) — NDEF conversion is a new argument for
 prioritizing it sooner, not new scope. AAR was already covered by App
 Route.
 
-Prototyped in `prototype/test/fallback-hint.test.js`: the pre-existing
+Prototyped in `prototype/test/open-hint-uri.test.js`: the pre-existing
 bare-URI-plus-label shape round-trips unaffected, the new language/action
 fields round-trip together, an unaware decoder still gets a complete
 working URI and label with both new keys silently ignored, and repeated
@@ -2148,7 +2148,7 @@ out of the Sequence and the real Body — previously "index 1" — becomes
 "index 0," with no coherent reading of "index 0 is Preview" once the
 thing that used to hold index 0 is gone. Every other QDEF correlation
 mechanism (`group_id`, namespace pairing, NDEF-ID) survives this because
-none of them depend on index. Second: Fallback Hint (§4.2) is an
+none of them depend on index. Second: Open/Hint URI (§4.2) is an
 already-shipped plain sibling Record with no position requirement, and
 TagDrop already uses it — an encoder emitting it before the content
 Records (entirely reasonable) silently breaks "Record 0 is Preview."
@@ -2303,7 +2303,7 @@ the same tree.
 **Full re-implementation, not an add-on — scope acknowledged before
 starting, not discovered partway through.** Unlike `ID[]{}` (purely
 additive), this changed the wire shape of every existing standard
-record type (Wi-Fi, Split, Compress, Encrypt, Fallback Hint, Media
+record type (Wi-Fi, Split, Compress, Encrypt, Open/Hint URI, Media
 Payload, App Route) in both prototype languages. 8 of 15 Node test
 files needed fixes (hand-constructed byte sequences using the old flat
 grammar, or exact byte-cost assertions), `embedded-records.test.js` was
@@ -2380,3 +2380,43 @@ tool there. Implemented as `wrappers.js`'s `contentHashPrefix` and a
 `MULTIHASH_SHA2_256` constant; `media-preview.test.js` gained a
 dedicated test proving the 1-byte-function-code-plus-digest shape and
 the one-byte conversion to canonical multihash. 109 Node tests pass.
+
+### 45. "Fallback Hint" renamed to "Open/Hint URI" — the name undersold half of what the Type actually does
+
+Surfaced while writing the README's wire-format preview: the simplest
+possible QDEF payload — one QR code, one URL, nothing else — uses
+exactly the same Record, byte-for-byte, as the "something useful
+happens even without the specific app" companion role the old name was
+named after. A developer scanning the Type list for "how do I just put
+a URL in a QR code" had no reason to expect "Fallback Hint" to be the
+answer — the name only described the secondary role, not the primary
+one, even though nothing about the wire format distinguishes the two
+uses at all.
+
+Considered and rejected: two separate Types (one "primary," one
+"fallback") for the identical field layout. No real difference exists
+between the two uses — same critical URI key, same optional
+label/language/action fields — so two Type IDs would mean two numbers
+to recognize for identical bytes, with no decoder-enforceable
+distinction behind the split; a producer could pick either one for
+either role with nothing to catch the mismatch. That's the same naming
+ambiguity moved one level over, not resolved, for the cost of doubled
+docs, tests, and implementation surface — cutting against the same
+"don't duplicate near-identical mechanisms" discipline that kept Media
+Payload and Media Preview as two Types only because their *fields*
+genuinely differ (§4.5).
+
+Renamed to **Open/Hint URI** instead — a pure documentation/identifier
+change, zero wire-format impact (still Type `10`, same field keys).
+Swept `QDEF-SPEC.md` §4.2 (including the Type-ID table, now also noting
+the primary-content role explicitly), `README.md`, `DESIGN.md`
+(including fixing one now-stale verdict: the NDEF URI RTD comparison
+table previously called this coverage "Partial," restricted to the
+fallback case, with primary URI content wrongly assigned to Media
+Payload -- corrected to "Covered," both roles, once the name itself no
+longer hid that they were always the same mechanism), `ROADMAP.md`,
+`prototype/README.md`, and `prototype/src/wrappers.js`'s
+`FALLBACK_HINT_TYPE`/`FALLBACK_HINT_KNOWN_KEYS` constants (now
+`OPEN_HINT_URI_TYPE`/`OPEN_HINT_URI_KNOWN_KEYS`) plus the renamed test
+file (`open-hint-uri.test.js`). 109 Node tests still pass, unchanged in
+count — confirms the wire format truly didn't move.
