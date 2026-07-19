@@ -25,7 +25,7 @@ found.
 - `src/wrappers.js` — the optional standard library's Wrapper Records:
   Split (with XOR single-fragment parity), Compress, Encrypt, plus a
   generic recursive `resolveStack` resolver (spec §4.1). Also carries the
-  non-wrapper standard record types' constants: Fallback Hint (§4.2), Media
+  non-wrapper standard record types' constants: Open/Hint URI (§4.2), Media
   Payload (§4.3), and App Route (§4.4), plus the COSE (RFC 9053/9054) and
   CoAP Content-Format (RFC 7252/9876) IDs the latter two borrow rather
   than invent.
@@ -76,7 +76,7 @@ found.
   byte-identical output, so a content hash like `group_id` means "same
   logical content" across independent encoders, not just "same encoder,
   same run."
-- `test/fallback-hint.test.js` — Fallback Hint (Type 10, spec §4.2):
+- `test/open-hint-uri.test.js` — Open/Hint URI (Type 10, spec §4.2):
   language/action fields, and graceful degrade for a decoder that
   doesn't recognize them.
 - `test/media-payload.test.js` — Media Payload's (Type 6, spec §4.3)

@@ -6,8 +6,10 @@ const core = require('../src/core');
 const wrappers = require('../src/wrappers');
 
 // ---------------------------------------------------------------------
-// §4.2's Fallback Hint (Type 10): a plain sibling standard record type,
-// not a wrapper. Keys 3 (language) and 5 (action) exist for lossless
+// §4.2's Open/Hint URI (Type 10): a plain sibling standard record type,
+// not a wrapper -- a URI to open (a QR code's whole content) or a
+// fallback hint alongside other Records, identical bytes either way.
+// Keys 3 (language) and 5 (action) exist for lossless
 // conversion to and from NDEF's Smart Poster RTD (spec §4.2, DESIGN.md's
 // "Relationship to existing standards") -- both odd/optional, so a
 // decoder that doesn't recognize either still gets a fully working URI
@@ -17,13 +19,13 @@ const wrappers = require('../src/wrappers');
 test('a bare URI + label (no language, no action) round-trips -- the pre-existing minimal shape is unaffected', () => {
   const container = core.encodeContainer([
     {
-      typeId: wrappers.FALLBACK_HINT_TYPE,
+      typeId: wrappers.OPEN_HINT_URI_TYPE,
       fields: new Map([[0, 'https://example.com/open-this'], [1, 'Open in MyApp']]),
     },
   ]);
 
   const { records } = core.decodeContainer(container);
-  const rec = core.applyCriticality(records[0], wrappers.FALLBACK_HINT_KNOWN_KEYS);
+  const rec = core.applyCriticality(records[0], wrappers.OPEN_HINT_URI_KNOWN_KEYS);
 
   assert.equal(rec.aborted, false);
   assert.equal(rec.map.get(0), 'https://example.com/open-this');
@@ -35,7 +37,7 @@ test('a bare URI + label (no language, no action) round-trips -- the pre-existin
 test('language (key 3) and action (key 5) round-trip -- the Smart Poster equivalent shape', () => {
   const container = core.encodeContainer([
     {
-      typeId: wrappers.FALLBACK_HINT_TYPE,
+      typeId: wrappers.OPEN_HINT_URI_TYPE,
       fields: new Map([
         [0, 'https://example.com/open-this'],
         [1, 'Open in MyApp'],
@@ -46,7 +48,7 @@ test('language (key 3) and action (key 5) round-trip -- the Smart Poster equival
   ]);
 
   const { records } = core.decodeContainer(container);
-  const rec = core.applyCriticality(records[0], wrappers.FALLBACK_HINT_KNOWN_KEYS);
+  const rec = core.applyCriticality(records[0], wrappers.OPEN_HINT_URI_KNOWN_KEYS);
 
   assert.equal(rec.aborted, false);
   assert.equal(rec.map.get(3), 'en');
@@ -56,7 +58,7 @@ test('language (key 3) and action (key 5) round-trip -- the Smart Poster equival
 test('a decoder unaware of language/action still gets a complete, working URI and label -- the graceful-degrade guarantee both new keys were designed to preserve', () => {
   const container = core.encodeContainer([
     {
-      typeId: wrappers.FALLBACK_HINT_TYPE,
+      typeId: wrappers.OPEN_HINT_URI_TYPE,
       fields: new Map([
         [0, 'https://example.com/open-this'],
         [1, 'Open in MyApp'],
@@ -77,22 +79,22 @@ test('a decoder unaware of language/action still gets a complete, working URI an
   assert.equal(rec.map.get(1), 'Open in MyApp');
 });
 
-test('multiple languages/URIs need no new mechanism -- repeated Fallback Hint siblings, one per variant, reproduce Smart Poster multi-title and Multiple URI RTD behavior', () => {
+test('multiple languages/URIs need no new mechanism -- repeated Open/Hint URI siblings, one per variant, reproduce Smart Poster multi-title and Multiple URI RTD behavior', () => {
   const container = core.encodeContainer([
     {
-      typeId: wrappers.FALLBACK_HINT_TYPE,
+      typeId: wrappers.OPEN_HINT_URI_TYPE,
       fields: new Map([[0, 'https://example.com/open-this'], [1, 'Open in MyApp'], [3, 'en']]),
     },
     {
-      typeId: wrappers.FALLBACK_HINT_TYPE,
+      typeId: wrappers.OPEN_HINT_URI_TYPE,
       fields: new Map([[0, 'https://example.com/open-this'], [1, 'Ouvrir dans MyApp'], [3, 'fr']]),
     },
   ]);
 
   const { records } = core.decodeContainer(container);
   const hints = records
-    .filter((r) => r.typeId === wrappers.FALLBACK_HINT_TYPE)
-    .map((r) => core.applyCriticality(r, wrappers.FALLBACK_HINT_KNOWN_KEYS));
+    .filter((r) => r.typeId === wrappers.OPEN_HINT_URI_TYPE)
+    .map((r) => core.applyCriticality(r, wrappers.OPEN_HINT_URI_KNOWN_KEYS));
 
   assert.equal(hints.length, 2);
   const byLang = new Map(hints.map((h) => [h.map.get(3), h.map.get(1)]));
