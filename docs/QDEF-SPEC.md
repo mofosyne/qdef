@@ -1004,10 +1004,12 @@ Type 14: {                         // Media Preview (standard record type)
   0: "image/png",                  // CRITICAL: IANA media type (RFC 6838),
                                     //   or a CoAP Content-Format uint —
                                     //   same shape rule as §4.3's key 0
-  1: h'<content hash prefix>',     // OPTIONAL: a truncated content hash
-                                    //   (§3.5's derivation algorithm),
-                                    //   identifying the content
-                                    //   independent of any label
+  1: h'<content hash prefix>',     // OPTIONAL: a truncated SHA-256 of the
+                                    //   content bytes themselves (not
+                                    //   §3.5's name-string derivation --
+                                    //   same truncation convention,
+                                    //   different input), identifying the
+                                    //   content independent of any label
   3: "photo.png",                  // OPTIONAL: filename or slug
   5: "Trail photo"                 // OPTIONAL: human-readable label
 }
