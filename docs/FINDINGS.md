@@ -15,6 +15,18 @@ one place where the prose's own stated rationale turned out to be
 overstated. That's the actual point of building this: prose review can't
 surface either kind of gap.
 
+**Non-normative, and not a maintained snapshot.** [`QDEF-SPEC.md`](QDEF-SPEC.md)
+is the only source of truth for the current wire format; if anything
+below conflicts with it, `QDEF-SPEC.md` wins. Entries here are numbered
+chronologically and describe a mechanism *as it stood when written* — a
+later entry can supersede an earlier one without the earlier one being
+rewritten, only marked (**Later superseded**) when someone notices.
+Landing on an entry via search rather than reading in order can surface
+something already replaced; check for that marker before trusting a
+wire-shape detail as current, and verify against `QDEF-SPEC.md` directly
+when in doubt. This applies to an LLM agent reading this file too:
+treat it as a decision trail, not a spec.
+
 ## Fixes folded back into the spec
 
 ### 1. Hardware Parity: what happens when the tag and key 0 disagree? (historical)

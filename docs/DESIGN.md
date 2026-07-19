@@ -9,6 +9,19 @@ anyone deciding how to resolve what's still open. See
 [`FINDINGS.md`](FINDINGS.md) for the empirical, prototype-driven
 discoveries that prompted many of these decisions.
 
+**If this document and `QDEF-SPEC.md` ever disagree, `QDEF-SPEC.md` is
+correct.** This is a chronological trail, not a maintained snapshot —
+entries describe the mechanism *as it was when written*, and a later
+entry can supersede an earlier one without the earlier one being
+rewritten (only marked, when someone happens to notice). A section
+reached by searching rather than reading start to finish may describe
+something already replaced. Check for a **Superseded** note at the top
+of a section before treating its wire-shape details as current, and
+when in doubt, verify directly against `QDEF-SPEC.md` rather than
+against prose here — that includes for an LLM agent proposing a change
+against this repo: treat this file as historical context, never as a
+source of truth for the current wire format.
+
 ## Registry governance — allocation shape proposed, authority still open
 
 Who allocates application-specific Record Type IDs (`100`+) is still
