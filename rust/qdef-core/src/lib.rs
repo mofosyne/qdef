@@ -4,18 +4,41 @@
 //! Type, no compression, no reassembly — those live in a separate
 //! standard-record-type layer, not here, by design.
 //!
-//! Every Record is a sequence of CBOR items terminating in a CBOR Map:
-//! exactly one typeID-bearing item — a bare uint, or a namespace-pairing
-//! array — optionally followed by exactly one bare text string (an
-//! NDEF-ID-equivalent external reference, §3.1), optionally followed by
-//! exactly one array of embedded Records (§3.1's `ID[]{}` shape — see
-//! `Record::embedded_records`), followed by zero or more unknown items
-//! (forward-compat padding), then the field Map as the record delimiter
-//! — always present, even when empty, so a Record's terminator is
-//! unconditionally a map regardless of whether an embedded-Records array
-//! preceded it. There is no backup-typeID accumulation: at most one
-//! typeID-bearing item per Record (see docs/FINDINGS.md for why
-//! decentralized Type IDs and backup typeIDs were both dropped).
+//! Every Record is exactly one definite-length CBOR array, self-bounded
+//! by its own array header — a decoder never needs Record-grammar
+//! knowledge to skip past a Record it doesn't care about, only to skip
+//! one generic CBOR array (see docs/DESIGN.md for why this replaced the
+//! earlier flat, unwrapped Record shape). Its elements, in order:
+//! `[namespace?, typeId, ndefId?, map, subrecord*]`
+//! - namespace (optional): a byte string, present only when the array's
+//!   first element is a byte string immediately followed by a valid
+//!   typeId. Scopes this Record's own typeId, overriding any container-
+//!   level ambient namespace for this one Record only (§3.5).
+//! - typeId (mandatory): a bare uint. No other shape is recognized and
+//!   there is no backup-typeId accumulation — at most one typeId per
+//!   Record (see docs/FINDINGS.md for why decentralized Type IDs, Named
+//!   Type IDs, and backup typeIDs were all retired).
+//! - ndefId (optional): a bare CBOR text string immediately following
+//!   typeId — a stable, type-independent external reference mirroring
+//!   NDEF's own ID field (§3.1).
+//! - map (mandatory): the field Map, always present even when empty, so
+//!   a Record's own item count past `[namespace?, typeId, ndefId?]` is
+//!   never ambiguous with anything else.
+//! - subrecord* (zero or more): every remaining array element after the
+//!   map is itself a nested Record, recursively the same shape (§3.1's
+//!   `ID[]{}` shape generalized — see docs/DESIGN.md and
+//!   `Record::subrecords`). No separate wrapper array is needed for
+//!   these: the outer Record's own array is already self-bounded, so
+//!   "everything after the map" is unambiguous without an extra length
+//!   prefix.
+//!
+//! A malformed *inner* Record (one whose own array contents don't parse
+//! as valid Record grammar) never corrupts a sibling Record's
+//! discoverability: `Records::next` always determines a Record's total
+//! byte span generically, via `cbor::skip_any_item` on its whole array,
+//! *before* attempting to interpret its contents — so the Sequence walker
+//! can always advance to the next sibling regardless of whether this one
+//! Record's own interpretation succeeds.
 //!
 //! No version byte: the container is magic, a mandatory discriminator
 //! item, then a CBOR Sequence of Records. Container-level metadata (a
@@ -117,21 +140,50 @@ impl<'a> Iterator for Records<'a> {
     type Item = Result<Record<'a>, Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.done || self.remaining.is_empty() {
-            return None;
-        }
-        match parse_record(self.remaining) {
-            Ok((record, consumed)) => {
-                self.remaining = &self.remaining[consumed..];
-                Some(Ok(record))
+        loop {
+            if self.done || self.remaining.is_empty() {
+                return None;
             }
-            Err(e) => {
-                // A malformed CBOR item means we can no longer determine
-                // where it ends, so we can't safely resume the Sequence —
-                // unlike a well-formed Record with no typeID (ignored),
-                // which skips only itself.
-                self.done = true;
-                Some(Err(e))
+            let head = match cbor::read_head(self.remaining) {
+                Ok(h) => h,
+                Err(e) => {
+                    self.done = true;
+                    return Some(Err(Error::Cbor(e)));
+                }
+            };
+            if head.major == 4 && !head.is_indefinite() {
+                // A definite-length array is a Record. Determine its
+                // total byte span *generically* first (skip_any_item only
+                // needs the bytes to be well-formed CBOR, not valid
+                // Record grammar) -- this Sequence can always find the
+                // next sibling afterward, regardless of whether this
+                // Record's own contents happen to parse as valid Record
+                // grammar.
+                let total_len = match cbor::skip_any_item(self.remaining) {
+                    Ok(len) => len,
+                    Err(e) => {
+                        self.done = true;
+                        return Some(Err(Error::Cbor(e)));
+                    }
+                };
+                let record_bytes = &self.remaining[..total_len];
+                self.remaining = &self.remaining[total_len..];
+                return Some(parse_record_array(record_bytes));
+            } else {
+                // Not a Record array -- not a Record at all, skip it
+                // generically (forward-compat tolerance, the same
+                // principle Phase 2 already applies inside a Record) and
+                // keep scanning for the next array.
+                match cbor::skip_any_item(self.remaining) {
+                    Ok(len) => {
+                        self.remaining = &self.remaining[len..];
+                        continue;
+                    }
+                    Err(e) => {
+                        self.done = true;
+                        return Some(Err(Error::Cbor(e)));
+                    }
+                }
             }
         }
     }
@@ -155,16 +207,14 @@ pub struct Record<'a> {
     /// the shape (a bare text string immediately following the typeID
     /// item), never what the string means.
     ndef_id: Option<&'a [u8]>,
-    /// The element bytes (excluding the array's own head) of this
-    /// Record's embedded-Records array (§3.1's `ID[]{}` shape), if
-    /// present. `None` means no such array was present at all; `Some` of
-    /// an empty slice means the array was present but had zero members.
-    /// A definite-length CBOR array's element bytes are byte-for-byte
-    /// identical in shape to a CBOR Sequence of the same items, so these
-    /// bytes feed straight into the same `Records` iterator used for the
-    /// top-level Sequence — recursion at zero extra parsing cost, see
-    /// `embedded_records()`.
-    embedded_bytes: Option<&'a [u8]>,
+    /// The raw bytes of every array element following this Record's own
+    /// field Map -- its subrecords (§3.1's generalized `ID[]{}` shape),
+    /// if any. `None` means no elements followed the map at all. Each
+    /// subrecord is itself a complete, self-bounded Record array, so
+    /// these bytes feed straight into the same `Records` iterator used
+    /// for the top-level Sequence — recursion at zero extra parsing
+    /// cost, see `subrecords()`.
+    sub_bytes: Option<&'a [u8]>,
     /// True if no typeID was found before the map — the record is
     /// unroutable and should be ignored by dispatch logic.
     pub ignored: bool,
@@ -195,112 +245,107 @@ impl<'a> Record<'a> {
         self.ndef_id
     }
 
-    /// This Record's embedded-Records array (§3.1's `ID[]{}` shape), if
-    /// present — an iterator over the array's own elements, parsed with
-    /// the exact same Record grammar as the top-level Sequence (the same
-    /// `Records` iterator, reused recursively, not a new grammar). `None`
-    /// if this Record had no embedded-Records array at all; `Some` of an
-    /// iterator yielding zero items if the array was present but empty.
-    pub fn embedded_records(&self) -> Option<Records<'a>> {
-        self.embedded_bytes.map(|b| Records {
+    /// This Record's own subrecords (§3.1's generalized `ID[]{}` shape),
+    /// if any -- an iterator over the array elements following this
+    /// Record's field Map, parsed with the exact same Record grammar as
+    /// the top-level Sequence (the same `Records` iterator, reused
+    /// recursively, not a new grammar). `None` if no elements followed
+    /// the map at all.
+    pub fn subrecords(&self) -> Option<Records<'a>> {
+        self.sub_bytes.map(|b| Records {
             remaining: b,
             done: false,
         })
     }
 }
 
-fn parse_record(buf: &[u8]) -> Result<(Record<'_>, usize), Error> {
-    let mut pos = 0usize;
+/// Parses a single Record from its own, already-length-bounded CBOR
+/// array (`buf` is exactly one Record's worth of bytes -- its own array
+/// header plus every one of its declared elements, no more, no less;
+/// see `Records::next`, which determines this bound generically via
+/// `cbor::skip_any_item` before calling this function):
+///   `[namespace?, typeId, ndefId?, map, subrecord*]`
+///
+/// - namespace: recognized only when the array's first element is a
+///   byte string AND the element immediately after it is a valid
+///   typeId -- otherwise this Record has no typeId at all (`ignored`),
+///   the same "malformed prefix means unroutable, not a crash"
+///   tolerance as before.
+/// - typeId: a bare uint (major type 0). No other shape is recognized.
+/// - ndefId: a bare text string immediately following typeId, if
+///   present.
+/// - Unrecognized items between ndefId and the map are skipped
+///   (forward-compat padding), same as always.
+/// - map: the first map-shaped element reached. Everything from here to
+///   the end of this Record's own array, past the map, is subrecords --
+///   no separate wrapper array is needed to bound them, since this
+///   Record's own array (already exactly bounded by the caller) already
+///   is one.
+fn parse_record_array(buf: &[u8]) -> Result<Record<'_>, Error> {
+    let head = cbor::read_head(buf).map_err(Error::Cbor)?;
+    let mut remaining_items = head.arg;
+    let mut pos = head.head_len;
+
     let mut type_id: Option<cbor::Key<'_>> = None;
     let mut local_namespace: Option<cbor::Key<'_>> = None;
     let mut ndef_id: Option<&[u8]> = None;
-    let mut embedded_bytes: Option<&[u8]> = None;
 
-    // Phase 1: recognize this Record's single typeID-bearing item -- a
-    // bare uint, or a namespace-pairing array -- then its optional
-    // NDEF-ID text string.
-    if pos < buf.len() {
-        let head = cbor::read_head(&buf[pos..]).map_err(Error::Cbor)?;
-        if head.major == 0 {
-            // Bare uint typeID -- the only valid bare typeID shape now
-            // (byte string and text string Type IDs were both retired,
-            // see docs/FINDINGS.md).
-            let (key, len) = cbor::read_key(&buf[pos..]).map_err(Error::Cbor)?;
-            type_id = Some(key);
-            pos += len;
-        } else if head.major == 4 && !head.is_indefinite() && head.arg == 2 {
-            // Candidate namespace-pairing item: [namespace, typeId].
-            // Purely structural recognition — this crate never learns
-            // what a namespace means, only that this specific 2-element
-            // shape yields one typeId candidate plus an opaque side
-            // value. If the two elements don't match the expected
-            // shape, this isn't a pairing after all; Phase 2 skips the
-            // whole array generically, same as any other unrecognized
-            // item.
-            let elems_start = pos + head.head_len;
-            if let Some((ns, id, elems_len)) =
-                parse_namespace_pairing(&buf[elems_start..]).map_err(Error::Cbor)?
-            {
-                local_namespace = Some(ns);
-                type_id = Some(cbor::Key::Uint(id));
-                pos = elems_start + elems_len;
+    // [namespace?] typeId
+    if remaining_items > 0 {
+        let item_head = cbor::read_head(&buf[pos..]).map_err(Error::Cbor)?;
+        if item_head.major == 2 && remaining_items > 1 {
+            // Candidate namespace: a byte string. Only commit if the
+            // element right after it is a valid typeId -- otherwise this
+            // isn't a namespace-prefixed Record after all, and pos/
+            // remaining_items are left untouched so Phase 2 below treats
+            // the byte string as an ordinary unrecognized item.
+            let (ns_key, ns_len) = cbor::read_key(&buf[pos..]).map_err(Error::Cbor)?;
+            let next_pos = pos + ns_len;
+            let next_head = cbor::read_head(&buf[next_pos..]).map_err(Error::Cbor)?;
+            if next_head.major == 0 {
+                let (id_key, id_len) = cbor::read_key(&buf[next_pos..]).map_err(Error::Cbor)?;
+                local_namespace = Some(ns_key);
+                type_id = Some(id_key);
+                pos = next_pos + id_len;
+                remaining_items -= 2;
             }
+        } else if item_head.major == 0 {
+            let (id_key, id_len) = cbor::read_key(&buf[pos..]).map_err(Error::Cbor)?;
+            type_id = Some(id_key);
+            pos += id_len;
+            remaining_items -= 1;
         }
     }
 
     // The NDEF-ID text string only follows a *recognized* typeID item --
     // a bare text string with no preceding typeID is not this Record's
     // NDEF-ID, it's an unrouted Record's first unrecognized item (Phase
-    // 2 skips it as forward-compat padding, same as before).
-    if type_id.is_some() && pos < buf.len() {
-        let head = cbor::read_head(&buf[pos..]).map_err(Error::Cbor)?;
-        if head.major == 3 && !head.is_indefinite() {
+    // 2 below skips it as forward-compat padding, same as always).
+    if type_id.is_some() && remaining_items > 0 {
+        let item_head = cbor::read_head(&buf[pos..]).map_err(Error::Cbor)?;
+        if item_head.major == 3 && !item_head.is_indefinite() {
             let (payload, len) = cbor::read_definite_string(&buf[pos..]).map_err(Error::Cbor)?;
             ndef_id = Some(payload);
             pos += len;
-        }
-    }
-
-    // Optional embedded-Records array (§3.1's `ID[]{}` shape): an array
-    // appearing here, after the typeID/NDEF-ID slot and before the
-    // mandatory map, is always the embedded-Records array -- never
-    // ambiguous with namespace-pairing (only recognized in the typeID
-    // slot, above) or with the *next* Record starting (a bare typeID
-    // with no map yet was already malformed before this shape existed,
-    // so this claims previously-invalid byte patterns, not currently-
-    // valid ones; see docs/DESIGN.md). Only a definite-length array is
-    // recognized -- canonical encoding (§3.4) is a MUST for encoders, so
-    // an indefinite-length array here is simply not this shape and falls
-    // through to Phase 2's generic skip, same as any other unrecognized
-    // item. `skip_any_item` gives the array's total length (head +
-    // recursively-validated payload) in one call; the element bytes
-    // (everything after the head) feed straight into the same `Records`
-    // iterator on demand -- see `Record::embedded_records`.
-    if type_id.is_some() && pos < buf.len() {
-        let head = cbor::read_head(&buf[pos..]).map_err(Error::Cbor)?;
-        if head.major == 4 && !head.is_indefinite() {
-            let elems_start = pos + head.head_len;
-            let total_len = cbor::skip_any_item(&buf[pos..]).map_err(Error::Cbor)?;
-            embedded_bytes = Some(&buf[elems_start..pos + total_len]);
-            pos += total_len;
+            remaining_items -= 1;
         }
     }
 
     // Phase 2: skip non-map items until the map delimiter.
     let mut map_bytes: &[u8] = &[];
-    while pos < buf.len() {
-        let head = cbor::read_head(&buf[pos..]).map_err(Error::Cbor)?;
-        if head.major == 5 {
-            // It's a map — the record delimiter.
-            let map_len = cbor::skip_any_item(&buf[pos..]).map_err(Error::Cbor)?;
-            map_bytes = &buf[pos..pos + map_len];
-            pos += map_len;
+    while remaining_items > 0 {
+        let item_head = cbor::read_head(&buf[pos..]).map_err(Error::Cbor)?;
+        let item_len = cbor::skip_any_item(&buf[pos..]).map_err(Error::Cbor)?;
+        if item_head.major == 5 {
+            // It's a map — the record delimiter. remaining_items is not
+            // read again after this break, so it's not decremented here.
+            map_bytes = &buf[pos..pos + item_len];
+            pos += item_len;
             break;
-        } else {
-            // Not a map — skip it (forward-compat unknown item).
-            let skip_len = cbor::skip_any_item(&buf[pos..]).map_err(Error::Cbor)?;
-            pos += skip_len;
         }
+        // Not a map — skip it (forward-compat unknown item).
+        pos += item_len;
+        remaining_items -= 1;
     }
 
     // Well-formedness check: walk every field value once so a truncated
@@ -312,57 +357,24 @@ fn parse_record(buf: &[u8]) -> Result<(Record<'_>, usize), Error> {
         walk_map_pairs(map_bytes, |_k, _v| Ok(ControlFlow::Continue)).map_err(Error::Cbor)?;
     }
 
+    // Everything remaining, past the map, to the end of this Record's
+    // own (already exactly bounded) array is subrecords.
+    let sub_bytes: Option<&[u8]> = if pos < buf.len() {
+        Some(&buf[pos..])
+    } else {
+        None
+    };
+
     let ignored = type_id.is_none();
 
-    Ok((
-        Record {
-            type_id,
-            local_namespace,
-            ndef_id,
-            embedded_bytes,
-            ignored,
-            map_bytes,
-        },
-        pos,
-    ))
-}
-
-/// Attempts to parse the two elements of a namespace-pairing array's
-/// contents (the slice starting right after the array's own head): a
-/// namespace (a byte string — the only valid Namespace ID shape, same
-/// convention as the container discriminator's namespace value, §3.5;
-/// there is no Allocated/uint namespace tier) followed by a typeId
-/// (uint only — a namespace-pairing item never carries a byte-string
-/// typeId; decentralized Record IDs were retired entirely, §3.1).
-///
-/// Returns `Ok(None)` — not an error — when the two elements are
-/// well-formed CBOR but don't match this shape (e.g. the namespace slot
-/// holds a uint or a text string, or the typeId slot holds something
-/// other than a uint): that means this array isn't a namespace pairing
-/// after all, and the caller falls back to treating it as an ordinary
-/// unrecognized prefix item. Only a genuine decode failure
-/// (truncated/malformed bytes) propagates as `Err`.
-fn parse_namespace_pairing(buf: &[u8]) -> Result<Option<(cbor::Key<'_>, u64, usize)>, cbor::Error> {
-    let (ns_key, ns_len) = match cbor::read_key(buf) {
-        Ok(v) => v,
-        Err(_) => return Ok(None),
-    };
-    let ns_valid = matches!(ns_key, cbor::Key::ByteString(_));
-    if !ns_valid {
-        return Ok(None);
-    }
-
-    let rest = buf.get(ns_len..).ok_or(cbor::Error::UnexpectedEof)?;
-    let (id_key, id_len) = match cbor::read_key(rest) {
-        Ok(v) => v,
-        Err(_) => return Ok(None),
-    };
-    let id = match id_key {
-        cbor::Key::Uint(n) => n,
-        _ => return Ok(None),
-    };
-
-    Ok(Some((ns_key, id, ns_len + id_len)))
+    Ok(Record {
+        type_id,
+        local_namespace,
+        ndef_id,
+        sub_bytes,
+        ignored,
+        map_bytes,
+    })
 }
 
 /// Applies the even/odd criticality rule (§3.2) to a Record's map bytes

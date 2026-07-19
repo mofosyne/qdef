@@ -767,6 +767,15 @@ redesign freed it.
 
 ## Embedded Records (§3.1's `ID[]{}` shape) — resolved, replacing a TagDrop proposal that relied on Record position
 
+**Superseded.** `ID[]{}` — a single optional array positioned before a
+Record's mandatory field Map — was replaced shortly after by making
+*every* Record its own self-delimited CBOR array, with subrecords as
+ordinary trailing elements needing no dedicated array slot at all (see
+"Every Record became a self-delimited array" below). The problem this
+entry solves (TagDrop's positional Preview/Body correlation) and the
+reasoning behind rejecting positional correlation are still exactly
+right; only the specific wire shape changed. Kept for the real trail.
+
 TagDrop proposed a Media Preview standard record type (identification:
 media type, content hash, filename) as a plain sibling Record, correlated
 with its Body (a Media Payload or a Split fragment) **positionally**:
@@ -890,6 +899,147 @@ array's own element bytes at zero extra parsing cost — a definite-length
 CBOR array's payload is byte-for-byte identical in shape to a CBOR
 Sequence of the same items). See `prototype/test/embedded-records.test.js`
 and the embedded-Records tests in `rust/qdef-core/src/tests.rs`.
+
+## Every Record became a self-delimited array — resolved, replacing `ID[]{}` and the flat namespace-pairing array
+
+Raised while comparing `ID[]{}` (array before the mandatory Map) against
+`ID{}[]` (array after it): is there a real difference beyond parser
+complexity? The honest answer is that complexity was never the actual
+objection to `ID{}[]` — safety was. `map, then array` was already how a
+namespace-paired Record legitimately starts; giving it a second meaning
+isn't a lookahead problem, it's undecidable, since the bytes are
+identical either way regardless of how sophisticated the parser is.
+There's also no genuine memory-ordering argument between the two shapes:
+the array and the Map are each independently self-describing (no field
+in one depends on content in the other to be interpreted), so there's no
+"more natural to build in memory" case for putting the array before or
+after — the collision is the whole reason, not a proxy for it.
+
+**A companion proposal — a `NAMESPACE [stream]` construct for namespace
+sub-scoping, with every Record paying a mandatory trailing empty array
+as an end-of-record marker — surfaced a real, separate problem worth
+solving and a cost not worth paying.** Namespace-pairing being "paid
+fresh on every Record, no amortization" (already documented) is a real
+gap when several Records in one container want the same non-ambient
+namespace. But the proposed fix (a universal trailing `[]`, present even
+when empty) taxes the overwhelmingly common case — ordinary fields, no
+subrecords — to spare the rare one, backwards from the zero-cost-when-
+unused discipline this format has followed everywhere else (Wrapper
+Records opt-in, NDEF-ID free when absent, `ID[]{}` itself free when
+unused). The sub-scoping problem is real; that specific fix didn't earn
+its cost.
+
+**Resolved instead by making every Record its own self-delimited CBOR
+array — `[namespace?, typeId, ndefId?, map, subrecord*]`** — replacing
+both `ID[]{}` and the earlier 2-element `[namespace, typeId]` pairing
+array. What this actually buys, precisely: not easier interpretation of
+a Record you care about (Phase 1's own recognition logic is exactly as
+complex as before, just now scoped inside a known-length array) — the
+real win is that *skipping* a Record you don't care about becomes fully
+generic. A decoder no longer needs any Record-grammar knowledge at all
+to advance past an uninteresting Record; it skips one CBOR array, the
+same generic operation already used for skipping unknown field values.
+More importantly, it permanently closes the entire *category* of
+ambiguity this whole redesign kept running into at every level — the
+retired Type-`0` header, `ID[]{}` vs `ID{}[]`, "is this array a
+namespace pairing or the next Record starting" — every one of those was
+some version of "a boundary has to be inferred from context because
+nothing declares it explicitly." An explicit-length array around every
+Record means a boundary is never inferred again, at any nesting depth.
+
+**A genuine, unplanned robustness improvement fell out of this for
+free.** The previous design's `Records` iterator had a documented
+limitation: a malformed Record made the rest of the Sequence
+unrecoverable, since the parser couldn't determine where the malformed
+item ended. With every Record self-bounded, `Records::next` now
+determines a Record's total byte span *generically* (`skip_any_item` on
+its whole array — this only needs well-formed CBOR, not valid Record
+grammar) *before* attempting to interpret its contents. A Record whose
+own contents don't parse as valid Record grammar still can't corrupt
+discovery of the next sibling; only genuinely malformed CBOR (not just
+malformed Record grammar) still ends a Sequence early, which is a
+narrower, unavoidable failure mode. See `rust/qdef-core`'s
+`a_malformed_subrecord_does_not_corrupt_its_parent_or_any_sibling_top_level_record`
+test.
+
+**Cost is real but bounded and was checked, not assumed.** One
+array-header byte per Record, universally — but typical QDEF payloads
+carry one or two Records, so the realistic per-payload cost is small,
+not a multiplier across the whole format. Verified directly:
+`prototype/test/custom-scheme-carrier.test.js`'s byte-cost FINDING moved
+from 11/4 to 12/5 bytes (own-URI-scheme vs. shared-container path) —
+exactly one byte higher on each side, the relative saving of skipping
+magic/discriminator/namespace-scoping unaffected, since both paths now
+pay the same array-header cost once.
+
+**Namespace becomes a flat leading element instead of a nested pairing
+array, avoiding double-nesting.** Once every Record is already
+array-wrapped, keeping namespace-pairing as its own separate 2-element
+array (`[[namespace, typeId], {...}]`) would nest an array inside an
+array for no reason. `namespace` and `typeId` are simply the outer
+array's own first two elements when a namespace is present
+(`[namespace, typeId, {...}]`), recognized the same way as before: the
+first element's CBOR major type (byte string vs. uint) determines
+whether a namespace is present, and if it is, the *following* element
+must also validate as a typeId or the byte string isn't committed as a
+namespace at all (falls through, Record unroutable) — the same
+"malformed prefix means unroutable, not a crash" tolerance the pairing
+array always had.
+
+**One concrete behavior change worth being explicit about:** a uint
+where a namespace was intended is no longer detectably wrong — it's
+simply read as this Record's own typeId directly (since a bare uint is
+unconditionally valid typeId shape on its own), and the originally-
+intended typeId becomes a skipped stray item. The old 2-element pairing
+array could at least fail closed (the whole array falls through
+unrecognized, Record unroutable) when a uint appeared in the namespace
+slot; the flat form can't distinguish "no namespace, deliberately" from
+"namespace omitted by a bug" as cleanly. Accepted as a reasonable
+trade — the failure mode is still safe (a routable Record with a
+different typeId than intended, not a security hole), and the byte and
+conceptual savings from dropping a whole nested-array nesting apply to
+*every* namespaced Record, not just the malformed case.
+
+**Subrecords no longer need a dedicated array slot at all.** Since the
+outer Record's own array is already exactly self-bounded, every element
+after the field Map is unambiguously a subrecord — no separate wrapper
+array is needed to say where they start or how many there are, unlike
+`ID[]{}`, which needed its own array specifically because the
+*enclosing* structure wasn't otherwise bounded. This also lets a Record
+carry more than one subrecord without any extra framing beyond each
+subrecord's own array header, where `ID[]{}` needed exactly one array
+regardless.
+
+**Namespace cascades to subrecords, resolving the sub-scoping problem
+that started this whole entry — via composition of already-existing
+mechanisms, not a new one.** A subrecord with no namespace of its own
+resolves against its immediate parent's own effective namespace
+(recursively), not directly against the container's ambient one — so a
+Record that leads its own array with a namespace scopes its own
+subrecords too, for free. Implemented as `header.js`'s
+`resolveLookupKeysDeep`, generalizing the existing "container ambient,
+overridable per-Record" rule (§3.5) one level further, reusing
+`resolveLookupKeyForRecord`'s own logic rather than inventing a
+parallel one.
+
+**Scope of this change, stated plainly:** unlike `ID[]{}` (purely
+additive, nothing existing changed shape), this changes the wire shape
+of every existing standard record type — Wi-Fi, Split, Compress,
+Encrypt, Fallback Hint, Media Payload, App Route — in both prototype
+languages, requiring a full re-implementation rather than an add-on.
+Undertaken deliberately, with explicit confirmation, given this document
+predates any real-world release.
+
+Prototyped end to end in `prototype/src/core.js`
+(`parseRecordArray`/`parseRecordList`/`recordToItems`, all mutually
+recursive) and `rust/qdef-core` (`Records::next` determining a Record's
+span generically before `parse_record_array` interprets it,
+`Record::subrecords()` reusing the same `Records` iterator on the
+trailing element bytes at zero extra parsing cost — a definite-length
+CBOR array's elements are byte-for-byte identical in shape to a CBOR
+Sequence of the same items, recursively, at any depth). See
+`prototype/test/subrecords.test.js` and the subrecord tests in
+`rust/qdef-core/src/tests.rs`.
 
 ## Why not just carry a literal NDEF message as the QR byte-mode payload, instead of a new format?
 
@@ -1691,6 +1841,16 @@ up, it picks from whatever's still unclaimed then — including negint,
 still available, exactly as it is today.
 
 ## Multiple namespaces per container — built via a per-Record namespace-pairing prefix item
+
+**Wire shape updated since this entry was written.** The decision below
+(a per-Record namespace override, taking priority over the container's
+ambient one) is still exactly current. Its encoding is not: the
+2-element `[namespace, typeId]` array this entry describes was later
+replaced by a flat leading element on the Record's own array —
+`[namespace, typeId, ...]` — once every Record became self-delimited
+(see "Every Record became a self-delimited array"). Kept for the real
+trail; read `[namespace, typeId]` below as "the namespace and typeId
+elements," not a literal nested array.
 
 Asked directly: should one container support declaring more than one
 namespace, so a single physical code could mix content from several

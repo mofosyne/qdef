@@ -93,16 +93,17 @@ One to three sentences is fine.>
 If you have a sample CBOR encoding of a Record using this Type ID,
 paste the hex dump or link to it here. Otherwise delete this section.
 
-A Record is a prefix typeID followed by a field Map (spec §3) — the
+A Record is one CBOR array — `[typeID, field Map]` (spec §3.1) — the
 typeID is never a map key:
 
 ```
-18 69                            # unsigned(105) — prefix typeID: 105
-a2                                # map(2) — the Record's field Map
-   02                             # unsigned(2) — brightness
-   18 64                          # unsigned(100)
-   04                             # unsigned(4) — color temp
-   19 0fa0                        # unsigned(4000)
+82                                # array(2) — this Record's own array
+   18 69                          # unsigned(105) — typeID: 105
+   a2                             # map(2) — the Record's field Map
+      02                          # unsigned(2) — brightness
+      18 64                       # unsigned(100)
+      04                          # unsigned(4) — color temp
+      19 0fa0                     # unsigned(4000)
 ```
 
 If this Type ID is namespace-scoped (an odd uint), show the container
@@ -112,10 +113,11 @@ too:
 ```
 44 c103df40                      # bytes(4) — discriminator: namespace
                                   #   h'c103df40', bare form
-01                                # unsigned(1) — prefix typeID: 1 (namespace-scoped)
-a2                                # map(2) — the Record's field Map
-   02  18 64                      # brightness: 100
-   04  19 0fa0                    # color temp: 4000
+82                                # array(2) — this Record's own array
+   01                             # unsigned(1) — typeID: 1 (namespace-scoped)
+   a2                             # map(2) — the Record's field Map
+      02  18 64                   # brightness: 100
+      04  19 0fa0                 # color temp: 4000
 ```
 
 ---

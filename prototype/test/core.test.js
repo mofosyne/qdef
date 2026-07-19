@@ -15,13 +15,13 @@ const rt = require('../src/recordTypes');
 // ---------------------------------------------------------------------
 
 test('a record with no typeID before the map is ignored (not routed)', () => {
-  // A bare map with no preceding typeID items — the parser finds no
-  // typeID and marks the record as ignored. The mandatory discriminator
-  // (§3.5) still comes first; this tests the Record right after it.
+  // A Record array with a bare map as its own first element -- no
+  // namespace, no typeID -- the parser finds no typeID and marks the
+  // record as ignored. The mandatory discriminator (§3.5) still comes
+  // first; this tests the Record right after it.
   const discBytes = cbor.encodeCanonical(0); // no namespace
-  const map = new Map([[0, 'SSID']]);
-  const bytes = cbor.encode(map);
-  const container = Buffer.concat([core.MAGIC, discBytes, bytes]);
+  const recordBytes = cbor.encodeCanonical([new Map([[0, 'SSID']])]);
+  const container = Buffer.concat([core.MAGIC, discBytes, recordBytes]);
 
   const { records } = core.decodeContainer(container);
   assert.equal(records[0].ignored, true);
@@ -33,9 +33,7 @@ test('a record with no typeID before the map is ignored (not routed)', () => {
 // because NDEF's own MIME type (application/vnd.qdef) already identifies it.
 // ---------------------------------------------------------------------
 test('NDEF path: a bare CBOR Sequence (no magic) still routes via decodeSequence', () => {
-  const typeBytes = cbor.encodeCanonical(100);
-  const mapBytes = cbor.encodeCanonical(new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]));
-  const bareSeq = Buffer.concat([typeBytes, mapBytes]);
+  const bareSeq = cbor.encodeCanonical([100, new Map([[0, 'SSID'], [2, 'pass'], [4, 2]])]);
   // Sanity: this must NOT be parseable as a magic-prefixed container.
   assert.throws(() => core.decodeContainer(bareSeq), /bad magic/);
 
@@ -72,18 +70,20 @@ test('a totally unrecognized Record Type is skippable without inspecting its key
 // it streams in, without buffering the whole payload first."
 // ---------------------------------------------------------------------
 test('records decode incrementally off a byte stream, confirming the no-buffering claim', () => {
+  // Each Record is now its own self-delimited CBOR array -- the
+  // streaming decoder emits one complete, already-parsed Record per
+  // 'data' event, with no QDEF-specific grammar needed to know where
+  // one ends: a generic CBOR streaming decoder already does it.
   const seq = Buffer.concat([
-    cbor.encodeCanonical(100),
-    cbor.encodeCanonical(new Map([[0, 'a']])),
-    cbor.encodeCanonical(900),
-    cbor.encodeCanonical(new Map([[0, 'b']])),
+    cbor.encodeCanonical([100, new Map([[0, 'a']])]),
+    cbor.encodeCanonical([900, new Map([[0, 'b']])]),
   ]);
 
   return new Promise((resolve, reject) => {
     const decoder = new cbor.Decoder();
     const seenTypeIds = [];
     decoder.on('data', (item) => {
-      if (typeof item === 'number' && item >= 0) seenTypeIds.push(item);
+      if (Array.isArray(item) && typeof item[0] === 'number') seenTypeIds.push(item[0]);
     });
     decoder.on('error', reject);
     decoder.on('end', () => {
@@ -103,10 +103,7 @@ test('records decode incrementally off a byte stream, confirming the no-bufferin
 // ---------------------------------------------------------------------
 test('a second, would-be-backup typeID is not accumulated -- silently skipped as an unrecognized item', () => {
   const discBytes = cbor.encodeCanonical(0); // no namespace
-  const typeBytes = cbor.encodeCanonical(100);
-  const secondUint = cbor.encodeCanonical(900); // would have been a backup, once
-  const mapBytes = cbor.encodeCanonical(new Map([[0, 'SSID']]));
-  const recordBytes = Buffer.concat([typeBytes, secondUint, mapBytes]);
+  const recordBytes = cbor.encodeCanonical([100, 900, new Map([[0, 'SSID']])]); // 900 would have been a backup, once
   const container = Buffer.concat([core.MAGIC, discBytes, recordBytes]);
 
   const { records } = core.decodeContainer(container);
@@ -119,10 +116,7 @@ test('unknown items between typeIDs and map are skipped transparently', () => {
   // Manually construct a Record with an unknown item (e.g. a future
   // QDEF version marker) between the typeID and the map.
   const discBytes = cbor.encodeCanonical(0); // no namespace
-  const typeBytes = cbor.encodeCanonical(100);
-  const futureMarker = cbor.encodeCanonical(-1); // negative int = unknown item
-  const mapBytes = cbor.encodeCanonical(new Map([[0, 'SSID']]));
-  const recordBytes = Buffer.concat([typeBytes, futureMarker, mapBytes]);
+  const recordBytes = cbor.encodeCanonical([100, -1, new Map([[0, 'SSID']])]); // -1 = unknown item
   const container = Buffer.concat([core.MAGIC, discBytes, recordBytes]);
 
   const { records } = core.decodeContainer(container);

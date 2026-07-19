@@ -293,21 +293,21 @@ fn a_second_typeid_shaped_item_is_not_accumulated_as_a_backup_it_is_silently_ski
 }
 
 #[test]
-fn namespace_pairing_prefix_item_yields_the_nested_typeid_and_the_raw_namespace() {
+fn namespace_prefix_yields_the_typeid_and_the_raw_namespace() {
     let container = Container::parse(NAMESPACE_PAIRING_CONTAINER).expect("valid container");
     let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
     assert_eq!(records.len(), 1);
     let rec = &records[0];
     assert!(!rec.ignored);
 
-    // The pairing's second element becomes the routing typeId, exactly
-    // as if it had been a bare prefix item -- routing doesn't care which
+    // The namespace's own typeId becomes the routing typeId, exactly as
+    // if it had been a bare prefix item -- routing doesn't care which
     // form produced it.
     assert_eq!(rec.type_id(), Some(Key::Uint(1)));
 
-    // The pairing's first element is exposed raw, uninterpreted -- this
-    // crate doesn't know it's "a namespace," just that it came from a
-    // recognized 2-element array shape.
+    // The leading byte string is exposed raw, uninterpreted -- this
+    // crate doesn't know it's "a namespace," just that a byte string
+    // immediately followed by a valid typeId is this shape.
     match rec.local_namespace() {
         Some(Key::ByteString(bytes)) => assert_eq!(bytes, &[0xcd, 0xcd, 0xcd, 0xcd]),
         other => panic!("expected ByteString local_namespace, got {:?}", other),
@@ -315,17 +315,19 @@ fn namespace_pairing_prefix_item_yields_the_nested_typeid_and_the_raw_namespace(
 }
 
 #[test]
-fn a_uint_in_the_namespace_pairing_slot_is_no_longer_recognized() {
-    // There is no Allocated (uint) namespace tier -- [100, 1] is not a
-    // namespace-pairing item anymore, so it falls through to being an
-    // ordinary unrecognized prefix item. The Record loses its only
-    // typeID as a result, not just its namespace.
+fn a_uint_where_a_namespace_was_intended_is_read_directly_as_the_typeid_instead() {
+    // Namespace recognition requires the array's first element to be a
+    // byte string; a uint there is unconditionally valid typeID shape on
+    // its own, so there is no "malformed namespace" state left over --
+    // it's simply this Record's typeID (100), and the originally-
+    // intended typeID (1) becomes a skipped stray item.
     let container =
         Container::parse(UINT_NAMESPACE_SLOT_UNRECOGNIZED_CONTAINER).expect("valid container");
     let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
     let rec = &records[0];
-    assert!(rec.ignored);
-    assert_eq!(rec.type_id(), None);
+    assert!(!rec.ignored);
+    assert_eq!(rec.type_id(), Some(Key::Uint(100)));
+    assert_eq!(rec.local_namespace(), None);
 }
 
 #[test]
@@ -363,7 +365,7 @@ fn a_record_with_no_ndef_id_has_it_absent_zero_cost_when_unused() {
 }
 
 #[test]
-fn an_ndef_id_coexists_with_a_namespace_pairing_typeid_both_prefix_concepts_stack_cleanly() {
+fn an_ndef_id_coexists_with_a_namespace_prefix_both_concepts_stack_cleanly() {
     let container =
         Container::parse(NAMESPACE_PAIRING_WITH_NDEF_ID_CONTAINER).expect("valid container");
     let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
@@ -380,31 +382,25 @@ fn an_ndef_id_coexists_with_a_namespace_pairing_typeid_both_prefix_concepts_stac
 
 // ---------------------------------------------------------------------
 // Negative-integer map keys. CBOR permits them generally and QDEF's spec
-// never explicitly restricted map keys to non-negative uints; before the
-// `cbor::Key::NegInt` fix, `read_key` hard-errored (`NotAKey`) on any
-// negint key, and because `Records::next` treats a `parse_record` error
-// as unrecoverable (it can't know where a malformed item ends, so it
-// can't safely resume), that single unhandled key killed decoding of
-// every *subsequent* Record in the same Sequence too -- not just the one
-// Record that had it. Bytes generated from the Node prototype (which
-// already accepted negative keys silently) via an inline script, not
+// never explicitly restricted map keys to non-negative uints. Bytes
+// generated from the Node prototype via an inline script, not
 // `gen-rust-fixtures.js`, since this is EXPERIMENTAL and not part of the
 // committed fixture set. See docs/FINDINGS.md.
 // ---------------------------------------------------------------------
 
-/// typeId(100) + { 0: "SSID", -1: "wifi-record-1" }
+/// `[typeId(100), { 0: "SSID", -1: "wifi-record-1" }]`
 const RECORD_WITH_NEG_KEY: &[u8] = &[
-    0x18, 0x64, 0xa2, 0x00, 0x64, 0x53, 0x53, 0x49, 0x44, 0x20, 0x6d, 0x77, 0x69, 0x66, 0x69, 0x2d,
-    0x72, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x2d, 0x31,
+    0x82, 0x18, 0x64, 0xa2, 0x00, 0x64, 0x53, 0x53, 0x49, 0x44, 0x20, 0x6d, 0x77, 0x69, 0x66, 0x69,
+    0x2d, 0x72, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x2d, 0x31,
 ];
 
 /// RECORD_WITH_NEG_KEY immediately followed by a second, ordinary Record
-/// (typeId(200) + { 0: "second" }) -- proves the Sequence survives past
-/// the negative-keyed Record, not just that Record in isolation.
+/// (`[typeId(200), { 0: "second" }]`) -- proves the Sequence survives
+/// past the negative-keyed Record, not just that Record in isolation.
 const TWO_RECORD_SEQ_WITH_NEG_KEY: &[u8] = &[
-    0x18, 0x64, 0xa2, 0x00, 0x64, 0x53, 0x53, 0x49, 0x44, 0x20, 0x6d, 0x77, 0x69, 0x66, 0x69, 0x2d,
-    0x72, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x2d, 0x31, 0x18, 0xc8, 0xa1, 0x00, 0x66, 0x73, 0x65, 0x63,
-    0x6f, 0x6e, 0x64,
+    0x82, 0x18, 0x64, 0xa2, 0x00, 0x64, 0x53, 0x53, 0x49, 0x44, 0x20, 0x6d, 0x77, 0x69, 0x66, 0x69,
+    0x2d, 0x72, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x2d, 0x31, 0x82, 0x18, 0xc8, 0xa1, 0x00, 0x66, 0x73,
+    0x65, 0x63, 0x6f, 0x6e, 0x64,
 ];
 
 #[test]
@@ -419,10 +415,6 @@ fn a_negative_map_key_no_longer_hard_errors_the_whole_record() {
 
 #[test]
 fn a_negative_map_key_no_longer_kills_decoding_of_sibling_records_in_the_same_sequence() {
-    // This is the regression this fix actually matters for: before
-    // Key::NegInt existed, this returned only one Ok(record) followed by
-    // an Err, because Records::next latches `done = true` on any
-    // parse_record error and never resumes.
     let records: Vec<_> = records_from_sequence(TWO_RECORD_SEQ_WITH_NEG_KEY)
         .collect::<Result<_, _>>()
         .expect("both records parse; a negint key must not abort the Sequence");
@@ -446,27 +438,23 @@ fn check_criticality_silently_skips_negative_keys_they_are_not_this_types_to_int
 }
 
 // ---------------------------------------------------------------------
-// Indefinite-length (chunked) byte/text strings inside field values:
-// new capability, added alongside the field-value-shape rule's removal.
-// `skip_any_item` already supported indefinite-length *containers*
-// (arrays/maps, via the u64::MAX sentinel) even before this -- what it
-// couldn't do was skip a chunked *string*, since prefix items never used
-// them. Hand-constructed (RFC 8949's deterministic/canonical encoding
-// never produces indefinite-length forms, so the Node prototype's
+// Indefinite-length (chunked) byte/text strings inside field values.
+// Hand-constructed (RFC 8949's deterministic/canonical encoding never
+// produces indefinite-length forms, so the Node prototype's
 // `cbor.encodeCanonical` can't generate this fixture -- there is nothing
 // for gen-rust-fixtures.js to cross-validate against here).
 // ---------------------------------------------------------------------
 
-/// typeId(100) + { 0: (indefinite text string) "SSID" chunked as "SS"+"ID" }
+/// `[typeId(100), { 0: (indefinite text string) "SSID" chunked as "SS"+"ID" }]`
 /// 0x7f = indefinite-length text string start; 0x62 "SS"; 0x62 "ID"; 0xff = break.
 const RECORD_WITH_INDEFINITE_STRING_VALUE: &[u8] = &[
-    0x18, 0x64, 0xa1, 0x00, 0x7f, 0x62, 0x53, 0x53, 0x62, 0x49, 0x44, 0xff,
+    0x82, 0x18, 0x64, 0xa1, 0x00, 0x7f, 0x62, 0x53, 0x53, 0x62, 0x49, 0x44, 0xff,
 ];
 
 /// Same shape, but a chunk's major type doesn't match the string's own
 /// (a byte-string chunk inside a text-string sequence) -- malformed.
 const RECORD_WITH_MISMATCHED_CHUNK_MAJOR_TYPE: &[u8] =
-    &[0x18, 0x64, 0xa1, 0x00, 0x7f, 0x42, 0x53, 0x53, 0xff];
+    &[0x82, 0x18, 0x64, 0xa1, 0x00, 0x7f, 0x42, 0x53, 0x53, 0xff];
 
 #[test]
 fn an_indefinite_length_chunked_string_field_value_is_now_skip_safe() {
@@ -497,127 +485,136 @@ fn a_malformed_indefinite_string_chunk_sequence_is_rejected_not_silently_walked(
 }
 
 // ---------------------------------------------------------------------
-// Embedded Records (§3.1's `ID[]{}` shape): an optional array of Records
-// positioned between a Record's typeID/NDEF-ID prefix items and its
-// mandatory field Map, parsed with the exact same Record grammar as the
-// top-level Sequence (`Records`, reused recursively via
-// `Record::embedded_records`) — not a new grammar. Resolves the TagDrop
-// Media Preview/Payload correlation problem without relying on Record
-// position. See docs/DESIGN.md and docs/FINDINGS.md.
+// Subrecords (§3.1's generalized `ID[]{}` shape): every Record is now
+// exactly one self-delimited CBOR array; everything past its own field
+// Map, for the rest of that array, is itself a nested Record, parsed
+// with the exact same Record grammar as the top-level Sequence (the
+// same `Records` iterator, reused recursively via `Record::subrecords`)
+// -- not a new grammar. Resolves the TagDrop Media Preview/Payload
+// correlation problem without relying on Record position, and replaces
+// the earlier `ID[]{}`-with-one-optional-array design (superseded once
+// every Record became array-wrapped). See docs/DESIGN.md and
+// docs/FINDINGS.md.
 // ---------------------------------------------------------------------
 
 #[test]
-fn an_embedded_record_round_trips_dispatched_by_its_own_typeid() {
-    let container = Container::parse(EMBEDDED_RECORDS_CONTAINER).expect("valid container");
+fn a_subrecord_round_trips_dispatched_by_its_own_typeid() {
+    let container = Container::parse(SUBRECORDS_CONTAINER).expect("valid container");
     let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
     assert_eq!(records.len(), 1);
     let outer = &records[0];
     assert_eq!(outer.type_id(), Some(Key::Uint(20)));
 
-    let embedded: Vec<_> = outer
-        .embedded_records()
-        .expect("embedded-Records array present")
+    let subs: Vec<_> = outer
+        .subrecords()
+        .expect("subrecords present")
         .collect::<Result<_, _>>()
         .unwrap();
-    assert_eq!(embedded.len(), 1);
-    assert_eq!(embedded[0].type_id(), Some(Key::Uint(2)));
-    let payload = find_value(embedded[0].map_bytes, 0).unwrap().unwrap();
+    assert_eq!(subs.len(), 1);
+    assert_eq!(subs[0].type_id(), Some(Key::Uint(2)));
+    let payload = find_value(subs[0].map_bytes, 0).unwrap().unwrap();
     assert_eq!(read_definite_string(payload).unwrap(), b"fragment");
 }
 
 #[test]
-fn a_record_with_no_embedded_records_array_has_it_absent_zero_cost_when_unused() {
+fn a_record_with_no_subrecords_has_them_absent_zero_cost_when_unused() {
     let container = Container::parse(WIFI_CONTAINER).expect("valid container");
     let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
-    assert!(records[0].embedded_records().is_none());
+    assert!(records[0].subrecords().is_none());
 }
 
 #[test]
-fn an_embedded_record_can_itself_carry_an_ndef_id_and_a_namespace_pairing_typeid() {
-    let container = Container::parse(EMBEDDED_RECORDS_WITH_NDEF_ID_AND_NAMESPACE_CONTAINER)
-        .expect("valid container");
+fn a_subrecord_can_itself_carry_an_ndef_id_a_namespace_and_its_own_further_subrecords() {
+    let container =
+        Container::parse(SUBRECORDS_WITH_NDEF_ID_AND_NAMESPACE_CONTAINER).expect("valid container");
     let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
     let outer = &records[0];
     assert_eq!(outer.type_id(), Some(Key::Uint(21)));
 
-    let embedded: Vec<_> = outer
-        .embedded_records()
+    let subs: Vec<_> = outer
+        .subrecords()
         .unwrap()
         .collect::<Result<_, _>>()
         .unwrap();
-    assert_eq!(embedded.len(), 1);
-    let inner = &embedded[0];
+    assert_eq!(subs.len(), 1);
+    let inner = &subs[0];
     assert_eq!(inner.type_id(), Some(Key::Uint(1)));
     match inner.local_namespace() {
         Some(Key::ByteString(bytes)) => assert_eq!(bytes, &[0xcd, 0xcd, 0xcd, 0xcd]),
         other => panic!("expected ByteString local_namespace, got {:?}", other),
     }
     assert_eq!(inner.ndef_id(), Some(&b"inner-record-1"[..]));
+
+    let leaf: Vec<_> = inner
+        .subrecords()
+        .expect("nested subrecords present")
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(leaf.len(), 1);
+    assert_eq!(leaf[0].type_id(), Some(Key::Uint(22)));
 }
 
 #[test]
-fn an_array_between_two_sibling_top_level_records_is_not_swallowed_as_a_trailing_embedded_array() {
-    // The rejected `ID{}[]` shape: once a record's map closes, an array
-    // right after it is the start of the NEXT record (namespace-pairing
-    // here), never this record's own embedded-Records array — that slot
-    // only exists BEFORE the map, never after.
-    let container = Container::parse(EMBEDDED_RECORDS_SIBLING_NOT_SWALLOWED_CONTAINER)
-        .expect("valid container");
+fn every_record_is_self_bounded_a_record_with_subrecords_never_bleeds_into_its_sibling() {
+    let container = Container::parse(SUBRECORDS_SIBLING_CONTAINER).expect("valid container");
     let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
     assert_eq!(records.len(), 2);
-    assert_eq!(records[0].type_id(), Some(Key::Uint(22)));
-    assert!(records[0].embedded_records().is_none());
+
+    assert_eq!(records[0].type_id(), Some(Key::Uint(23)));
+    assert_eq!(records[0].subrecords().unwrap().count(), 1);
+
+    assert_eq!(records[1].type_id(), Some(Key::Uint(1)));
+    assert!(records[1].subrecords().is_none());
     match records[1].local_namespace() {
         Some(Key::ByteString(bytes)) => assert_eq!(bytes, &[0xcd, 0xcd, 0xcd, 0xcd]),
         other => panic!("expected ByteString local_namespace, got {:?}", other),
     }
 }
 
-/// typeId(23) + [] + {} -- an explicitly empty embedded-Records array,
-/// distinct from no array at all. Hand-constructed (not via
-/// gen-rust-fixtures.js): this specific 8-byte record is short enough
-/// that rustfmt collapses its containing const onto one line, which
-/// would put it permanently out of sync with the generator's own raw
-/// multi-line output that CI's rust-fixtures-in-sync job compares
-/// against -- so this one edge case is built directly here instead, same
-/// as the negative-map-key fixtures above.
-const RECORD_WITH_EMPTY_EMBEDDED_ARRAY: &[u8] = &[0x17, 0x80, 0xa0];
+/// `[typeId(24), { 0: "parent payload" }, [{ 0: "no typeid here" }]]` --
+/// the trailing subrecord slot holds a well-formed CBOR array whose own
+/// first (and only) element is a bare map, with nothing namespace/
+/// typeId-shaped before it: well-formed CBOR, invalid Record grammar.
+/// Hand-constructed (not via gen-rust-fixtures.js, which has no direct
+/// way to encode a malformed subrecord).
+const RECORD_WITH_MALFORMED_SUBRECORD: &[u8] = &[
+    0x83, 0x18, 0x18, 0xa1, 0x00, 0x6e, 0x70, 0x61, 0x72, 0x65, 0x6e, 0x74, 0x20, 0x70, 0x61, 0x79,
+    0x6c, 0x6f, 0x61, 0x64, 0x81, 0xa1, 0x00, 0x6e, 0x6e, 0x6f, 0x20, 0x74, 0x79, 0x70, 0x65, 0x69,
+    0x64, 0x20, 0x68, 0x65, 0x72, 0x65,
+];
+
+/// `[typeId(1), { 0: "sibling payload" }]` immediately following
+/// RECORD_WITH_MALFORMED_SUBRECORD in the same Sequence.
+const SIBLING_AFTER_MALFORMED_SUBRECORD: &[u8] = &[
+    0x82, 0x01, 0xa1, 0x00, 0x6f, 0x73, 0x69, 0x62, 0x6c, 0x69, 0x6e, 0x67, 0x20, 0x70, 0x61, 0x79,
+    0x6c, 0x6f, 0x61, 0x64,
+];
 
 #[test]
-fn an_explicitly_empty_embedded_records_array_is_present_but_yields_zero_members() {
-    let records: Vec<_> = records_from_sequence(RECORD_WITH_EMPTY_EMBEDDED_ARRAY)
-        .collect::<Result<_, _>>()
-        .unwrap();
-    let embedded: Vec<_> = records[0]
-        .embedded_records()
-        .expect("array present, even though empty")
-        .collect::<Result<_, _>>()
-        .unwrap();
-    assert_eq!(embedded.len(), 0);
-}
+fn a_malformed_subrecord_does_not_corrupt_its_parent_or_any_sibling_top_level_record() {
+    // Each Record's own array boundary is generic (skip_any_item, purely
+    // well-formedness-based) and independent of whether its contents
+    // parse as valid Record grammar -- so the outer Sequence walker can
+    // always find the next sibling, and a malformed subrecord surfaces
+    // as that one subrecord being `ignored`, not a hard failure.
+    let mut buf = RECORD_WITH_MALFORMED_SUBRECORD.to_vec();
+    buf.extend_from_slice(SIBLING_AFTER_MALFORMED_SUBRECORD);
 
-#[test]
-fn an_unrecognized_item_inside_an_embedded_records_array_is_skipped_same_forward_compat_tolerance_as_top_level(
-) {
-    let container =
-        Container::parse(EMBEDDED_RECORDS_STRAY_ITEM_CONTAINER).expect("valid container");
-    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
-    let embedded: Vec<_> = records[0]
-        .embedded_records()
-        .unwrap()
+    let records: Vec<_> = records_from_sequence(&buf)
         .collect::<Result<_, _>>()
         .unwrap();
-    assert_eq!(embedded.len(), 1);
-    assert_eq!(embedded[0].type_id(), Some(Key::Uint(2)));
-    let payload = find_value(embedded[0].map_bytes, 0).unwrap().unwrap();
-    assert_eq!(read_definite_string(payload).unwrap(), b"payload");
-}
+    assert_eq!(records.len(), 2);
 
-#[test]
-fn the_field_map_stays_mandatory_even_when_an_embedded_records_array_is_present_and_empty() {
-    let records: Vec<_> = records_from_sequence(RECORD_WITH_EMPTY_EMBEDDED_ARRAY)
+    assert_eq!(records[0].type_id(), Some(Key::Uint(24)));
+    let subs: Vec<_> = records[0]
+        .subrecords()
+        .expect("subrecord slot present")
         .collect::<Result<_, _>>()
         .unwrap();
-    // An empty map is still a map: 1 byte (0xa0), present in map_bytes.
-    assert_eq!(records[0].map_bytes, &[0xa0]);
+    assert_eq!(subs.len(), 1);
+    assert!(subs[0].ignored);
+
+    assert_eq!(records[1].type_id(), Some(Key::Uint(1)));
+    let payload = find_value(records[1].map_bytes, 0).unwrap().unwrap();
+    assert_eq!(read_definite_string(payload).unwrap(), b"sibling payload");
 }

@@ -185,28 +185,69 @@ function resolveLookupKey(header, typeId) {
 }
 
 /**
+ * A Record's own effective ambient header: its own namespace-pairing
+ * override (core.js's Record.localNamespace, §3.1) if it declared one,
+ * otherwise whatever ambient header it inherited (the container
+ * discriminator for a top-level Record, or its *parent's own* effective
+ * header for a subrecord -- see resolveLookupKeysDeep). A local override
+ * takes priority for this one Record only; every sibling is unaffected.
+ *
+ * @param {{localNamespace?: Buffer}} record
+ * @param {{namespace: Buffer, hint?: string}|undefined} ambientHeader
+ */
+function effectiveHeaderForRecord(record, ambientHeader) {
+  return record.localNamespace !== undefined ? { namespace: record.localNamespace } : ambientHeader;
+}
+
+/**
  * Resolves the correct lookup key for a Record, the same as
  * resolveLookupKey, but accounting for a per-Record namespace override
- * (core.js's Record.localNamespace, from a namespace-pairing prefix
- * item, §3.1) when the Record declares one. A local override takes
- * priority over the container's ambient discriminator-declared
- * namespace for this one Record only — every other Record in the same
- * container is unaffected and still resolves against the ambient
- * namespace. This is what makes more than one namespace usable within a
- * single container without taxing the common single-namespace case: the
- * ambient discriminator stays the cheap default, and only a Record that
- * actually wants a different namespace pays anything extra for it.
+ * when the Record declares one. This is what makes more than one
+ * namespace usable within a single container without taxing the common
+ * single-namespace case: the ambient discriminator stays the cheap
+ * default, and only a Record that actually wants a different namespace
+ * pays anything extra for it.
  *
  * @param {{typeId: number|bigint, localNamespace?: Buffer}} record
  * @param {{namespace: Buffer, hint?: string}|undefined} containerHeader -
  *   as returned by parseDiscriminator, or undefined
  */
 function resolveLookupKeyForRecord(record, containerHeader) {
-  const effectiveHeader =
-    record.localNamespace !== undefined
-      ? { namespace: record.localNamespace }
-      : containerHeader;
-  return resolveLookupKey(effectiveHeader, record.typeId);
+  return resolveLookupKey(effectiveHeaderForRecord(record, containerHeader), record.typeId);
+}
+
+/**
+ * Recursively resolves lookup keys for a Record and every one of its
+ * subrecords (core.js's Record.subrecords, §3.1's generalized `ID[]{}`
+ * shape), cascading the ambient namespace down through nesting: a
+ * subrecord with no override of its own resolves against its
+ * *immediate parent's* effective namespace, not directly against the
+ * container's ambient one. A Record that pairs its own typeId with a
+ * namespace therefore scopes its own subrecords too, for free, without
+ * each one needing to repeat the same pairing item -- the concrete
+ * amortization namespace-pairing alone doesn't get (see
+ * resolveLookupKeyForRecord's own doc comment and docs/DESIGN.md's
+ * "Embedded Records" entry).
+ *
+ * Ignored (unroutable) Records are skipped, but their subrecords are
+ * still walked -- an ignored parent's own namespace override (if any)
+ * still cascades, since "ignored" only means "no typeId," not "no
+ * usable namespace declaration."
+ *
+ * @param {Object} record
+ * @param {{namespace: Buffer, hint?: string}|undefined} ambientHeader
+ * @returns {Array<{record: Object, key: Object}>} depth-first, in
+ *   document order; only routable (non-ignored) Records are included.
+ */
+function resolveLookupKeysDeep(record, ambientHeader, out = []) {
+  const effectiveHeader = effectiveHeaderForRecord(record, ambientHeader);
+  if (!record.ignored) {
+    out.push({ record, key: resolveLookupKey(effectiveHeader, record.typeId) });
+  }
+  for (const sub of record.subrecords || []) {
+    resolveLookupKeysDeep(sub, effectiveHeader, out);
+  }
+  return out;
 }
 
 /**
@@ -252,6 +293,7 @@ module.exports = {
   namespaceEquals,
   resolveLookupKey,
   resolveLookupKeyForRecord,
+  resolveLookupKeysDeep,
   deriveHashId,
   verifyNamespaceHint,
 };

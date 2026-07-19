@@ -4,39 +4,43 @@
 // criticality. Deliberately has no knowledge of any specific Record
 // Type, compression, or reassembly (see docs/QDEF-SPEC.md §3.3).
 //
-// Every Record is a sequence of CBOR items terminating in a CBOR Map:
-// exactly one typeID-bearing item -- a bare uint, OR a namespace-pairing
-// array ([namespace, typeId], a Record declaring/overriding its own
-// namespace inline, independent of the container's ambient one, see
-// isNamespacePairing below) -- optionally followed by exactly one bare
-// text string (an NDEF-ID-equivalent external reference, §3.1),
-// optionally followed by exactly one array of embedded Records (§3.1's
-// `ID[]{}` shape -- see isEmbeddedRecordsItem below), followed by zero or
-// more unknown items (forward-compat padding), then the field Map as the
-// record delimiter -- always present, even when empty, so a record's
-// terminator is unconditionally a map regardless of whether an embedded-
-// Records array preceded it. There is no backup-typeID accumulation: at
-// most one typeID-bearing item per Record (see docs/FINDINGS.md for why
-// decentralized Type IDs and backup typeIDs were both dropped).
+// Every Record is exactly one definite-length CBOR array, self-bounded
+// by its own array header -- a decoder never needs Record-grammar
+// knowledge to skip past a Record it doesn't care about, only to skip
+// one generic CBOR array (see docs/DESIGN.md for why this replaced the
+// earlier flat, unwrapped Record shape). Its elements, in order:
+//   [namespace?, typeId, ndefId?, map, subrecord*]
+// - namespace (optional): a byte string, present only when the first
+//   element is a byte string immediately followed by a valid typeId.
+//   Scopes this Record's own typeId, overriding any container-level
+//   ambient namespace for this one Record only (§3.5).
+// - typeId (mandatory): a bare uint. There is no other legal typeId
+//   shape and no backup-typeId accumulation -- at most one typeId per
+//   Record (see docs/FINDINGS.md for why decentralized Type IDs, Named
+//   Type IDs, and backup typeIDs were all retired).
+// - ndefId (optional): a bare CBOR text string immediately following
+//   typeId -- a stable, type-independent external reference mirroring
+//   NDEF's own ID field (§3.1).
+// - map (mandatory): the field Map, always present even when empty, so
+//   a Record's own item count past [namespace?, typeId, ndefId?] is
+//   never ambiguous with anything else.
+// - subrecord* (zero or more): every remaining array element after the
+//   map is itself a nested Record, recursively the same shape (§3.1's
+//   `ID[]{}` shape generalized -- see docs/DESIGN.md). No separate
+//   wrapper array is needed for these anymore: the outer Record's own
+//   array is already self-bounded, so "everything after the map" is
+//   unambiguous without an extra length prefix.
 //
 // No version byte: local forward compatibility is §3.2's even/odd rule.
 // Container-level metadata (a format namespace) lives in a single
 // mandatory discriminator item, always the first CBOR item after magic
-// -- not an ordinary Record the way it used to be. Making it
-// unconditionally present resolves a real ambiguity a bare, unwrapped
-// namespace value would otherwise have (indistinguishable from the next
-// real Record's own typeID) without needing a CBOR-tag marker (see
-// docs/DESIGN.md#cbor-tag-routing--removed for why that route is already
-// closed). See header.js for the shapes it can take and what each one
-// means; core.js only needs to know how to split it off the front,
-// never how to interpret it.
+// -- not an ordinary Record. See header.js for the shapes it can take
+// and what each one means; core.js only needs to know how to split it
+// off the front, never how to interpret it.
 //
 // Field values carry no shape restriction: any well-formed CBOR item is
 // legal (§3.2 -- the earlier flat-scalar-or-string-only rule was
-// dropped; see docs/FINDINGS.md). core.js never needs to walk into a
-// field value's structure regardless -- it only ever needs to find
-// where one ends, which is a property of well-formed CBOR generally,
-// not of this shape restriction specifically.
+// dropped; see docs/FINDINGS.md).
 
 const cbor = require('cbor');
 
@@ -46,7 +50,7 @@ const MAGIC = Buffer.from([0x51, 0x44, 0x45, 0x46]); // "QDEF"
  * Encode a QDEF container from a list of records, prefixed by magic and
  * the mandatory discriminator item.
  *
- * @param {Array<{typeId: number|bigint, fields: Map<number, any>}>} records
+ * @param {Array<Object>} records
  * @param {number|bigint|Buffer|Array|Map} [discriminator] - the
  *   container-level discriminator item (see header.js for its shapes).
  *   Omitted defaults to the bare uint `0`, meaning "no namespace" --
@@ -59,58 +63,48 @@ function encodeContainer(records, discriminator) {
 }
 
 /**
- * Build the flat list of raw (unencoded) CBOR items representing a single
- * Record's own prefix items and payload, in order: typeId (or
- * namespace-pairing array), NDEF-ID (if any), the embedded-Records array
- * (if any, §3.1's `ID[]{}` shape), then the field Map -- always present,
- * even when empty (never omitted just because an embedded-Records array
- * came before it; see docs/DESIGN.md for why the map stays unconditional).
- *
- * Shared by encodeRecordBytes (top level -- each item gets individually
- * CBOR-encoded and the bytes concatenated) and embedded-Records encoding
- * (a whole record's items get flattened into its parent's own
- * embedded-Records array, one level deeper, encoded together as a single
- * CBOR array item) -- the same grammar either way, just nested or not.
+ * Build the raw (unencoded) JS array representing a single Record's own
+ * elements, in order: [namespace?, typeId, ndefId?, map, ...subrecords]
+ * -- subrecords themselves built by recursing into this same function,
+ * so they nest as CBOR arrays automatically once handed to
+ * cbor.encodeCanonical. There is no separate grammar for "a Record when
+ * it's nested": the top level and every subrecord slot use exactly this
+ * one shape.
  *
  * @param {Object} record
  * @param {number|bigint} record.typeId
  * @param {Map<number, any>} [record.fields]
- * @param {Buffer} [record.localNamespace] - if given, wraps the typeID
- *   in a namespace-pairing prefix item ([localNamespace, typeId])
- *   instead of encoding it bare. See isNamespacePairing below.
+ * @param {Buffer} [record.localNamespace] - if given, this Record's
+ *   own namespace, overriding any container-ambient one for this
+ *   Record (and, per header.js's cascading resolution, for its own
+ *   subrecords too unless they declare their own override).
  * @param {string} [record.ndefId] - if given, adds a bare text string
- *   immediately after the typeID item: an NDEF-ID-equivalent external
- *   reference (§3.1), structurally separate from and independent of the
- *   typeID's own routing role. Reuses the text-string prefix-item slot
- *   that used to be reserved for a future "Named ID" typeID form and
- *   for Type Hint verification strings -- both retired alongside
- *   decentralized Type IDs, freeing the slot for this single meaning.
- * @param {Array<Object>} [record.embeddedRecords] - if given, each
- *   element is itself a record object of this same shape, flattened into
- *   one CBOR array positioned right before the field Map.
+ *   immediately after typeId: an NDEF-ID-equivalent external reference
+ *   (§3.1).
+ * @param {Array<Object>} [record.subrecords] - if given, each element
+ *   is itself a record object of this same shape, appended as further
+ *   elements of this Record's own array, after the field Map.
  */
-function recordToItems({ typeId, fields, localNamespace, ndefId, embeddedRecords }) {
+function recordToItems({ typeId, fields, localNamespace, ndefId, subrecords }) {
   if (typeId === undefined) {
     throw new Error('typeId is required');
   }
   const items = [];
-  items.push(localNamespace !== undefined ? [localNamespace, typeId] : typeId);
+  if (localNamespace !== undefined) items.push(localNamespace);
+  items.push(typeId);
   if (ndefId !== undefined) items.push(ndefId);
-  if (embeddedRecords !== undefined) {
-    items.push(embeddedRecords.flatMap(recordToItems));
-  }
   items.push(fields || new Map());
+  if (subrecords !== undefined) {
+    for (const sub of subrecords) items.push(recordToItems(sub));
+  }
   return items;
 }
 
 /**
- * Encode a single top-level Record as CBOR bytes. There is exactly one
- * typeID per Record -- no backup typeIDs (see docs/FINDINGS.md for why
- * that mechanism was dropped).
+ * Encode a single Record as one self-delimited CBOR array.
  */
 function encodeRecordBytes(record) {
-  const items = recordToItems(record);
-  return Buffer.concat(items.map((item) => cbor.encodeCanonical(item)));
+  return cbor.encodeCanonical(recordToItems(record));
 }
 
 /**
@@ -133,7 +127,7 @@ function decodeContainer(buf) {
     throw new Error('QDEF container missing its mandatory discriminator item');
   }
   const [discriminator, ...rest] = items;
-  return { discriminator, records: parseRecords(rest) };
+  return { discriminator, records: parseRecordList(rest) };
 }
 
 /**
@@ -146,107 +140,99 @@ function decodeContainer(buf) {
  */
 function decodeSequence(seq) {
   const items = cbor.decodeAllSync(seq);
-  return parseRecords(items);
+  return parseRecordList(items);
 }
 
 /**
- * Parse an array of decoded CBOR items into Records.
+ * Parse a list of already-decoded CBOR items into Records: each item
+ * that is itself a CBOR array is one Record, parsed by parseRecordArray
+ * below; anything else (a stray non-array top-level item) isn't a
+ * Record and is silently skipped (forward-compat tolerance, the same
+ * principle Phase 2 already applies inside a single Record).
  *
- * Per Record:
- *   Phase 1: recognize exactly one typeID-bearing item -- a bare uint,
- *            or a namespace-pairing array -- optionally followed by
- *            exactly one bare text string (the NDEF-ID-equivalent),
- *            optionally followed by exactly one array of embedded
- *            Records (§3.1's `ID[]{}` shape)
- *   Phase 2: skip non-map items until the map delimiter
- *
- * If no typeID is found before the map, the Record is ignored. If the
- * sequence ends without a map, the incomplete Record is returned with
- * map: null.
- *
- * This same function is called recursively on an embedded-Records
- * array's own contents -- there is no separate grammar for "a Record
- * when it's nested," only this one, reused. A definite-length CBOR
- * array's payload is byte-for-byte identical in shape to a CBOR
- * Sequence of the same items, so nothing but the input source (an
- * already-decoded array of items either way) differs.
+ * This one function serves both the top-level Sequence (called on
+ * cbor.decodeAllSync's output) and any Record's own trailing subrecord
+ * elements (called on the slice of its array after the field Map) --
+ * there is no structural difference between the two contexts anymore.
  */
-function parseRecords(items) {
+function parseRecordList(items) {
   const records = [];
-  let i = 0;
-
-  while (i < items.length) {
-    // Phase 1: recognize this Record's single typeID-bearing item, then
-    // its optional NDEF-ID text string, then its optional embedded-
-    // Records array.
-    let typeId;
-    let localNamespace; // raw, uninterpreted — from this Record's own
-    // pairing item, if any. Same "core exposes it raw, never interprets
-    // it" treatment as the container discriminator.
-    let ndefId; // raw, uninterpreted text string, if present.
-    let embeddedRecords; // parsed recursively, if an array was present.
-
-    if (isTypeId(items[i])) {
-      typeId = items[i];
-      i++;
-    } else if (isNamespacePairing(items[i])) {
-      const [ns, id] = items[i];
-      typeId = id;
-      localNamespace = ns;
-      i++;
-    }
-
-    if (typeId !== undefined && i < items.length && typeof items[i] === 'string') {
-      ndefId = items[i];
-      i++;
-    }
-
-    // An array appearing here, after the typeID/NDEF-ID slot and before
-    // the mandatory map, is always the embedded-Records array -- never
-    // ambiguous with namespace-pairing (only recognized in the typeID
-    // slot, above) or with the *next* Record starting (a bare typeID
-    // with no map yet was already malformed before this shape existed,
-    // so this claims previously-invalid byte patterns, not currently-
-    // valid ones; see docs/DESIGN.md).
-    if (typeId !== undefined && i < items.length && Array.isArray(items[i])) {
-      embeddedRecords = parseRecords(items[i]);
-      i++;
-    }
-
-    // Phase 2: skip non-map items until the map delimiter
-    let map = null;
-    while (i < items.length && !isMapItem(items[i])) {
-      // Skip unknown items (forward-compat for future QDEF evolution)
-      i++;
-    }
-    if (i < items.length && isMapItem(items[i])) {
-      // Normalize: the cbor library decodes empty maps as plain {},
-      // but downstream code expects Map instances with .get()/.set().
-      map =
-        items[i] instanceof Map
-          ? items[i]
-          : new Map(Object.entries(items[i]).map(([k, v]) => [Number(k), v]));
-      i++;
-    }
-
-    records.push({
-      typeId: typeId ?? null,
-      localNamespace,
-      ndefId,
-      embeddedRecords,
-      map,
-      ignored: typeId === undefined,
-    });
+  for (const item of items) {
+    if (Array.isArray(item)) records.push(parseRecordArray(item));
   }
-
   return records;
 }
 
 /**
- * Check if a decoded CBOR item is a valid typeID prefix item: an
- * unsigned integer (uint, major type 0) — the only valid typeID shape.
- * Byte string and text string Type IDs (decentralized/self-certifying
- * and "Named ID," respectively) were both retired; see docs/FINDINGS.md.
+ * Parse a single Record from its own already-decoded CBOR array:
+ *   [namespace?, typeId, ndefId?, map, subrecord*]
+ *
+ * - namespace: recognized only when the first element is a byte string
+ *   AND the element immediately after it is a valid typeId -- otherwise
+ *   this Record has no typeId at all (ignored), the same "malformed
+ *   prefix means unroutable, not a crash" tolerance as before.
+ * - typeId: a bare uint (major type 0). No other shape is recognized.
+ * - ndefId: a bare text string immediately following typeId, if
+ *   present.
+ * - Unrecognized items between ndefId and the map are skipped
+ *   (forward-compat padding), same as always.
+ * - map: the first map-shaped element reached; normalized to a Map
+ *   instance. Everything from here to the end of this Record's own
+ *   array, past the map, is subrecords -- no separate wrapper array is
+ *   needed to bound them, since this Record's own array already is
+ *   one.
+ */
+function parseRecordArray(arr) {
+  let i = 0;
+  let typeId;
+  let localNamespace;
+  let ndefId;
+
+  if (Buffer.isBuffer(arr[0]) && isTypeId(arr[1])) {
+    localNamespace = arr[0];
+    typeId = arr[1];
+    i = 2;
+  } else if (isTypeId(arr[0])) {
+    typeId = arr[0];
+    i = 1;
+  }
+
+  if (typeId !== undefined && i < arr.length && typeof arr[i] === 'string') {
+    ndefId = arr[i];
+    i++;
+  }
+
+  // Skip unrecognized items (forward-compat padding) until the map.
+  while (i < arr.length && !isMapItem(arr[i])) {
+    i++;
+  }
+
+  let map = null;
+  if (i < arr.length && isMapItem(arr[i])) {
+    // Normalize: the cbor library decodes empty maps as plain {}, but
+    // downstream code expects Map instances with .get()/.set().
+    map =
+      arr[i] instanceof Map ? arr[i] : new Map(Object.entries(arr[i]).map(([k, v]) => [Number(k), v]));
+    i++;
+  }
+
+  const subrecords = i < arr.length ? parseRecordList(arr.slice(i)) : undefined;
+
+  return {
+    typeId: typeId ?? null,
+    localNamespace,
+    ndefId,
+    subrecords,
+    map,
+    ignored: typeId === undefined,
+  };
+}
+
+/**
+ * Check if a decoded CBOR item is a valid typeID: an unsigned integer
+ * (uint, major type 0) — the only valid typeID shape. Byte string and
+ * text string Type IDs (decentralized/self-certifying and "Named ID,"
+ * respectively) were both retired; see docs/FINDINGS.md.
  */
 function isTypeId(item) {
   if (typeof item === 'number' && Number.isInteger(item) && item >= 0) {
@@ -256,35 +242,6 @@ function isTypeId(item) {
     return true;
   }
   return false;
-}
-
-/**
- * Check if a decoded CBOR item is a namespace-pairing prefix item: a
- * definite-length array of exactly 2 elements, [namespace, typeId],
- * where namespace is a byte string (the only valid Namespace ID shape —
- * same convention as the container discriminator's namespace value,
- * §3.5; there is no Allocated/uint namespace tier) and typeId is a uint
- * (even = Allocated/global, odd = Scoped to this specific namespace,
- * overriding any container-level ambient namespace for this one Record).
- *
- * Purely structural: this function does not interpret what a namespace
- * IS or how it affects lookup — it only recognizes the shape so Phase 1
- * can pull the nested typeId out for routing. Interpretation (whether
- * the paired namespace actually scopes this typeId, and resolving
- * "local override vs. container-ambient") is header.js's job. A uint in
- * the *namespace* slot is not recognized at all — this item simply
- * isn't a namespace-pairing item then, and falls through to being
- * treated as an ordinary unrecognized prefix item, same as any other
- * unrecognized 2-element array.
- */
-function isNamespacePairing(item) {
-  if (!Array.isArray(item) || item.length !== 2) return false;
-  const [ns, id] = item;
-  const nsValid = Buffer.isBuffer(ns);
-  const idValid =
-    (typeof id === 'number' && Number.isInteger(id) && id >= 0) ||
-    (typeof id === 'bigint' && id >= 0n);
-  return nsValid && idValid;
 }
 
 /**
@@ -329,13 +286,15 @@ function applyCriticality(record, knownKeys) {
 
 /**
  * Decode a single Record from raw bytes — used for inner Records a
- * Wrapper Record (§4.1) unwraps, which are just "the encoded bytes
- * of another Record", not a fresh top-level QDEF container.
+ * Wrapper Record (§4.1) unwraps, which are just "the encoded bytes of
+ * another Record" (now: the encoded bytes of that Record's own CBOR
+ * array), not a fresh top-level QDEF container.
  */
 function decodeRecordBytes(buf) {
   const items = cbor.decodeAllSync(buf);
-  const records = parseRecords(items);
-  return records[0] || { typeId: null, map: null, ignored: true };
+  const [first] = items;
+  if (Array.isArray(first)) return parseRecordArray(first);
+  return { typeId: null, localNamespace: undefined, ndefId: undefined, subrecords: undefined, map: null, ignored: true };
 }
 
 module.exports = {

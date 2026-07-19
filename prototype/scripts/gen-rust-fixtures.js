@@ -53,12 +53,12 @@ const wifiUnknownOddKeyContainer = core.encodeContainer([
 
 // --- Record with no typeID prefix: ignored (not routed) ---
 // Manually constructed (not via encodeContainer) to keep the mandatory
-// discriminator explicit here: uint 0 (no namespace), then a bare map
-// with no preceding typeID item.
+// discriminator explicit here: uint 0 (no namespace), then a Record
+// array whose own first (and only) element is a bare map, with nothing
+// namespace/typeId-shaped before it.
 
 const noTypeidDiscBytes = cbor.encodeCanonical(0);
-const noTypeidMap = new Map([[0, 'SSID']]);
-const noTypeidBytes = cbor.encode(noTypeidMap);
+const noTypeidBytes = cbor.encodeCanonical([new Map([[0, 'SSID']])]);
 const noTypeidContainer = Buffer.concat([core.MAGIC, noTypeidDiscBytes, noTypeidBytes]);
 
 // --- Bare NDEF/own-URI-scheme sequence: no magic, no discriminator ---
@@ -209,20 +209,16 @@ const headerContainer = core.encodeContainer(
   Buffer.from('a9d6e1f30b7c4482', 'hex'),
 );
 
-// --- A byte string in the typeID position: no longer recognized ---
-// Decentralized (byte-string) Type IDs were retired entirely (docs/
-// FINDINGS.md) -- a typeID-accumulation position now only recognizes a
-// bare uint or a namespace-pairing array. A byte string there is just an
-// ordinary unrecognized prefix item, so this Record loses its only
-// typeID and ends up unroutable (ignored).
+// --- A byte string with nothing valid typeId-shaped following it: not ---
+// recognized as a namespace, and there is no other legal bare typeId
+// shape a byte string could be -- this Record loses its only typeID and
+// ends up unroutable (ignored). Built directly (encodeRecordBytes has no
+// way to omit typeId) to keep the fixture's intent explicit: a bare byte
+// string immediately followed by a map, nothing else.
 
-// encodeRecordBytes has no direct way to encode a bare byte string as
-// the *only* prefix item (typeId is always required and always uint) --
-// build this one directly to keep the fixture's intent explicit: a bare
-// byte string immediately followed by a map, nothing else.
-const byteStringTypeIdBytes = Buffer.concat([
-  cbor.encodeCanonical(Buffer.from('A7F90B3C', 'hex')),
-  cbor.encodeCanonical(new Map([[0, 'decentralized payload']])),
+const byteStringTypeIdBytes = cbor.encodeCanonical([
+  Buffer.from('A7F90B3C', 'hex'),
+  new Map([[0, 'decentralized payload']]),
 ]);
 const byteStringTypeIdContainer = Buffer.concat([
   core.MAGIC,
@@ -236,10 +232,10 @@ const byteStringTypeIdContainer = Buffer.concat([
 // following the primary is just an ordinary unrecognized prefix item,
 // silently skipped in Phase 2, not accumulated as a "backup."
 
-const secondTypeIdNotAccumulatedBytes = Buffer.concat([
-  cbor.encodeCanonical(rt.WIFI_TYPE),
-  cbor.encodeCanonical(900), // would have been a backup, once
-  cbor.encodeCanonical(new Map([[0, 'SSID'], [2, 'pass'], [4, 2]])),
+const secondTypeIdNotAccumulatedBytes = cbor.encodeCanonical([
+  rt.WIFI_TYPE,
+  900, // would have been a backup, once
+  new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]),
 ]);
 const secondTypeIdNotAccumulatedContainer = Buffer.concat([
   core.MAGIC,
@@ -247,14 +243,13 @@ const secondTypeIdNotAccumulatedContainer = Buffer.concat([
   secondTypeIdNotAccumulatedBytes,
 ]);
 
-// --- Namespace-pairing prefix item (§3.1) ---
-// A Record's own prefix MAY declare/override its namespace inline via a
-// 2-element array [namespace, typeId], independent of the container
-// discriminator's ambient one. Purely structural for the mandatory
-// core: it only needs to recognize the 2-element-array shape and pull
-// out the nested typeId, never learn what a namespace means. This
-// fixture pairs a decentralized (byte-string) namespace with a scoped
-// (odd) typeId.
+// --- Namespace prefix (§3.1) ---
+// A Record's own array MAY lead with a byte string namespace immediately
+// followed by its typeId, independent of the container discriminator's
+// ambient one. Purely structural for the mandatory core: it only needs
+// to recognize "byte string, then a valid typeId" at the front of the
+// array, never learn what a namespace means. This fixture pairs a
+// decentralized (byte-string) namespace with a scoped (odd) typeId.
 
 const namespacePairingContainer = core.encodeContainer([
   {
@@ -264,12 +259,13 @@ const namespacePairingContainer = core.encodeContainer([
   },
 ]);
 
-// --- A uint in the namespace-pairing slot: no longer recognized ---
-// There is no Allocated (uint) namespace tier -- namespace values are
-// byte-string only (docs/FINDINGS.md). [100, 1] is therefore not a
-// namespace-pairing item at all; it falls through to being an ordinary
-// unrecognized prefix item, so this Record loses its only typeID and
-// ends up unroutable (ignored), not just its namespace.
+// --- A uint where a namespace was intended: read directly as this ---
+// Record's own typeID instead. Namespace recognition requires the
+// array's first element to be a byte string; a uint there is
+// unconditionally valid typeID shape on its own, so there is no
+// "malformed namespace" state left over -- it's simply this Record's
+// typeID (100), and the originally-intended typeID (1) becomes a
+// skipped stray item.
 
 const uintNamespaceSlotUnrecognizedContainer = core.encodeContainer([
   {
@@ -279,10 +275,10 @@ const uintNamespaceSlotUnrecognizedContainer = core.encodeContainer([
   },
 ]);
 
-// --- Namespace-pairing typeID immediately followed by the NDEF-ID text ---
-// string (§3.1): both prefix concepts stack cleanly -- the pairing item
-// contributes the namespace and typeId, the following bare text string
-// is recognized as this Record's NDEF-ID-equivalent.
+// --- Namespace prefix immediately followed by the NDEF-ID text string ---
+// (§3.1): both prefix concepts stack cleanly -- namespace and typeId
+// contribute the first two array elements, the following bare text
+// string is recognized as this Record's NDEF-ID-equivalent.
 
 const namespacePairingWithNdefIdContainer = core.encodeContainer([
   {
@@ -307,68 +303,54 @@ const ndefIdContainer = core.encodeContainer([
   },
 ]);
 
-// --- Embedded Records (§3.1's `ID[]{}` shape) ---
-// An optional array of Records positioned between a Record's typeID/
-// NDEF-ID prefix items and its mandatory field Map, parsed with the
-// exact same Record grammar as the top-level Sequence -- recursion, not
-// a new shape. Resolves the TagDrop Media Preview/Payload correlation
+// --- Subrecords (§3.1's generalized `ID[]{}` shape) ---
+// Every Record is now exactly one self-delimited CBOR array; everything
+// past its own field Map, for the rest of that array, is itself a
+// nested Record, recursively the same grammar -- no separate wrapper
+// array needed. Resolves the TagDrop Media Preview/Payload correlation
 // problem without relying on Record position. See docs/DESIGN.md and
 // docs/FINDINGS.md.
 
-const embeddedRecordsContainer = core.encodeContainer([
+const subrecordsContainer = core.encodeContainer([
   {
     typeId: 20,
     fields: new Map([[0, 'image/png']]),
-    embeddedRecords: [{ typeId: 2, fields: new Map([[0, Buffer.from('fragment')]]) }],
+    subrecords: [{ typeId: 2, fields: new Map([[0, Buffer.from('fragment')]]) }],
   },
 ]);
 
-// --- Embedded Records: the array's own members may carry an NDEF-ID ---
-// and a namespace-pairing typeID -- the same grammar, applied one level
-// deeper, not a reduced one.
+// --- Subrecords: a subrecord may itself carry an NDEF-ID, a namespace, ---
+// and its own further subrecords -- the same grammar, applied
+// recursively, not a reduced one.
 
-const embeddedRecordsWithNdefIdAndNamespaceContainer = core.encodeContainer([
+const subrecordsWithNdefIdAndNamespaceContainer = core.encodeContainer([
   {
     typeId: 21,
     fields: new Map(),
-    embeddedRecords: [
+    subrecords: [
       {
         typeId: 1,
         localNamespace: Buffer.from('cdcdcdcd', 'hex'),
         ndefId: 'inner-record-1',
         fields: new Map([[0, 'payload']]),
+        subrecords: [{ typeId: 22, fields: new Map([[0, 'leaf']]) }],
       },
     ],
   },
 ]);
 
-// --- Embedded Records: an array after a map between two SIBLING top- ---
-// level records is unaffected -- the rejected `ID{}[]` shape considered
-// and dropped. Once a record's map closes, an array right after it is
-// the START of the next record (namespace-pairing here), never a
-// trailing embedded-Records array, since the embedded-Records slot only
-// exists BEFORE the map, never after.
+// --- Subrecords: every Record is self-bounded by its own array, so a ---
+// Record with subrecords followed by a plain sibling Record never bleed
+// into each other -- no position-dependent boundary logic is needed
+// anywhere anymore.
 
-const embeddedRecordsSiblingNotSwallowedContainer = core.encodeContainer([
-  { typeId: 22, fields: new Map([[0, 'A']]) },
+const subrecordsSiblingContainer = core.encodeContainer([
+  {
+    typeId: 23,
+    fields: new Map([[0, 'A']]),
+    subrecords: [{ typeId: 2, fields: new Map([[0, 1]]) }],
+  },
   { typeId: 1, localNamespace: Buffer.from('cdcdcdcd', 'hex'), fields: new Map([[0, 'B']]) },
-]);
-
-// --- Embedded Records: an unrecognized item inside the array is ---
-// skipped, the same forward-compat tolerance the top-level Sequence
-// already has. Built directly (not via the embeddedRecords builder,
-// which never emits a stray item) to keep the fixture's intent explicit:
-// typeId(24) + [uint 2, "stray-forward-compat-item", {0: "payload"}] + {}.
-
-const embeddedRecordsStrayItemBytes = Buffer.concat([
-  cbor.encodeCanonical(24),
-  cbor.encodeCanonical([2, 'stray-forward-compat-item', new Map([[0, 'payload']])]),
-  cbor.encodeCanonical(new Map()),
-]);
-const embeddedRecordsStrayItemContainer = Buffer.concat([
-  core.MAGIC,
-  cbor.encodeCanonical(0),
-  embeddedRecordsStrayItemBytes,
 ]);
 
 // --- Output ---
@@ -426,20 +408,10 @@ console.log(rustBytes('NAMESPACE_PAIRING_WITH_NDEF_ID_CONTAINER', namespacePairi
 console.log();
 console.log(rustBytes('NDEF_ID_CONTAINER', ndefIdContainer));
 console.log();
-console.log(rustBytes('EMBEDDED_RECORDS_CONTAINER', embeddedRecordsContainer));
+console.log(rustBytes('SUBRECORDS_CONTAINER', subrecordsContainer));
 console.log();
 console.log(
-  rustBytes(
-    'EMBEDDED_RECORDS_WITH_NDEF_ID_AND_NAMESPACE_CONTAINER',
-    embeddedRecordsWithNdefIdAndNamespaceContainer,
-  ),
+  rustBytes('SUBRECORDS_WITH_NDEF_ID_AND_NAMESPACE_CONTAINER', subrecordsWithNdefIdAndNamespaceContainer),
 );
 console.log();
-console.log(
-  rustBytes(
-    'EMBEDDED_RECORDS_SIBLING_NOT_SWALLOWED_CONTAINER',
-    embeddedRecordsSiblingNotSwallowedContainer,
-  ),
-);
-console.log();
-console.log(rustBytes('EMBEDDED_RECORDS_STRAY_ITEM_CONTAINER', embeddedRecordsStrayItemContainer));
+console.log(rustBytes('SUBRECORDS_SIBLING_CONTAINER', subrecordsSiblingContainer));
