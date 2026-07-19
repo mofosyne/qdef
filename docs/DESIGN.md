@@ -1313,6 +1313,36 @@ it first looks like, and that is the finding:
   still open). Coverage identification is the same signed-bytes/verified-
   bytes divergence hazard this project's origin story (TagDrop's signing
   bug) is a caution about, so it must not be hand-waved.
+- **Sign-as-nested-subrecord (TagDrop's own real shape, considered and
+  declined).** A real adopter data point, not a hypothetical third
+  form: TagDrop shipped signing in its own namespace as a small Content
+  Signature Record nested as a *subrecord of the specific Record it
+  signs* (their SPEC.md v9 §3.1a/§10;
+  [issue #32](https://github.com/mofosyne/qdef/issues/32)) — cheaper
+  than the hash-list sibling form for a fixed, known coverage set (no
+  `N × 32` bytes of hashes to store or check), but less general:
+  verifiable only by a decoder that already knows the app-specific
+  coverage convention (TagDrop's actual signed set is three sibling
+  Records, only one of which the signature happens to nest inside —
+  the nesting position says where the signature bytes travel on the
+  wire, not what's covered). Declined as QDEF's own primitive because
+  it loses the one property a generic QDEF-level Sign mechanism exists
+  to provide: "any QDEF-aware decoder can check this," not just one
+  that already speaks the specific app's convention. Recorded here as
+  a live tradeoff future adopters weighing the same choice should see,
+  not as evidence the hash-list direction was wrong.
+
+**A third coverage-strategy precedent, for the record.** NFC Forum's
+own Signature RTD (a sibling NDEF record, same broad family as
+sign-as-sibling) uses yet another rule: positional, not hash-based — a
+Signature record covers all records preceding it since the start of
+the message or the previous Signature record. Between it, TagDrop's
+nested form, and the hash-list direction planned below, that's three
+distinct coverage strategies now on record (position-since-checkpoint,
+position-of-immediate-nesting, and content-hash-list) — cited as
+design precedent, not as evidence of real-world demand for any one of
+them; issue #32 found no solid data on how widely Signature RTD is
+actually deployed.
 
 **Coverage-identification scheme — direction decided, not yet built.**
 Cover by content hash of each covered Record's own canonical bytes,
