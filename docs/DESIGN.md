@@ -1081,6 +1081,59 @@ Wrapping literal NDEF bytes would add NDEF's tag-session-oriented framing
 atomically in a single scan) on top, without saving QDEF's actual
 contribution.
 
+## Checked against binary-XML precedent (EXI, Fast Infoset, YANG/CBOR, ASN.1/BER, SenML) — nothing to import
+
+Once Records became recursive, self-delimited, tagged nodes with
+attributes and children (the array-wrapping entry above), the shape is
+architecturally a tagged tree — worth checking directly against the
+real prior art for compact tree-structured binary encoding, rather than
+assuming QDEF's version is either novel or missing something obvious.
+
+**EXI (W3C) and Fast Infoset (ITU-T X.891)** are the actual "binary
+XML" standards. Both get their compactness from being
+schema-dependent — EXI compiles a grammar from an XML Schema/DTD so an
+element name encodes as "the Nth possible child at this grammar
+position" in a couple of bits; Fast Infoset leans on string tables built
+up during a session. **YANG/CBOR (RFC 9254)** is IETF's closer,
+CBOR-native answer to the same problem: a numeric SID (Schema Item
+iDentifier) stands in for a tag name, requiring a shared SID file — a
+compiled schema dictionary distributed out of band.
+
+**All three's core lever is schema-sharing, which QDEF's actual
+constraint rules out categorically, not just declines as unnecessary
+overhead.** QDEF's job is routing content between apps that have never
+coordinated — a QR code or NFC tag decoded by a generic scanner with no
+prior relationship to whatever app encoded it. Importing a
+grammar-compiled or dictionary-based tag scheme would require exactly
+the negotiation QDEF exists to avoid.
+
+**Checked whether anything schema-independent was still worth taking —
+found nothing missing, only mechanisms QDEF had already reinvented on
+its own:**
+
+- ASN.1's extensibility marker (schema declares "more fields may
+  follow, skip unknowns") — §3.2's even/odd criticality does the same
+  job without a schema to declare it in.
+- EXI's optional self-contained-fragment mode (an element independently
+  decodable without full document context) — every QDEF Record is now
+  *unconditionally* self-bounded by its own array header (the
+  array-wrapping entry above), the same property as EXI's opt-in mode,
+  as the default rather than an extra feature to enable.
+- SenML's Base Name (RFC 8428 — a shared prefix applied to a flat list
+  of records, any one able to locally override it) — architecturally
+  the same pattern as §3.5's ambient namespace with per-Record
+  override, arrived at independently for a similar problem (compact
+  sensor readings, not markup) by a different IETF working group.
+- DER's canonical encoding (deterministic bytes for a given value) —
+  §3.4 already requires RFC 8949's canonical CBOR for the identical
+  reason (stable hashes across independent encoders).
+
+**Conclusion: no mechanism adopted from this comparison.** CBOR itself
+is already a simplified descendant of the same ASN.1/BER lineage this
+comparison traces (RFC 8949 says as much); QDEF's own even/odd rule and
+self-bounded Records are its answer to what schema-driven formats get
+for free from a schema they don't have access to.
+
 ## Encrypt key provisioning (resolved — Algorithm/Key Algorithm fields, borrowing COSE)
 
 Type 4 originally named a cipher only in a comment (`e.g. AES-GCM`),
