@@ -12,11 +12,59 @@ information at once — a Wi-Fi credential and an event ticket on the same
 sticker, for example — where each piece is parsed by whichever app
 recognizes its type and ignored by every app that doesn't.
 
+## What a QDEF payload actually looks like
+
+A single scan carrying a Wi-Fi credential *and* a fallback URL — two
+unrelated Records, each independently routable, in one 74-byte payload
+(CBOR diagnostic notation, [cbor.me](https://cbor.me) style):
+
+```
+51 44 45 46                              # "QDEF" magic (4 bytes,
+                                          #   NFC drops this -- see below)
+00                                        # discriminator: no namespace
+                                          #   declared (§3.5)
+
+82                                        # Record 1: array(2)
+   18 64                                 #   typeID: 100 (Wi-Fi, illustrative)
+   a3                                    #   field map(3)
+      00   6e 4d 79 20 43 6f 66 66 65 65 20 53 68 6f 70
+                                         #     key 0: "My Coffee Shop"
+      02   68 67 75 65 73 74 31 32 33   #     key 2: "guest123"
+      04   02                            #     key 4: 2 (WPA2)
+
+82                                        # Record 2: array(2)
+   0a                                    #   typeID: 10 (Open/Hint URI,
+                                          #     standard record type)
+   a1                                    #   field map(1)
+      00   78 1f 68 74 74 70 73 3a 2f 2f 65 78 61 6d 70
+           6c 65 2e 63 6f 6d 2f 63 6f 66 66 65 65 2d 6d
+           65 6e 75
+                                         #     key 0: "https://example.com/coffee-menu"
+```
+
+In JSON-ish terms, that's:
+
+```jsonc
+// magic + discriminator: "no namespace, plain global Type IDs"
+[
+  [100, { "0": "My Coffee Shop", "2": "guest123", "4": 2 }],
+  [10,  { "0": "https://example.com/coffee-menu" }]
+]
+```
+
+A Wi-Fi app reads Record 1 and ignores Record 2; a generic scanner with
+no Wi-Fi support at all still offers the fallback URL from Record 2.
+Neither app needs to know the other's Type exists — this is the whole
+point, the same one [NDEF](https://en.wikipedia.org/wiki/NFC_Data_Exchange_Format)
+already solves for NFC (see the FAQ below). Full grammar in
+[`docs/QDEF-SPEC.md`](docs/QDEF-SPEC.md) §3; more worked examples in
+[`docs/EXAMPLES.md`](docs/EXAMPLES.md).
+
 ## Status
 
 **Draft, not yet implemented as a reference library — but the design is
 validated, not just written.** The core wire format and the full standard
-library (Split, Compress, Encrypt, Fallback Hint, Media Payload) are all
+library (Split, Compress, Encrypt, Open/Hint URI, Media Payload) are all
 round-trip tested, across two independent throwaway prototypes:
 
 - [`/prototype`](prototype) (Node) — real code encoding and decoding real
@@ -55,9 +103,9 @@ QDEF is:
 - **Layered**, on purpose: a minimal mandatory *core* (routing and
   criticality only) plus a separate, optional *standard library*
   (splitting a payload across multiple codes, compression, encryption, a
-  generic fallback hint) — the same relationship C-the-language has with
-  libc. A minimal implementer never needs a compression or reassembly
-  library just to route Records.
+  URI to open or fall back to) — the same relationship C-the-language
+  has with libc. A minimal implementer never needs a compression or
+  reassembly library just to route Records.
 - **Usable by a deeply constrained scanner.** Every Record's type is
   readable at zero decode cost from a plain map key — no CBOR tag support
   needed, no semantic-tag-aware library at all. QDEF doesn't use CBOR tags
@@ -76,6 +124,48 @@ prefix already does the recognition job QDEF's magic header exists for.
 QDEF earns its place on carriers with no pre-existing dispatch: a plain
 byte-mode QR with no URI at all, or an NFC payload with no app-specific
 MIME type already routing it.
+
+## FAQ
+
+**Why not just use NDEF?** NDEF already solves multi-record framing —
+but only for NFC. There's no equivalent for a plain byte-mode QR, Data
+Matrix, or Aztec code, and that gap is what QDEF's magic bytes exist to
+fill. Over NFC itself, QDEF isn't a replacement for NDEF at all: it
+rides inside NDEF's own MIME-type record (`application/vnd.qdef`) with
+no magic bytes and no discriminator needed (§2) — NDEF already did the
+recognition job.
+
+**Why not a plain text scheme, like `WIFI:S:...;;` or `BEGIN:VCARD`?**
+Those are rigid and single-purpose — one scheme, one kind of data, no
+way to carry a second, unrelated piece of information in the same code.
+They're also text, which costs real bytes in a QR's alphanumeric mode
+(base32/base41-style encoding overhead) that a binary format like QDEF
+never pays.
+
+**Why CBOR instead of JSON or Protobuf?** JSON is text — the same
+byte-cost problem as the text schemes above. Protobuf needs an
+externally shared `.proto` schema just to parse a message at all, which
+conflicts with QDEF's whole premise: unrelated applications, with no
+shared history, each recognizing only the Records they care about and
+skipping the rest with zero schema knowledge. CBOR's self-describing
+major-type framing is exactly the property that skip works on (§3.1).
+
+**Isn't this just binary XML?** Checked, not assumed — see
+[`docs/DESIGN.md`](docs/DESIGN.md)'s "Checked against binary-XML
+precedent" entry. EXI, Fast Infoset, and YANG/CBOR all lean on a shared
+schema for their real compactness gains, which is the same conflict
+Protobuf has with QDEF's zero-coordination requirement. ASN.1/BER (CBOR's
+own actual lineage) and SenML's Base Name (independently convergent with
+QDEF's own ambient-namespace design, §3.5) are the closer relatives.
+Nothing found there worth importing.
+
+**Is this ready to use today?** No — draft status. The design is
+validated by two independent throwaway prototypes round-tripping the
+full wire format (see Status, above), but neither is a reference
+library, no implementation has shipped in production, and Record Type
+IDs in the spec are illustrative placeholders, not an allocated
+registry yet. See [`docs/ROADMAP.md`](docs/ROADMAP.md) for what that
+actually blocks.
 
 ## Repository layout
 

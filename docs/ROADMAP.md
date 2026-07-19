@@ -29,8 +29,9 @@ trusting a number in this document to stay current.
 - **Encrypt** (AES-GCM-class ciphers, with optional Algorithm/Key
   Algorithm fields borrowing IANA's COSE Algorithms registry rather than
   inventing one)
-- **Fallback Hint** (a URI a generic tool can follow even with no
-  QDEF-specific support)
+- **Open/Hint URI** (a URI a generic tool can follow even with no
+  QDEF-specific support — as a lone primary URI or as a fallback
+  alongside other Records)
 - **Media Payload** (a standard media blob — image, document — tagged
   with IANA's CoAP Content-Formats registry or a plain MIME string)
 - **App Route** (letting a generic scanner offer to launch a specific
