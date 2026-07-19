@@ -38,6 +38,11 @@ trusting a number in this document to stay current.
   using a domain-verified identifier rather than an unverifiable string
   claim — plus a second, hash-derived form for scanners that just need
   a fast, no-authority misread pre-filter ahead of reassembly)
+- **Media Preview** (content identification — media type, content hash,
+  filename, label — with the identified content itself riding as a
+  subrecord, typically Media Payload; came from a live TagDrop proposal,
+  refined over two rounds to fix a nesting-order bug that would have
+  broken old Split-only decoders' reassembly)
 
 Every one of these round-trips in the Node prototype; none is spec-text
 only.

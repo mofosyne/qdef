@@ -1097,6 +1097,44 @@ Wrapping literal NDEF bytes would add NDEF's tag-session-oriented framing
 atomically in a single scan) on top, without saving QDEF's actual
 contribution.
 
+## Media Preview (Type 14) — closes the loop on the correlation problem subrecords were built to solve
+
+TagDrop's original four-Type Content-Preview/Body split was the concrete
+case that motivated subrecords in the first place (see "Every Record
+became a self-delimited array," above). Once subrecords shipped, TagDrop
+proposed the natural resolution: one standard Type (14) carrying
+identification fields (media type, content hash prefix, filename, label)
+with the identified content riding as its own subrecord, typically §4.3
+Media Payload — no Bundle Wrapper, no positional correlation, and Media
+Payload's own minimal field set stays untouched.
+
+TagDrop's first draft nested the wrong way for the multi-code case: Media
+Preview outermost, Split nested inside it. That inverts §4.1's own
+outermost-Split convention, and it's not just a style objection — Media
+Preview's typeID is even (critical), so an old decoder that has never
+heard of Type 14 aborts the *whole* Record, including the Split fragment
+nested inside it, losing the ability to reassemble a group it otherwise
+knows exactly how to handle. Flipping it — Split outermost, Media Preview
+as *its* subrecord — costs nothing (`wrappers.js`'s `splitDecode` never
+inspects `subrecords` at all) and restores the property: an old Split-only
+decoder ignores the unrecognized subrecord and reassembles regardless
+(verified in `prototype/test/media-preview.test.js`, including a
+`resolveStack` call whose `knownKeysRegistry` has no entry for Type 14 at
+all).
+
+A second, independent bug surfaced during review: an earlier revision of
+the multi-item example wrapped two sibling Records in an enclosing array
+— `[ [14, ...], [14, ...] ]` — which doesn't round-trip. QDEF's container
+is a CBOR *Sequence* of Records (RFC 8742), not an array of them; the
+wrapped form decodes as one malformed top-level Record (its first element
+is an array, not a valid namespace-or-typeId), not two. Confirmed via the
+reference decoder: encoding that shape and decoding it returns `{typeId:
+null, ignored: true}`. Fixed by dropping the enclosing brackets — two
+independent top-level CBOR items, exactly the same pattern already
+rejected in "Do we win anything by wrapping the root in an array?"
+(unrecorded chat discussion, no doc entry — the answer was no, for the
+same ambiguity reason this bug demonstrates concretely).
+
 ## Checked against binary-XML precedent (EXI, Fast Infoset, YANG/CBOR, ASN.1/BER, SenML) — nothing to import
 
 Once Records became recursive, self-delimited, tagged nodes with
