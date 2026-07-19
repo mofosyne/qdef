@@ -9,6 +9,19 @@ anyone deciding how to resolve what's still open. See
 [`FINDINGS.md`](FINDINGS.md) for the empirical, prototype-driven
 discoveries that prompted many of these decisions.
 
+**If this document and `QDEF-SPEC.md` ever disagree, `QDEF-SPEC.md` is
+correct.** This is a chronological trail, not a maintained snapshot —
+entries describe the mechanism *as it was when written*, and a later
+entry can supersede an earlier one without the earlier one being
+rewritten (only marked, when someone happens to notice). A section
+reached by searching rather than reading start to finish may describe
+something already replaced. Check for a **Superseded** note at the top
+of a section before treating its wire-shape details as current, and
+when in doubt, verify directly against `QDEF-SPEC.md` rather than
+against prose here — that includes for an LLM agent proposing a change
+against this repo: treat this file as historical context, never as a
+source of truth for the current wire format.
+
 ## Registry governance — allocation shape proposed, authority still open
 
 Who allocates application-specific Record Type IDs (`100`+) is still
@@ -109,6 +122,20 @@ that's the actual line, not tier width or magnitude:**
 |                        |                   | register    |             |
 +------------------------+------------------+-------------+-------------+
 ```
+
+**Why Type ID `0` sits unassigned in the Standards Action tier.** It
+isn't reserved for anything — it's simply the one number in `0`–`22`
+with a past. An earlier design used `0` for an optional leading
+container-level header Record; a decoder couldn't structurally tell
+"header present" from "header absent, this is Record 1's own prefix
+typeID `0`" (FINDINGS.md #26), which is why the container discriminator
+(spec §3.5) exists instead — mandatory, positionally fixed, dispatched
+by CBOR major type rather than by being typeID-prefixed at all. That
+fix means `0` carries no live ambiguity risk today and could be
+assigned to an ordinary standard Record Type same as `14`–`22`; nothing
+has needed it yet. Future container-level (not per-Record) metadata has
+its own growth point already — the discriminator's extensible map form
+— so `0` isn't earmarked as its future home either.
 
 There is no longer a Decentralized (byte string) or Named (text string)
 row here — both Type ID forms were retired entirely once namespace-
@@ -751,6 +778,282 @@ existed that neither was checked against, because the prefix-item slot
 it reuses didn't become available until a much later, unrelated
 redesign freed it.
 
+## Embedded Records (§3.1's `ID[]{}` shape) — resolved, replacing a TagDrop proposal that relied on Record position
+
+**Superseded.** `ID[]{}` — a single optional array positioned before a
+Record's mandatory field Map — was replaced shortly after by making
+*every* Record its own self-delimited CBOR array, with subrecords as
+ordinary trailing elements needing no dedicated array slot at all (see
+"Every Record became a self-delimited array" below). The problem this
+entry solves (TagDrop's positional Preview/Body correlation) and the
+reasoning behind rejecting positional correlation are still exactly
+right; only the specific wire shape changed. Kept for the real trail.
+
+TagDrop proposed a Media Preview standard record type (identification:
+media type, content hash, filename) as a plain sibling Record, correlated
+with its Body (a Media Payload or a Split fragment) **positionally**:
+"the first Record in the Sequence is always the Preview, the second is
+always the Body."
+
+**Positional correlation doesn't survive two things already true of
+QDEF.** First, §3.2's abort is per-Record, not per-container: an
+unrecognized critical Preview drops out of the Sequence, and the real
+Body — previously "index 1" — is now sitting at "index 0," with no
+coherent way to say what "index 0 means Preview" should do once the
+thing that used to occupy index 0 is gone. Every other QDEF correlation
+mechanism (`group_id`, namespace pairing, NDEF-ID) survives partial loss
+because none of them depend on index. Second, Fallback Hint (§4.2) is
+already a real, shipped plain sibling Record with no position
+requirement — an encoder emitting it before the content Records (a
+reasonable choice) silently breaks "Record 0 is Preview," and TagDrop
+already uses Fallback Hint today, so this isn't hypothetical. Both
+failures are the same shape as FINDINGS.md #26's retired optional
+Type-`0` header: implicit meaning inferred from position, invisible on
+the happy path, discoverable only by tracing a failure.
+
+**The common case needs nothing new.** One content item per container —
+Preview and Body/fragment as ordinary plain siblings, each dispatched by
+its own Type ID, any order — already fixes both problems at zero extra
+bytes, the same way Fallback Hint already coexists with anything else.
+The only case plain sibling dispatch can't resolve is more than one
+content item sharing a container (two files multiplexed into one NFC
+payload, two Split groups sharing a code): nothing then disambiguates
+which Preview belongs to which Body. That's the one place explicit
+grouping is structurally required.
+
+**Resolved as a new optional Phase-1 item, not a new Wrapper Type ID.**
+A definite-length array positioned between the typeID/NDEF-ID prefix
+items and the mandatory field Map, whose elements parse with the *same*
+Record grammar already defined for the top-level Sequence — recursion,
+not a second grammar. This was checked against, and preferred over,
+generalizing Wrapper Records (§4.1) into a "Bundle" holding a nested
+CBOR Sequence inside an opaque byte string: the array form needs no
+Type ID allocation, no byte-string re-parse pass, and stays fully
+legible to a generic CBOR viewer at any nesting depth, where the
+byte-string form is opaque until a QDEF-aware tool re-decodes it.
+
+**Why the field Map stays mandatory, even when an embedded-Records array
+precedes it.** The alternative considered — letting the array itself
+optionally *replace* the Map, terminating the Record with no Map at all
+— was rejected because it makes a Record's terminator shape
+state-dependent: a schema-blind tool wanting only the simplest possible
+rule for finding Record boundaries ("a Record always ends at a Map")
+would need the full Phase-1 state machine to avoid misreading one
+terminator shape as the other. Keeping the Map unconditional preserves
+that invariant at a cost of one byte (`0xA0`) on a Record with nothing
+else to say — the same trade the mandatory container discriminator
+already made once, for the same reason (replacing the optional Type-`0`
+header, FINDINGS.md #26).
+
+**Why this is safe to add: it doesn't collide with anything already
+legal.** `typeID, [array]` with no Map yet was already malformed under
+the pre-existing grammar — a bare typeID has always required its own Map
+before anything else could start — so this claims previously-invalid
+byte patterns, not currently-valid ones.
+
+**Rejected: an array appearing *after* the Map (`ID{}[]`).** Once a
+Record's Map closes, Phase 1 resets and expects the next Record's typeID
+or namespace-pairing array — an array right there is already how a
+namespace-paired Record legitimately starts today. `Map, then array` is
+not an ambiguous pattern needing a tiebreaker; it already has a shipped
+meaning, and a second meaning for the same bytes would either silently
+reinterpret real containers or need its own marker — strictly worse than
+putting the array before the Map instead.
+
+**Rejected: a reserved negative map key signaling "this field is an
+embedded-Records array."** Two variants were considered: one fixed key
+(bakes in one parity, hence one fixed criticality, and collapses
+multiple embedded roles into one undifferentiated bag) and any negative
+key (more flexible, but claims the entire negative-key space for a
+per-Type convenience). Both were dropped in favor of recognizing the
+shape structurally instead — the negative-key space stays reserved for
+genuine mandatory-core, type-independent metadata (FINDINGS.md #33's
+`extract_core_metadata` groundwork), not repurposed as a general
+per-Type "I have embedded content" flag.
+
+**Rejected: reserving key `0` as a Record's own typeID**, i.e. a
+self-contained `{0: typeId, ...}` Record with no separate prefix item at
+all. Every shipped standard record type already uses key `0` as an
+ordinary CRITICAL data field (Split's `group_id`, Compress's deflate
+bytes, Encrypt's nonce, Fallback Hint's URI) — reserving it for typeID
+would break all four, or force each to carry two different
+field-numbering schemes depending on whether it's top-level or embedded.
+
+**Rejected: an anonymous Record with no typeID at all** (`[]{}` or bare
+`{}`). A different kind of cut than the others — it removes the typeID
+itself, not just its framing, taking three load-bearing things with it
+simultaneously: routing (§3.1's dispatch has nothing to look up),
+criticality (even/odd lives entirely on the typeID; an anonymous Record
+can't tell an unaware decoder whether it's safe to skip or must abort),
+and field meaning (a Map's key numbering is Type-owned; with no Type, no
+key means anything to anyone). §3.5 already establishes the applicable
+precedent: an application MAY omit the *namespace* and rely on carrier
+isolation, but the typeID itself stays mandatory even there. An
+application wanting genuinely zero QDEF framing, meaning entirely
+implied by context, already has that option today — carry the bytes as
+their own NDEF record outside any QDEF Sequence entirely, rather than a
+QDEF Record shape that pays QDEF's framing cost with none of its
+benefits.
+
+**Field-embedded Records, kept only as a fallback.** A Type needing more
+than one independently-named embedded slot (both a "payload" and a
+separately-purposed "thumbnail", say) can still host the same
+embedded-Records array shape as an ordinary field's value inside its own
+Map, at a Type-owned key. This isn't a second mechanism — it's the same
+array shape, just hosted at a Type-owned position instead of the
+universal Phase-1 one. Most Types won't need it, since dispatch-by-
+typeID inside the Phase-1 array already covers "more than one embedded
+thing" as long as they don't need separate names.
+
+Prototyped end to end in `prototype/src/core.js` (`parseRecords`,
+`recordToItems`, called recursively) and `rust/qdef-core`
+(`Record::embedded_records`, reusing the `Records` iterator on the
+array's own element bytes at zero extra parsing cost — a definite-length
+CBOR array's payload is byte-for-byte identical in shape to a CBOR
+Sequence of the same items). See `prototype/test/embedded-records.test.js`
+and the embedded-Records tests in `rust/qdef-core/src/tests.rs`.
+
+## Every Record became a self-delimited array — resolved, replacing `ID[]{}` and the flat namespace-pairing array
+
+Raised while comparing `ID[]{}` (array before the mandatory Map) against
+`ID{}[]` (array after it): is there a real difference beyond parser
+complexity? The honest answer is that complexity was never the actual
+objection to `ID{}[]` — safety was. `map, then array` was already how a
+namespace-paired Record legitimately starts; giving it a second meaning
+isn't a lookahead problem, it's undecidable, since the bytes are
+identical either way regardless of how sophisticated the parser is.
+There's also no genuine memory-ordering argument between the two shapes:
+the array and the Map are each independently self-describing (no field
+in one depends on content in the other to be interpreted), so there's no
+"more natural to build in memory" case for putting the array before or
+after — the collision is the whole reason, not a proxy for it.
+
+**A companion proposal — a `NAMESPACE [stream]` construct for namespace
+sub-scoping, with every Record paying a mandatory trailing empty array
+as an end-of-record marker — surfaced a real, separate problem worth
+solving and a cost not worth paying.** Namespace-pairing being "paid
+fresh on every Record, no amortization" (already documented) is a real
+gap when several Records in one container want the same non-ambient
+namespace. But the proposed fix (a universal trailing `[]`, present even
+when empty) taxes the overwhelmingly common case — ordinary fields, no
+subrecords — to spare the rare one, backwards from the zero-cost-when-
+unused discipline this format has followed everywhere else (Wrapper
+Records opt-in, NDEF-ID free when absent, `ID[]{}` itself free when
+unused). The sub-scoping problem is real; that specific fix didn't earn
+its cost.
+
+**Resolved instead by making every Record its own self-delimited CBOR
+array — `[namespace?, typeId, ndefId?, map, subrecord*]`** — replacing
+both `ID[]{}` and the earlier 2-element `[namespace, typeId]` pairing
+array. What this actually buys, precisely: not easier interpretation of
+a Record you care about (Phase 1's own recognition logic is exactly as
+complex as before, just now scoped inside a known-length array) — the
+real win is that *skipping* a Record you don't care about becomes fully
+generic. A decoder no longer needs any Record-grammar knowledge at all
+to advance past an uninteresting Record; it skips one CBOR array, the
+same generic operation already used for skipping unknown field values.
+More importantly, it permanently closes the entire *category* of
+ambiguity this whole redesign kept running into at every level — the
+retired Type-`0` header, `ID[]{}` vs `ID{}[]`, "is this array a
+namespace pairing or the next Record starting" — every one of those was
+some version of "a boundary has to be inferred from context because
+nothing declares it explicitly." An explicit-length array around every
+Record means a boundary is never inferred again, at any nesting depth.
+
+**A genuine, unplanned robustness improvement fell out of this for
+free.** The previous design's `Records` iterator had a documented
+limitation: a malformed Record made the rest of the Sequence
+unrecoverable, since the parser couldn't determine where the malformed
+item ended. With every Record self-bounded, `Records::next` now
+determines a Record's total byte span *generically* (`skip_any_item` on
+its whole array — this only needs well-formed CBOR, not valid Record
+grammar) *before* attempting to interpret its contents. A Record whose
+own contents don't parse as valid Record grammar still can't corrupt
+discovery of the next sibling; only genuinely malformed CBOR (not just
+malformed Record grammar) still ends a Sequence early, which is a
+narrower, unavoidable failure mode. See `rust/qdef-core`'s
+`a_malformed_subrecord_does_not_corrupt_its_parent_or_any_sibling_top_level_record`
+test.
+
+**Cost is real but bounded and was checked, not assumed.** One
+array-header byte per Record, universally — but typical QDEF payloads
+carry one or two Records, so the realistic per-payload cost is small,
+not a multiplier across the whole format. Verified directly:
+`prototype/test/custom-scheme-carrier.test.js`'s byte-cost FINDING moved
+from 11/4 to 12/5 bytes (own-URI-scheme vs. shared-container path) —
+exactly one byte higher on each side, the relative saving of skipping
+magic/discriminator/namespace-scoping unaffected, since both paths now
+pay the same array-header cost once.
+
+**Namespace becomes a flat leading element instead of a nested pairing
+array, avoiding double-nesting.** Once every Record is already
+array-wrapped, keeping namespace-pairing as its own separate 2-element
+array (`[[namespace, typeId], {...}]`) would nest an array inside an
+array for no reason. `namespace` and `typeId` are simply the outer
+array's own first two elements when a namespace is present
+(`[namespace, typeId, {...}]`), recognized the same way as before: the
+first element's CBOR major type (byte string vs. uint) determines
+whether a namespace is present, and if it is, the *following* element
+must also validate as a typeId or the byte string isn't committed as a
+namespace at all (falls through, Record unroutable) — the same
+"malformed prefix means unroutable, not a crash" tolerance the pairing
+array always had.
+
+**One concrete behavior change worth being explicit about:** a uint
+where a namespace was intended is no longer detectably wrong — it's
+simply read as this Record's own typeId directly (since a bare uint is
+unconditionally valid typeId shape on its own), and the originally-
+intended typeId becomes a skipped stray item. The old 2-element pairing
+array could at least fail closed (the whole array falls through
+unrecognized, Record unroutable) when a uint appeared in the namespace
+slot; the flat form can't distinguish "no namespace, deliberately" from
+"namespace omitted by a bug" as cleanly. Accepted as a reasonable
+trade — the failure mode is still safe (a routable Record with a
+different typeId than intended, not a security hole), and the byte and
+conceptual savings from dropping a whole nested-array nesting apply to
+*every* namespaced Record, not just the malformed case.
+
+**Subrecords no longer need a dedicated array slot at all.** Since the
+outer Record's own array is already exactly self-bounded, every element
+after the field Map is unambiguously a subrecord — no separate wrapper
+array is needed to say where they start or how many there are, unlike
+`ID[]{}`, which needed its own array specifically because the
+*enclosing* structure wasn't otherwise bounded. This also lets a Record
+carry more than one subrecord without any extra framing beyond each
+subrecord's own array header, where `ID[]{}` needed exactly one array
+regardless.
+
+**Namespace cascades to subrecords, resolving the sub-scoping problem
+that started this whole entry — via composition of already-existing
+mechanisms, not a new one.** A subrecord with no namespace of its own
+resolves against its immediate parent's own effective namespace
+(recursively), not directly against the container's ambient one — so a
+Record that leads its own array with a namespace scopes its own
+subrecords too, for free. Implemented as `header.js`'s
+`resolveLookupKeysDeep`, generalizing the existing "container ambient,
+overridable per-Record" rule (§3.5) one level further, reusing
+`resolveLookupKeyForRecord`'s own logic rather than inventing a
+parallel one.
+
+**Scope of this change, stated plainly:** unlike `ID[]{}` (purely
+additive, nothing existing changed shape), this changes the wire shape
+of every existing standard record type — Wi-Fi, Split, Compress,
+Encrypt, Fallback Hint, Media Payload, App Route — in both prototype
+languages, requiring a full re-implementation rather than an add-on.
+Undertaken deliberately, with explicit confirmation, given this document
+predates any real-world release.
+
+Prototyped end to end in `prototype/src/core.js`
+(`parseRecordArray`/`parseRecordList`/`recordToItems`, all mutually
+recursive) and `rust/qdef-core` (`Records::next` determining a Record's
+span generically before `parse_record_array` interprets it,
+`Record::subrecords()` reusing the same `Records` iterator on the
+trailing element bytes at zero extra parsing cost — a definite-length
+CBOR array's elements are byte-for-byte identical in shape to a CBOR
+Sequence of the same items, recursively, at any depth). See
+`prototype/test/subrecords.test.js` and the subrecord tests in
+`rust/qdef-core/src/tests.rs`.
+
 ## Why not just carry a literal NDEF message as the QR byte-mode payload, instead of a new format?
 
 It's technically possible — nothing stops encoding actual NDEF bytes into
@@ -777,6 +1080,59 @@ Wrapping literal NDEF bytes would add NDEF's tag-session-oriented framing
 (MB/ME message-boundary flags, meaningless for a payload delivered
 atomically in a single scan) on top, without saving QDEF's actual
 contribution.
+
+## Checked against binary-XML precedent (EXI, Fast Infoset, YANG/CBOR, ASN.1/BER, SenML) — nothing to import
+
+Once Records became recursive, self-delimited, tagged nodes with
+attributes and children (the array-wrapping entry above), the shape is
+architecturally a tagged tree — worth checking directly against the
+real prior art for compact tree-structured binary encoding, rather than
+assuming QDEF's version is either novel or missing something obvious.
+
+**EXI (W3C) and Fast Infoset (ITU-T X.891)** are the actual "binary
+XML" standards. Both get their compactness from being
+schema-dependent — EXI compiles a grammar from an XML Schema/DTD so an
+element name encodes as "the Nth possible child at this grammar
+position" in a couple of bits; Fast Infoset leans on string tables built
+up during a session. **YANG/CBOR (RFC 9254)** is IETF's closer,
+CBOR-native answer to the same problem: a numeric SID (Schema Item
+iDentifier) stands in for a tag name, requiring a shared SID file — a
+compiled schema dictionary distributed out of band.
+
+**All three's core lever is schema-sharing, which QDEF's actual
+constraint rules out categorically, not just declines as unnecessary
+overhead.** QDEF's job is routing content between apps that have never
+coordinated — a QR code or NFC tag decoded by a generic scanner with no
+prior relationship to whatever app encoded it. Importing a
+grammar-compiled or dictionary-based tag scheme would require exactly
+the negotiation QDEF exists to avoid.
+
+**Checked whether anything schema-independent was still worth taking —
+found nothing missing, only mechanisms QDEF had already reinvented on
+its own:**
+
+- ASN.1's extensibility marker (schema declares "more fields may
+  follow, skip unknowns") — §3.2's even/odd criticality does the same
+  job without a schema to declare it in.
+- EXI's optional self-contained-fragment mode (an element independently
+  decodable without full document context) — every QDEF Record is now
+  *unconditionally* self-bounded by its own array header (the
+  array-wrapping entry above), the same property as EXI's opt-in mode,
+  as the default rather than an extra feature to enable.
+- SenML's Base Name (RFC 8428 — a shared prefix applied to a flat list
+  of records, any one able to locally override it) — architecturally
+  the same pattern as §3.5's ambient namespace with per-Record
+  override, arrived at independently for a similar problem (compact
+  sensor readings, not markup) by a different IETF working group.
+- DER's canonical encoding (deterministic bytes for a given value) —
+  §3.4 already requires RFC 8949's canonical CBOR for the identical
+  reason (stable hashes across independent encoders).
+
+**Conclusion: no mechanism adopted from this comparison.** CBOR itself
+is already a simplified descendant of the same ASN.1/BER lineage this
+comparison traces (RFC 8949 says as much); QDEF's own even/odd rule and
+self-bounded Records are its answer to what schema-driven formats get
+for free from a schema they don't have access to.
 
 ## Encrypt key provisioning (resolved — Algorithm/Key Algorithm fields, borrowing COSE)
 
@@ -1551,6 +1907,16 @@ up, it picks from whatever's still unclaimed then — including negint,
 still available, exactly as it is today.
 
 ## Multiple namespaces per container — built via a per-Record namespace-pairing prefix item
+
+**Wire shape updated since this entry was written.** The decision below
+(a per-Record namespace override, taking priority over the container's
+ambient one) is still exactly current. Its encoding is not: the
+2-element `[namespace, typeId]` array this entry describes was later
+replaced by a flat leading element on the Record's own array —
+`[namespace, typeId, ...]` — once every Record became self-delimited
+(see "Every Record became a self-delimited array"). Kept for the real
+trail; read `[namespace, typeId]` below as "the namespace and typeId
+elements," not a literal nested array.
 
 Asked directly: should one container support declaring more than one
 namespace, so a single physical code could mix content from several

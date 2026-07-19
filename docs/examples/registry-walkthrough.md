@@ -127,10 +127,9 @@ Validation passed.
 h'3cf2360e'                          // discriminator: bare namespace,
                                       //   no hint (cheapest form)
 
-// prefix typeID: 1                  // your first Record, namespace-scoped
-{
+[ 1, {                               // your first Record, namespace-scoped
   1: "route data here",              // ... your fields ...
-}
+} ]
 ```
 
 To also carry a recoverable Hint name for the namespace, use the map

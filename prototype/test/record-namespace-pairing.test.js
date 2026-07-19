@@ -25,19 +25,22 @@ const AMBIENT_NAMESPACE = Buffer.from('11111111', 'hex');
 const OVERRIDE_NAMESPACE = Buffer.from('cdcdcdcd', 'hex');
 const KNOWN_KEYS = new Set([0]);
 
-test('a uint in the namespace slot is no longer a recognized pairing item -- there is no Allocated namespace tier, so the Record loses its only typeID and becomes unroutable, not just its namespace', () => {
+test('a uint in the namespace slot is not recognized as a namespace at all -- the flat grammar reads it directly as this Record\'s own typeID instead, and the intended typeID becomes a skipped stray item', () => {
   const bytes = core.encodeRecordBytes({
     typeId: 1,
     fields: new Map([[0, 'payload']]),
     localNamespace: 100, // uint -- namespace values are byte-string only now
   });
   const [rec] = core.decodeSequence(bytes);
-  // [100, 1] is no longer recognized as a namespace-pairing item, so it
-  // falls through to being an ordinary unrecognized prefix item -- Phase
-  // 1 finds no typeID at all before the map, same as if the Record's
-  // prefix were empty.
-  assert.equal(rec.ignored, true);
-  assert.equal(rec.typeId, null);
+  // Namespace recognition (§3.1) requires the array's first element to
+  // be a byte string; a uint there is unconditionally valid typeID
+  // shape on its own, so it's read as the typeID directly -- there is
+  // no shape left over that could mean "malformed namespace pairing."
+  // The originally-intended typeID (1) becomes forward-compat padding,
+  // skipped in Phase 2.
+  assert.equal(rec.ignored, false);
+  assert.equal(rec.typeId, 100);
+  assert.equal(rec.localNamespace, undefined);
 });
 
 test('a namespace-pairing prefix item round-trips: byte string (Decentralized) namespace paired with a scoped typeID', () => {
@@ -172,9 +175,9 @@ test('FINDING: the pairing form is NOT a cheaper substitute for the container di
   const bareTypeIdNoOverride = bareCost(1);
 
   assert.equal(paired, 8);
-  assert.equal(bareTypeIdNoOverride, 2);
+  assert.equal(bareTypeIdNoOverride, 3);
   // Verified, not asserted: pairing with a namespace override costs MORE
-  // per Record than the same typeID with no override at all (8 > 2) --
+  // per Record than the same typeID with no override at all (8 > 3) --
   // because it bundles a full namespace declaration onto every Record
   // that uses it, unlike the container discriminator's one-time,
   // amortized-across-the-whole-container cost. This form exists to

@@ -42,16 +42,24 @@ trusting a number in this document to stay current.
 Every one of these round-trips in the Node prototype; none is spec-text
 only.
 
-**Format-wide mechanisms resolved and prototyped:** the NDEF-ID-
-equivalent (a bare text string following a Record's typeID, mirroring
-NDEF's own `ID` field, costing the mandatory core nothing beyond
-recognizing one more prefix-item shape), namespace-scoped Type IDs and
-their hash-derivation self-certification (§3.5, the general-purpose
-primitive Type Hint originally introduced before being retired
-alongside decentralized Type IDs — see FINDINGS.md), and canonical
-encoding (§3.4, RFC 8949's deterministic CBOR rules as a MUST for
-encoders, closing a live gap in `group_id`'s integrity guarantee before
-it saw real use).
+**Format-wide mechanisms resolved and prototyped:** every Record is now
+exactly one self-delimited CBOR array (§3.1) — `[namespace?, typeId,
+ndefId?, map, subrecord*]` — so any decoder can skip a whole Record it
+doesn't care about using nothing but ordinary CBOR array-skipping, with
+no Record-grammar knowledge at all, and a malformed inner Record can no
+longer corrupt discovery of its siblings (FINDINGS.md #41). Subrecords
+generalize what was briefly a narrower `ID[]{}` mechanism into the same
+recursive grammar used everywhere else, resolving a real correlation
+problem TagDrop's own Media Preview/Payload proposal ran into. Also
+resolved: the NDEF-ID-equivalent (a bare text string following a
+Record's typeID, mirroring NDEF's own `ID` field, costing the mandatory
+core nothing beyond recognizing one more array-element shape),
+namespace-scoped Type IDs and their hash-derivation self-certification
+(§3.5, the general-purpose primitive Type Hint originally introduced
+before being retired alongside decentralized Type IDs — see
+FINDINGS.md), and canonical encoding (§3.4, RFC 8949's deterministic
+CBOR rules as a MUST for encoders, closing a live gap in `group_id`'s
+integrity guarantee before it saw real use).
 
 **Checked against a real adopter, not just designed in the abstract.**
 `mofosyne/tagdrop` — the project QDEF's design was first worked out

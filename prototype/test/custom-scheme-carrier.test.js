@@ -78,10 +78,13 @@ test('FINDING: skipping magic, the discriminator, and namespace-scoping together
     ownSchemePath < sharedContainerPath,
     `own-scheme path (${ownSchemePath}) should cost less than the shared-container path (${sharedContainerPath})`,
   );
-  // Verified, not asserted: the actual saving at time of writing. Lower
-  // than earlier findings recorded (was 14) because the mandatory
-  // discriminator item is itself cheaper than the old typeID(0)+map
-  // Type 0 Record it replaced.
-  assert.equal(sharedContainerPath, 11);
-  assert.equal(ownSchemePath, 4);
+  // Verified, not asserted: the actual saving at time of writing. One
+  // byte higher on each side than the previous flat-Record grammar
+  // recorded, since every Record now pays a 1-byte array header for
+  // universal self-delimiting (docs/DESIGN.md's "Embedded Records"
+  // entry) -- the relative saving of skipping magic/discriminator/
+  // namespace-scoping is unaffected, since both paths pay that same
+  // array-header cost once.
+  assert.equal(sharedContainerPath, 12);
+  assert.equal(ownSchemePath, 5);
 });

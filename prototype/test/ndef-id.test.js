@@ -57,10 +57,7 @@ test('a Record with no NDEF-ID has the field undefined -- zero-cost when unused'
 test('a bare text string with no preceding typeID is not an NDEF-ID -- it is this Record\'s own unroutable first item, skipped as forward-compat padding', () => {
   // No typeID at all before the map: the whole Record is unroutable,
   // regardless of what the leading item looks like.
-  const bytes = Buffer.concat([
-    cbor.encodeCanonical('stray-string'),
-    cbor.encodeCanonical(new Map([[0, 'payload']])),
-  ]);
+  const bytes = cbor.encodeCanonical(['stray-string', new Map([[0, 'payload']])]);
   const rec = core.decodeRecordBytes(bytes);
   assert.equal(rec.ignored, true);
   assert.equal(rec.typeId, null);
@@ -68,11 +65,11 @@ test('a bare text string with no preceding typeID is not an NDEF-ID -- it is thi
 });
 
 test('only one NDEF-ID string is recognized -- a second text string in a row falls through to being skipped as an unrecognized item', () => {
-  const bytes = Buffer.concat([
-    cbor.encodeCanonical(100),
-    cbor.encodeCanonical('first-is-the-ndef-id'),
-    cbor.encodeCanonical('second-is-just-unrecognized-padding'),
-    cbor.encodeCanonical(new Map([[0, 'payload']])),
+  const bytes = cbor.encodeCanonical([
+    100,
+    'first-is-the-ndef-id',
+    'second-is-just-unrecognized-padding',
+    new Map([[0, 'payload']]),
   ]);
   const rec = core.decodeRecordBytes(bytes);
   assert.equal(rec.ignored, false);
