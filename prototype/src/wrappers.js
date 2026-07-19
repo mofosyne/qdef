@@ -45,6 +45,27 @@ const COAP_CONTENT_FORMAT_IMAGE_JPEG = 22;
 const COAP_CONTENT_FORMAT_IMAGE_PNG = 23;
 const COAP_CONTENT_FORMAT_APPLICATION_CBOR = 60;
 
+// Multiformats multicodec hash-function codes (community-maintained
+// table, github.com/multiformats/multicodec) — borrowed for §4.5 Media
+// Preview's key 1, same "borrow a registry instead of inventing one"
+// reasoning as the COSE/CoAP IDs above.
+const MULTIHASH_SHA2_256 = 0x12;
+
+/**
+ * Build §4.5 Media Preview's key 1 value: a 1-byte multicodec
+ * hash-function code (sha2-256 -- the only function this prototype
+ * computes) followed by the digest, truncated or full, with no separate
+ * length field -- the CBOR byte string's own length already delimits
+ * the digest. Not byte-identical to canonical multiformats multihash
+ * (which also carries its own length as a second varint byte), but
+ * trivially convertible: insert the digest's own length right after the
+ * function code.
+ */
+function contentHashPrefix(contentBytes, { length = 8 } = {}) {
+  const digest = crypto.createHash('sha256').update(contentBytes).digest();
+  return Buffer.concat([Buffer.from([MULTIHASH_SHA2_256]), digest.subarray(0, length)]);
+}
+
 // ---- Compress (Type 8) -----------------------------------------------
 
 function compressEncode(innerBytes) {
@@ -336,6 +357,7 @@ module.exports = {
   COAP_CONTENT_FORMAT_IMAGE_JPEG,
   COAP_CONTENT_FORMAT_IMAGE_PNG,
   COAP_CONTENT_FORMAT_APPLICATION_CBOR,
+  MULTIHASH_SHA2_256,
   compressEncode,
   compressDecode,
   encryptEncode,
@@ -343,4 +365,5 @@ module.exports = {
   splitEncode,
   splitDecode,
   resolveStack,
+  contentHashPrefix,
 };
