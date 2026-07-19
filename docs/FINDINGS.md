@@ -2316,3 +2316,33 @@ via a throwaway Node script before hardcoding. 102 Node tests and 33
 Rust tests pass; clippy, fmt, and the `no_std` Cortex-M0 build all
 confirmed clean; `gen-rust-fixtures.js`'s output reconfirmed
 byte-identical to the committed `fixtures.rs`.
+
+### 43. TagDrop's Media Preview (Type 14) revision wrapped two sibling Records in an array that doesn't round-trip — the container is a Sequence, not an array of Records
+
+Reviewing TagDrop's second Media Preview proposal (subrecord-based,
+correctly reworked around #41/#42's shipped grammar), its "multi-item"
+example wrote two sibling Records as `[ [14, ...], [14, ...] ]` — an
+outer array enclosing both. Checked against the actual decoder rather
+than trusted on read: encoding that shape and decoding it returns
+`{typeId: null, ignored: true}`, not two Records. The outer array's
+first element is itself an array — neither a namespace byte string nor
+a typeId uint — so `parseRecordArray` finds no valid prefix and the
+whole thing is silently dropped, exactly the same forward-compat
+tolerance that makes a genuinely malformed Record fail closed rather
+than corrupt its siblings (§3.1, #41). The fix has no new mechanism:
+drop the enclosing brackets. QDEF's container is a CBOR *Sequence*
+(RFC 8742) of independently-decoded top-level items, not an array
+containing them — two Records are two consecutive items, never one
+item wrapping two. TagDrop's bot fixed this correctly on the next
+revision; confirmed via `prototype/test/media-preview.test.js`, which
+decodes both Records independently with subrecords intact.
+
+The proposal's other fix — inverting Media Preview/Split nesting so
+Split stays outermost (§4.1's convention) with Media Preview as its
+subrecord — was proposed in review and verified at zero implementation
+cost: `wrappers.js`'s `splitDecode` never reads `subrecords`, so an old
+Split-only decoder with no knowledge of Type 14 reassembles a fragment
+group correctly regardless of what identification metadata rides along
+on each fragment. Confirmed with a `resolveStack` call whose
+`knownKeysRegistry` has no entry for Type 14 at all, reassembling
+successfully anyway.
