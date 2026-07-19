@@ -110,6 +110,20 @@ that's the actual line, not tier width or magnitude:**
 +------------------------+------------------+-------------+-------------+
 ```
 
+**Why Type ID `0` sits unassigned in the Standards Action tier.** It
+isn't reserved for anything — it's simply the one number in `0`–`22`
+with a past. An earlier design used `0` for an optional leading
+container-level header Record; a decoder couldn't structurally tell
+"header present" from "header absent, this is Record 1's own prefix
+typeID `0`" (FINDINGS.md #26), which is why the container discriminator
+(spec §3.5) exists instead — mandatory, positionally fixed, dispatched
+by CBOR major type rather than by being typeID-prefixed at all. That
+fix means `0` carries no live ambiguity risk today and could be
+assigned to an ordinary standard Record Type same as `14`–`22`; nothing
+has needed it yet. Future container-level (not per-Record) metadata has
+its own growth point already — the discriminator's extensible map form
+— so `0` isn't earmarked as its future home either.
+
 There is no longer a Decentralized (byte string) or Named (text string)
 row here — both Type ID forms were retired entirely once namespace-
 scoped odd uints existed to give the identical zero-coordination

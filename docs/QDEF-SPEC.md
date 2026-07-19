@@ -556,6 +556,7 @@ subsection below:
 +------+------------------+---------+---------------------------------+
 | ID   | Record Type      | Section | Notes                          |
 +------+------------------+---------+---------------------------------+
+|  0   | (unassigned)     | —       | Not reserved; see DESIGN.md    |
 |  2   | Split            | §4.1    | Fragment reassembly / parity    |
 |  4   | Encrypt          | §4.1    | AEAD (e.g. AES-256-GCM)         |
 |  6   | Media Payload    | §4.3    | Typed binary content            |
