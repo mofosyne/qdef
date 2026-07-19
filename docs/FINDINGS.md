@@ -2346,3 +2346,37 @@ group correctly regardless of what identification metadata rides along
 on each fragment. Confirmed with a `resolveStack` call whose
 `knownKeysRegistry` has no entry for Type 14 at all, reassembling
 successfully anyway.
+
+### 44. Media Preview's key 1 wrongly cited §3.5's derivation algorithm, then adopted multihash instead of plain SHA-256 once the fix was already in flight
+
+TagDrop bot's next review pass on the merged spec text caught a real
+error: key 1's description cited "§3.5's derivation algorithm," but
+that algorithm hashes a UTF-8 *name string* (namespace IDs, App Route's
+hash-derived form) — key 1 hashes the *content bytes*, a different
+input entirely despite both being SHA-256-based. Fixed to plain
+"truncated SHA-256 of the content bytes" first (PR #27).
+
+Before that fix even shipped, a design question ("committing to
+SHA-256 — new key if it ever goes bad?") led to TagDrop proposing
+multihash instead: a 1-byte multicodec hash-function code (`0x12` =
+sha2-256) prefixing the digest, so the algorithm is self-describing
+and future changes need no new key at all. Checked TagDrop's specific
+adaptation before accepting it: canonical multiformats multihash also
+carries its own length as a second varint byte, which TagDrop's
+version drops — correctly, since this value is already a
+length-delimited CBOR byte string (major type 2), so a second embedded
+length would be pure redundancy. Confirmed the omission costs nothing
+in interop: recovering byte-identical canonical multihash is a
+one-byte insertion (the digest's own length, already known once the
+CBOR byte string is decoded), not a reinterpretation.
+
+Recognized this as the same pattern §4.1's Encrypt already uses for
+its own Algorithm field (key 3, COSE's registry) — borrowing an
+external registry for algorithm-agility inside one field — rather than
+a new, inconsistent mechanism. `group_id` (Split) and §3.5's namespace
+hash stay plain SHA-256, deliberately: they're structural/core, not
+app-level convenience fields, so COSE-style tagging isn't the right
+tool there. Implemented as `wrappers.js`'s `contentHashPrefix` and a
+`MULTIHASH_SHA2_256` constant; `media-preview.test.js` gained a
+dedicated test proving the 1-byte-function-code-plus-digest shape and
+the one-byte conversion to canonical multihash. 109 Node tests pass.

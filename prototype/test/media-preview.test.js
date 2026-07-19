@@ -19,11 +19,13 @@ const core = require('../src/core');
 const wrappers = require('../src/wrappers');
 
 test('Media Preview round-trips with a Media Payload subrecord', () => {
+  const content = Buffer.from('Hello World');
+  const hashPrefix = wrappers.contentHashPrefix(content);
   const bytes = core.encodeRecordBytes({
     typeId: wrappers.MEDIA_PREVIEW_TYPE,
     fields: new Map([
       [0, 'text/plain'],
-      [1, Buffer.from('3a2f1b0c', 'hex')],
+      [1, hashPrefix],
       [3, 'hello.txt'],
     ]),
     subrecords: [
@@ -31,7 +33,7 @@ test('Media Preview round-trips with a Media Payload subrecord', () => {
         typeId: wrappers.MEDIA_PAYLOAD_TYPE,
         fields: new Map([
           [0, 'text/plain'],
-          [2, Buffer.from('Hello World')],
+          [2, content],
         ]),
       },
     ],
@@ -41,14 +43,31 @@ test('Media Preview round-trips with a Media Payload subrecord', () => {
   assert.equal(rec.ignored, false);
   assert.equal(rec.typeId, wrappers.MEDIA_PREVIEW_TYPE);
   assert.equal(rec.map.get(0), 'text/plain');
-  assert.ok(rec.map.get(1).equals(Buffer.from('3a2f1b0c', 'hex')));
+  assert.ok(rec.map.get(1).equals(hashPrefix));
   assert.equal(rec.map.get(3), 'hello.txt');
 
   assert.equal(rec.subrecords.length, 1);
   const payload = rec.subrecords[0];
   assert.equal(payload.typeId, wrappers.MEDIA_PAYLOAD_TYPE);
   assert.equal(payload.map.get(0), 'text/plain');
-  assert.ok(payload.map.get(2).equals(Buffer.from('Hello World')));
+  assert.ok(payload.map.get(2).equals(content));
+});
+
+test('key 1 is multihash-style: 1-byte function code + digest, length inferred from the CBOR byte string itself', () => {
+  const content = Buffer.from('Hello World');
+  const hashPrefix = wrappers.contentHashPrefix(content, { length: 8 });
+
+  assert.equal(hashPrefix.length, 9); // 1 function-code byte + 8 digest bytes
+  assert.equal(hashPrefix[0], wrappers.MULTIHASH_SHA2_256);
+
+  const fullDigest = require('crypto').createHash('sha256').update(content).digest();
+  assert.ok(hashPrefix.subarray(1).equals(fullDigest.subarray(0, 8)));
+
+  // Trivially convertible to a canonical multiformats multihash: insert
+  // the digest's own length (already known once this CBOR byte string is
+  // decoded) as a second byte, right after the function code.
+  const canonicalMultihash = Buffer.concat([hashPrefix.subarray(0, 1), Buffer.from([8]), hashPrefix.subarray(1)]);
+  assert.equal(canonicalMultihash.length, 10);
 });
 
 test('Media Preview criticality: key 0 is critical, keys 1/3/5 are optional', () => {
