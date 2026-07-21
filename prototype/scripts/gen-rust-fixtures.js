@@ -275,31 +275,22 @@ const uintNamespaceSlotUnrecognizedContainer = core.encodeContainer([
   },
 ]);
 
-// --- Namespace prefix immediately followed by the NDEF-ID text string ---
-// (§3.1): both prefix concepts stack cleanly -- namespace and typeId
-// contribute the first two array elements, the following bare text
-// string is recognized as this Record's NDEF-ID-equivalent.
+// --- Namespace prefix with a scoped typeId and payload slot ---
 
-const namespacePairingWithNdefIdContainer = core.encodeContainer([
+const namespacePairingWithPayloadContainer = core.encodeContainer([
   {
     typeId: 1,
     fields: new Map([[0, 'payload']]),
     localNamespace: Buffer.from('cdcdcdcd', 'hex'),
-    ndefId: 'scoped-record-1',
   },
 ]);
 
-// --- NDEF-ID-equivalent (§3.1): a bare text string immediately ---
-// following the typeID item. Resolves which of two competing
-// experimental prototypes QDEF adopted for an NDEF-ID equivalent
-// (neither -- this reuses an already-reserved, previously-unclaimed
-// prefix-item slot).
+// --- Record with map only, no payload ---
 
-const ndefIdContainer = core.encodeContainer([
+const plainMapOnlyContainer = core.encodeContainer([
   {
     typeId: rt.WIFI_TYPE,
     fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]),
-    ndefId: 'wifi-record-1',
   },
 ]);
 
@@ -319,11 +310,11 @@ const subrecordsContainer = core.encodeContainer([
   },
 ]);
 
-// --- Subrecords: a subrecord may itself carry an NDEF-ID, a namespace, ---
-// and its own further subrecords -- the same grammar, applied
-// recursively, not a reduced one.
+// --- Subrecords: a subrecord may itself carry a namespace and its own ---
+// further subrecords -- the same grammar, applied recursively, not a
+// reduced one.
 
-const subrecordsWithNdefIdAndNamespaceContainer = core.encodeContainer([
+const subrecordsWithNamespaceContainer = core.encodeContainer([
   {
     typeId: 21,
     fields: new Map(),
@@ -331,7 +322,6 @@ const subrecordsWithNdefIdAndNamespaceContainer = core.encodeContainer([
       {
         typeId: 1,
         localNamespace: Buffer.from('cdcdcdcd', 'hex'),
-        ndefId: 'inner-record-1',
         fields: new Map([[0, 'payload']]),
         subrecords: [{ typeId: 22, fields: new Map([[0, 'leaf']]) }],
       },
@@ -404,14 +394,14 @@ console.log(rustBytes('NAMESPACE_PAIRING_CONTAINER', namespacePairingContainer))
 console.log();
 console.log(rustBytes('UINT_NAMESPACE_SLOT_UNRECOGNIZED_CONTAINER', uintNamespaceSlotUnrecognizedContainer));
 console.log();
-console.log(rustBytes('NAMESPACE_PAIRING_WITH_NDEF_ID_CONTAINER', namespacePairingWithNdefIdContainer));
+console.log(rustBytes('NAMESPACE_PAIRING_WITH_PAYLOAD_CONTAINER', namespacePairingWithPayloadContainer));
 console.log();
-console.log(rustBytes('NDEF_ID_CONTAINER', ndefIdContainer));
+console.log(rustBytes('PLAIN_MAP_ONLY_CONTAINER', plainMapOnlyContainer));
 console.log();
 console.log(rustBytes('SUBRECORDS_CONTAINER', subrecordsContainer));
 console.log();
 console.log(
-  rustBytes('SUBRECORDS_WITH_NDEF_ID_AND_NAMESPACE_CONTAINER', subrecordsWithNdefIdAndNamespaceContainer),
+  rustBytes('SUBRECORDS_WITH_NAMESPACE_CONTAINER', subrecordsWithNamespaceContainer),
 );
 console.log();
 console.log(rustBytes('SUBRECORDS_SIBLING_CONTAINER', subrecordsSiblingContainer));

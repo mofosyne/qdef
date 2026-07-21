@@ -39,9 +39,9 @@ test('a large (BigInt-class) Type ID encodes as a native uint, never a CBOR tag'
 
 test('a small BigInt Type ID also encodes as a native uint, not tag-2', () => {
   const bytes = core.encodeRecordBytes({ typeId: 100n, fields: new Map() });
-  // Record array header (2 elements: 0x82), typeID 100 as CBOR uint
-  // (0x18 0x64), then empty map (0xa0).
-  assert.deepEqual(bytes, Buffer.from([0x82, 0x18, 0x64, 0xa0]));
+  // Record array header (1 element: 0x81), typeID 100 as CBOR uint
+  // (0x18 0x64). Empty map omitted (saves one byte).
+  assert.deepEqual(bytes, Buffer.from([0x81, 0x18, 0x64]));
 });
 
 test('a full container carrying a 64-bit-class private-use Type ID round-trips through decodeContainer', () => {

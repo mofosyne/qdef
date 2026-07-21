@@ -1961,7 +1961,7 @@ counts: 93 Node tests, 28 Rust tests, all passing;
 `cargo clippy --all-targets` and a `thumbv6m-none-eabi` build both
 clean.
 
-### 38. NDEF-ID-equivalent: the freed prefix slot got one clear meaning instead of staying split between two retired ones
+### 38. NDEF-ID-equivalent: the freed prefix slot became the payload slot
 
 #33 explored two competing, mutually exclusive designs for an NDEF-`ID`
 equivalent (a stable, type-independent external reference any Record
@@ -1979,29 +1979,21 @@ options.** Phase 1 already needed to check "is there a text string
 right after the typeID" for reasons predating this feature (Type Hint
 used to live there); repurposing that check for a general external-ID
 reference added no new prefix-item shape, no new CBOR major-type
-dispatch, and no reserved negative map key. It's parsed by the
-mandatory core, before any Type-specific interpretation, at the same
-architectural layer as the typeID prefix items and the namespace-
-pairing item — exactly the property #33 established the NDEF-`ID`
-equivalent needed and that ordinary field-map extensibility couldn't
-provide.
+dispatch, and no reserved negative map key.
 
-Both #33's experimental prototypes (`prototype/test/
-experimental-external-id.test.js`, `experimental-core-metadata-negkey.
-test.js`) were deleted as dead code once this shipped; the negative-key
-cross-implementation bug #33 surfaced (`cbor::Key::NegInt`, `NotAKey`
-hard-erroring the whole Sequence) was a genuine, independent fix and is
-unaffected — it stays fixed regardless of which NDEF-`ID` design, if
-any, ultimately landed.
+**Later replaced by the payload slot (spec §3.1).** The NDEF-ID
+equivalency proved unnecessary: QDEF Records are stateless scans routed
+by typeId alone, and NDEF's own `ID` field solves a problem (stable
+cross-NDEF-reference) that doesn't exist in QDEF's domain. The slot was
+repurposed for payload — accepting both byte strings (opaque wrapper
+bytes, §4.1) and text strings (plaintext) — which wrapper records and
+media content actually needed. See the spec's "Payload" subsection,
+§3.1, and DESIGN.md's "Why not carry a literal NDEF message" entry.
 
-Prototyped in `prototype/test/ndef-id.test.js` (6 tests: round-trip
-alongside an ordinary typeID, coexistence with namespace-pairing,
-zero-cost absence, a stray-text-string-with-no-typeID edge case, an
-only-the-first-of-two-text-strings-is-recognized edge case, and a
-byte-cost FINDING confirming no wrapper overhead over the bare string
-itself) and `rust/qdef-core/src/tests.rs` (3 tests covering the
-identical cases). See spec §3.1's "NDEF-ID-equivalent" and DESIGN.md's
-"NDEF's ID field" entry for the full resolution.
+Prototyped in `prototype/test/ndef-id.test.js` (2 residual-behavior
+tests: zero-cost absence and a stray text string before a map) and
+`rust/qdef-core/src/tests.rs` (3 tests covering the identical cases,
+updated when the payload slot shipped).
 
 ### 39. The field-value-shape rule was dropped entirely — `skip_any_item`'s existing bounded-stack mechanism already covered the case that mattered
 
@@ -2147,7 +2139,7 @@ per-Record, not per-container. An unrecognized critical Preview drops
 out of the Sequence and the real Body — previously "index 1" — becomes
 "index 0," with no coherent reading of "index 0 is Preview" once the
 thing that used to hold index 0 is gone. Every other QDEF correlation
-mechanism (`group_id`, namespace pairing, NDEF-ID) survives this because
+mechanism (`group_id`, namespace pairing, payload slot) survives this because
 none of them depend on index. Second: Open/Hint URI (§4.2) is an
 already-shipped plain sibling Record with no position requirement, and
 TagDrop already uses it — an encoder emitting it before the content
@@ -2166,7 +2158,7 @@ Body.
 
 **Resolved as `ID[]{}`: a new optional Phase-1 item, not a new Wrapper
 Type ID.** A definite-length array positioned between a Record's
-typeID/NDEF-ID prefix items and its mandatory field Map, parsed
+typeID/map/payload prefix items and its mandatory field Map, parsed
 recursively with the *same* Record grammar already defined for the
 top-level Sequence. Checked directly for safety before adopting: the
 byte pattern `typeID, [array], no Map yet` was already malformed under
@@ -2229,13 +2221,13 @@ is a genuine gap once several Records in one container want a shared
 non-ambient namespace. But taxing every ordinary Record (fields, no
 subrecords — the overwhelmingly common case) to spare the rare
 subrecord-using one inverted this format's own established discipline
-(Wrapper Records opt-in, NDEF-ID free when absent, `ID[]{}` itself free
+(Wrapper Records opt-in, payload free when absent, `ID[]{}` itself free
 when unused). Checked the actual byte cost before rejecting it, not on
 aesthetic grounds alone — same standing discipline used throughout this
 project's cost tradeoffs.
 
 **Resolved by wrapping every Record in its own definite-length CBOR
-array** — `[namespace?, typeId, ndefId?, map, subrecord*]` — subsuming
+array** — `[namespace?, typeId, map?, payload?, subrecord*]` — subsuming
 both `ID[]{}` and the earlier `[namespace, typeId]` 2-element pairing
 array. The precise thing this buys: not easier interpretation of a
 Record already being read (Phase 1's own logic is unchanged in

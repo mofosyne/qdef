@@ -337,47 +337,48 @@ fn a_record_with_no_pairing_item_has_no_local_namespace() {
     assert_eq!(records[0].local_namespace(), None);
 }
 
+#[test]
+fn namespace_pairing_yields_no_payload_when_only_map_is_present() {
+    let container =
+        Container::parse(NAMESPACE_PAIRING_WITH_PAYLOAD_CONTAINER).expect("valid container");
+    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
+    let rec = &records[0];
+    assert_eq!(rec.type_id(), Some(Key::Uint(1)));
+    assert_eq!(rec.payload(), None);
+}
+
 // ---------------------------------------------------------------------
-// NDEF-ID-equivalent (§3.1): a bare text string immediately following
-// the typeID item. Resolves which of two competing experimental
-// prototypes explored earlier (an array-wrapper prefix item, a reserved
-// negative map key) QDEF actually adopted: neither -- this reuses an
-// already-reserved, previously-unclaimed prefix-item slot (the "Named
-// ID" typeID form / Type Hint verification string, both retired
-// alongside decentralized Type IDs). See docs/FINDINGS.md.
+// Payload slot (§3.1): a bare byte string (major 2) or text string
+// (major 3) following the field map. The NDEF-ID-equivalent that
+// previously occupied this position was removed; the slot now carries
+// opaque or plaintext content for wrapper records and media.
 // ---------------------------------------------------------------------
 
 #[test]
-fn an_ndef_id_text_string_round_trips_alongside_an_ordinary_typeid() {
-    let container = Container::parse(NDEF_ID_CONTAINER).expect("valid container");
+fn a_record_with_a_plain_map_and_no_payload_has_payload_absent() {
+    let container = Container::parse(PLAIN_MAP_ONLY_CONTAINER).expect("valid container");
     let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
     let rec = &records[0];
     assert!(!rec.ignored);
     assert_eq!(rec.type_id(), Some(Key::Uint(100)));
-    assert_eq!(rec.ndef_id(), Some(&b"wifi-record-1"[..]));
+    assert_eq!(rec.payload(), None);
 }
 
 #[test]
-fn a_record_with_no_ndef_id_has_it_absent_zero_cost_when_unused() {
+fn a_record_with_no_payload_has_it_absent_zero_cost_when_unused() {
     let container = Container::parse(WIFI_CONTAINER).expect("valid container");
     let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
-    assert_eq!(records[0].ndef_id(), None);
+    assert_eq!(records[0].payload(), None);
 }
 
 #[test]
-fn an_ndef_id_coexists_with_a_namespace_prefix_both_concepts_stack_cleanly() {
+fn a_payload_text_string_is_absent_when_the_record_only_has_a_map() {
     let container =
-        Container::parse(NAMESPACE_PAIRING_WITH_NDEF_ID_CONTAINER).expect("valid container");
+        Container::parse(PLAIN_MAP_ONLY_CONTAINER).expect("valid container");
     let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
     let rec = &records[0];
     assert!(!rec.ignored);
-
-    assert_eq!(rec.type_id(), Some(Key::Uint(1)));
-    match rec.local_namespace() {
-        Some(Key::ByteString(bytes)) => assert_eq!(bytes, &[0xcd, 0xcd, 0xcd, 0xcd]),
-        other => panic!("expected ByteString local_namespace, got {:?}", other),
-    }
-    assert_eq!(rec.ndef_id(), Some(&b"scoped-record-1"[..]));
+    assert_eq!(rec.payload(), None);
 }
 
 // ---------------------------------------------------------------------
@@ -524,9 +525,9 @@ fn a_record_with_no_subrecords_has_them_absent_zero_cost_when_unused() {
 }
 
 #[test]
-fn a_subrecord_can_itself_carry_an_ndef_id_a_namespace_and_its_own_further_subrecords() {
+fn a_subrecord_can_itself_carry_a_namespace_and_its_own_further_subrecords() {
     let container =
-        Container::parse(SUBRECORDS_WITH_NDEF_ID_AND_NAMESPACE_CONTAINER).expect("valid container");
+        Container::parse(SUBRECORDS_WITH_NAMESPACE_CONTAINER).expect("valid container");
     let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
     let outer = &records[0];
     assert_eq!(outer.type_id(), Some(Key::Uint(21)));
@@ -543,7 +544,6 @@ fn a_subrecord_can_itself_carry_an_ndef_id_a_namespace_and_its_own_further_subre
         Some(Key::ByteString(bytes)) => assert_eq!(bytes, &[0xcd, 0xcd, 0xcd, 0xcd]),
         other => panic!("expected ByteString local_namespace, got {:?}", other),
     }
-    assert_eq!(inner.ndef_id(), Some(&b"inner-record-1"[..]));
 
     let leaf: Vec<_> = inner
         .subrecords()

@@ -9,7 +9,7 @@
 // knowledge to skip past a Record it doesn't care about, only to skip
 // one generic CBOR array (see docs/DESIGN.md for why this replaced the
 // earlier flat, unwrapped Record shape). Its elements, in order:
-//   [namespace?, typeId, ndefId?, map, subrecord*]
+//   [namespace?, typeId, map?, payload?, subrecord*]
 // - namespace (optional): a byte string, present only when the first
 //   element is a byte string immediately followed by a valid typeId.
 //   Scopes this Record's own typeId, overriding any container-level
@@ -18,18 +18,14 @@
 //   shape and no backup-typeId accumulation -- at most one typeId per
 //   Record (see docs/FINDINGS.md for why decentralized Type IDs, Named
 //   Type IDs, and backup typeIDs were all retired).
-// - ndefId (optional): a bare CBOR text string immediately following
-//   typeId -- a stable, type-independent external reference mirroring
-//   NDEF's own ID field (§3.1).
-// - map (mandatory): the field Map, always present even when empty, so
-//   a Record's own item count past [namespace?, typeId, ndefId?] is
-//   never ambiguous with anything else.
+// - map? (optional): the field Map, omitted when empty — default {}.
+// - payload? (optional): a bare CBOR byte string (major type 2) or
+//   text string (major type 3), carrying this Record's opaque content
+//   bytes (for Wrapper Records) or direct application payload
+//   (e.g. Media Payload's content or a simple text record).
 // - subrecord* (zero or more): every remaining array element after the
-//   map is itself a nested Record, recursively the same shape (§3.1's
-//   `ID[]{}` shape generalized -- see docs/DESIGN.md). No separate
-//   wrapper array is needed for these anymore: the outer Record's own
-//   array is already self-bounded, so "everything after the map" is
-//   unambiguous without an extra length prefix.
+//   map (or after payload if no map) is itself a nested Record,
+//   recursively the same shape.
 //
 // No version byte: local forward compatibility is §3.2's even/odd rule.
 // Container-level metadata (a format namespace) lives in a single
@@ -64,7 +60,7 @@ function encodeContainer(records, discriminator) {
 
 /**
  * Build the raw (unencoded) JS array representing a single Record's own
- * elements, in order: [namespace?, typeId, ndefId?, map, ...subrecords]
+ * elements, in order: [namespace?, typeId, map?, payload?, ...subrecords]
  * -- subrecords themselves built by recursing into this same function,
  * so they nest as CBOR arrays automatically once handed to
  * cbor.encodeCanonical. There is no separate grammar for "a Record when
@@ -73,27 +69,32 @@ function encodeContainer(records, discriminator) {
  *
  * @param {Object} record
  * @param {number|bigint} record.typeId
- * @param {Map<number, any>} [record.fields]
+ * @param {Map<number, any>} [record.fields] - omitted when empty (saves
+ *   one byte per record with no fields).
+ * @param {Buffer|string} [record.payload] - a bare byte string or text
+ *   string carrying this Record's opaque content (for Wrapper Records)
+ *   or direct payload (e.g. Media Payload's content, simple text).
  * @param {Buffer} [record.localNamespace] - if given, this Record's
  *   own namespace, overriding any container-ambient one for this
  *   Record (and, per header.js's cascading resolution, for its own
  *   subrecords too unless they declare their own override).
- * @param {string} [record.ndefId] - if given, adds a bare text string
- *   immediately after typeId: an NDEF-ID-equivalent external reference
- *   (§3.1).
  * @param {Array<Object>} [record.subrecords] - if given, each element
  *   is itself a record object of this same shape, appended as further
- *   elements of this Record's own array, after the field Map.
+ *   elements of this Record's own array, after the payload.
  */
-function recordToItems({ typeId, fields, localNamespace, ndefId, subrecords }) {
+function recordToItems({ typeId, fields, payload, localNamespace, subrecords }) {
   if (typeId === undefined) {
     throw new Error('typeId is required');
   }
   const items = [];
   if (localNamespace !== undefined) items.push(localNamespace);
   items.push(typeId);
-  if (ndefId !== undefined) items.push(ndefId);
-  items.push(fields || new Map());
+  if (fields !== undefined && fields.size > 0) {
+    items.push(fields);
+  }
+  if (payload !== undefined) {
+    items.push(payload);
+  }
   if (subrecords !== undefined) {
     for (const sub of subrecords) items.push(recordToItems(sub));
   }
@@ -165,28 +166,28 @@ function parseRecordList(items) {
 
 /**
  * Parse a single Record from its own already-decoded CBOR array:
- *   [namespace?, typeId, ndefId?, map, subrecord*]
+ *   [namespace?, typeId, map?, payload?, subrecord*]
  *
  * - namespace: recognized only when the first element is a byte string
  *   AND the element immediately after it is a valid typeId -- otherwise
  *   this Record has no typeId at all (ignored), the same "malformed
  *   prefix means unroutable, not a crash" tolerance as before.
  * - typeId: a bare uint (major type 0). No other shape is recognized.
- * - ndefId: a bare text string immediately following typeId, if
- *   present.
- * - Unrecognized items between ndefId and the map are skipped
- *   (forward-compat padding), same as always.
- * - map: the first map-shaped element reached; normalized to a Map
- *   instance. Everything from here to the end of this Record's own
- *   array, past the map, is subrecords -- no separate wrapper array is
- *   needed to bound them, since this Record's own array already is
- *   one.
+ * - map? (optional): the first map-shaped element reached; normalized
+ *   to a Map instance. If no map is found before a payload item or
+ *   subrecord array, defaults to null (treated as empty).
+ * - payload? (optional): a bare byte string (Buffer) or text string
+ *   following the map (or typeId if no map). Carries opaque content
+ *   bytes or direct application payload.
+ * - subrecord*: every remaining array element after payload (or after
+ *   map if no payload) is a nested Record.
+ * - Unrecognized items between typeId and the first map/payload/array
+ *   are skipped (forward-compat padding).
  */
 function parseRecordArray(arr) {
   let i = 0;
   let typeId;
   let localNamespace;
-  let ndefId;
 
   if (Buffer.isBuffer(arr[0]) && isTypeId(arr[1])) {
     localNamespace = arr[0];
@@ -197,13 +198,9 @@ function parseRecordArray(arr) {
     i = 1;
   }
 
-  if (typeId !== undefined && i < arr.length && typeof arr[i] === 'string') {
-    ndefId = arr[i];
-    i++;
-  }
-
-  // Skip unrecognized items (forward-compat padding) until the map.
-  while (i < arr.length && !isMapItem(arr[i])) {
+  // Skip unrecognized forward-compat items until a map, payload, or
+  // subrecord array.
+  while (i < arr.length && !isMapItem(arr[i]) && !isByteString(arr[i]) && typeof arr[i] !== 'string' && !Array.isArray(arr[i])) {
     i++;
   }
 
@@ -216,16 +213,29 @@ function parseRecordArray(arr) {
     i++;
   }
 
+  let payload = undefined;
+  if (typeId !== undefined && i < arr.length && (isByteString(arr[i]) || typeof arr[i] === 'string')) {
+    payload = arr[i];
+    i++;
+  }
+
   const subrecords = i < arr.length ? parseRecordList(arr.slice(i)) : undefined;
 
   return {
     typeId: typeId ?? null,
     localNamespace,
-    ndefId,
     subrecords,
     map,
+    payload,
     ignored: typeId === undefined,
   };
+}
+
+/**
+ * Check if a decoded CBOR item is a byte string (Buffer).
+ */
+function isByteString(item) {
+  return Buffer.isBuffer(item);
 }
 
 /**
@@ -266,7 +276,7 @@ function isMapItem(item) {
  * known key set. Returns the same record annotated with aborted/ignoredKeys.
  */
 function applyCriticality(record, knownKeys) {
-  if (record.ignored || !record.map) return record;
+  if (record.ignored || !record.map) return { ...record, aborted: false, ignoredKeys: [] };
   const map = record.map;
   const keys = map instanceof Map ? map.keys() : Object.keys(map).map(Number);
   const ignoredKeys = [];
@@ -294,7 +304,7 @@ function decodeRecordBytes(buf) {
   const items = cbor.decodeAllSync(buf);
   const [first] = items;
   if (Array.isArray(first)) return parseRecordArray(first);
-  return { typeId: null, localNamespace: undefined, ndefId: undefined, subrecords: undefined, map: null, ignored: true };
+  return { typeId: null, localNamespace: undefined, subrecords: undefined, map: null, payload: undefined, ignored: true };
 }
 
 module.exports = {

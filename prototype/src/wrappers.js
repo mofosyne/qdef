@@ -17,9 +17,9 @@ const MEDIA_PAYLOAD_TYPE = 6;
 const APP_ROUTE_TYPE = 12;
 const MEDIA_PREVIEW_TYPE = 14;
 
-const SPLIT_KNOWN_KEYS = new Set([0, 2, 4, 6, 7, 9]);
-const COMPRESS_KNOWN_KEYS = new Set([0]);
-const ENCRYPT_KNOWN_KEYS = new Set([0, 2, 3, 5]);
+const SPLIT_KNOWN_KEYS = new Set([0, 2, 4, 7, 9]);
+const COMPRESS_KNOWN_KEYS = new Set([]);
+const ENCRYPT_KNOWN_KEYS = new Set([0, 3, 5]);
 const OPEN_HINT_URI_KNOWN_KEYS = new Set([0, 1, 3, 5]);
 const MEDIA_PAYLOAD_KNOWN_KEYS = new Set([0, 2]);
 const APP_ROUTE_KNOWN_KEYS = new Set([0, 1]);
@@ -71,12 +71,12 @@ function contentHashPrefix(contentBytes, { length = 8 } = {}) {
 function compressEncode(innerBytes) {
   return {
     typeId: COMPRESS_TYPE,
-    fields: new Map([[0, zlib.deflateRawSync(innerBytes)]]),
+    payload: zlib.deflateRawSync(innerBytes),
   };
 }
 
-function compressDecode(map) {
-  return zlib.inflateRawSync(map.get(0));
+function compressDecode(rec) {
+  return zlib.inflateRawSync(rec.payload);
 }
 
 // ---- Encrypt (Type 4) --------------------------------------------------
@@ -86,21 +86,20 @@ function encryptEncode(innerBytes, key, { algorithm, keyAlgorithm } = {}) {
   const cipher = crypto.createCipheriv('aes-256-gcm', key, nonce);
   const ciphertext = Buffer.concat([cipher.update(innerBytes), cipher.final()]);
   const authTag = cipher.getAuthTag();
-  const fields = new Map([
-    [0, nonce],
-    [2, Buffer.concat([ciphertext, authTag])], // "ciphertext+tag" per spec
-  ]);
+  const fields = new Map([[0, nonce]]);
   if (algorithm !== undefined) fields.set(3, algorithm);
   if (keyAlgorithm !== undefined) fields.set(5, keyAlgorithm);
   return {
     typeId: ENCRYPT_TYPE,
     fields,
+    payload: Buffer.concat([ciphertext, authTag]), // ciphertext+tag in payload slot
   };
 }
 
-function encryptDecode(map, key) {
+function encryptDecode(rec, key) {
+  const map = rec.map || rec.fields;
   const nonce = map.get(0);
-  const combined = map.get(2);
+  const combined = rec.payload;
   const authTag = combined.subarray(combined.length - 16);
   const ciphertext = combined.subarray(0, combined.length - 16);
   const decipher = crypto.createDecipheriv('aes-256-gcm', key, nonce);
@@ -129,13 +128,13 @@ function splitEncode(innerBytes, { count, parityScheme = PARITY_SCHEME_NONE }) {
       [0, groupId],
       [2, i],
       [4, count],
-      [6, Buffer.from(slice)],
       [7, totalBytes],
     ]);
     if (parityScheme !== PARITY_SCHEME_NONE) fields.set(9, parityScheme);
     fragments.push({
       typeId: SPLIT_TYPE,
       fields,
+      payload: Buffer.from(slice),
     });
   }
 
@@ -149,13 +148,13 @@ function splitEncode(innerBytes, { count, parityScheme = PARITY_SCHEME_NONE }) {
       [0, groupId],
       [2, count], // parity fragment index == count (first index >= count)
       [4, count],
-      [6, parity],
       [7, totalBytes],
       [9, parityScheme],
     ]);
     fragments.push({
       typeId: SPLIT_TYPE,
       fields,
+      payload: parity,
     });
   } else if (parityScheme !== PARITY_SCHEME_NONE) {
     throw new Error(`unsupported parity_scheme: ${parityScheme}`);
@@ -198,7 +197,7 @@ function splitDecode(fragmentRecords) {
 
   const chunkLen = chunkLength(totalBytes, count);
   const byIndex = new Map();
-  for (const f of fragmentRecords) byIndex.set(f.map.get(2), f.map.get(6));
+  for (const f of fragmentRecords) byIndex.set(f.map.get(2), f.payload);
 
   const missing = [];
   for (let i = 0; i < count; i++) {
@@ -245,10 +244,10 @@ function splitDecode(fragmentRecords) {
 
 const WRAPPER_TYPES = new Set([SPLIT_TYPE, COMPRESS_TYPE, ENCRYPT_TYPE]);
 
-function unwrapSingle(typeId, map, ctx) {
-  if (typeId === COMPRESS_TYPE) return compressDecode(map);
-  if (typeId === ENCRYPT_TYPE) return encryptDecode(map, ctx.aesKey);
-  throw new Error(`unwrapSingle: not a single-record wrapper type: ${typeId}`);
+function unwrapSingle(rec, ctx) {
+  if (rec.typeId === COMPRESS_TYPE) return compressDecode(rec);
+  if (rec.typeId === ENCRYPT_TYPE) return encryptDecode(rec, ctx.aesKey);
+  throw new Error(`unwrapSingle: not a single-record wrapper type: ${rec.typeId}`);
 }
 
 function decodeAndCheck(bytes, knownKeysRegistry) {
@@ -299,7 +298,7 @@ function resolveStack(codesBytesList, ctx, knownKeysRegistry) {
     let rec = core.applyCriticality(record, knownKeys);
     if (rec.aborted) throw new Error(`record type ${rec.typeId} aborted: ${rec.abortReason}`);
     while (WRAPPER_TYPES.has(rec.typeId) && rec.typeId !== SPLIT_TYPE) {
-      const bytes = unwrapSingle(rec.typeId, rec.map, ctx);
+      const bytes = unwrapSingle(rec, ctx);
       rec = decodeAndCheck(bytes, knownKeysRegistry);
     }
     if (rec.typeId === SPLIT_TYPE) {
@@ -313,7 +312,7 @@ function resolveStack(codesBytesList, ctx, knownKeysRegistry) {
     const bytes = splitDecode(pendingSplitFragments);
     let rec = decodeAndCheck(bytes, knownKeysRegistry);
     while (WRAPPER_TYPES.has(rec.typeId) && rec.typeId !== SPLIT_TYPE) {
-      const inner = unwrapSingle(rec.typeId, rec.map, ctx);
+      const inner = unwrapSingle(rec, ctx);
       rec = decodeAndCheck(inner, knownKeysRegistry);
     }
     if (rec.typeId === SPLIT_TYPE) {

@@ -18,11 +18,11 @@ test('Encrypt with no Algorithm/Key Algorithm fields round-trips exactly as befo
   const key = crypto.randomBytes(32);
   const innerBytes = Buffer.from('some secret payload bytes');
 
-  const { fields } = wrappers.encryptEncode(innerBytes, key);
-  assert.equal(fields.has(3), false);
-  assert.equal(fields.has(5), false);
+  const enc = wrappers.encryptEncode(innerBytes, key);
+  assert.equal(enc.fields.has(3), false);
+  assert.equal(enc.fields.has(5), false);
 
-  const decrypted = wrappers.encryptDecode(fields, key);
+  const decrypted = wrappers.encryptDecode(enc, key);
   assert.deepEqual(decrypted, innerBytes);
 });
 
@@ -30,15 +30,15 @@ test('Encrypt with Algorithm (uint, COSE) and Key Algorithm (uint, COSE) round-t
   const key = crypto.randomBytes(32);
   const innerBytes = Buffer.from('some secret payload bytes');
 
-  const { fields } = wrappers.encryptEncode(innerBytes, key, {
+  const enc = wrappers.encryptEncode(innerBytes, key, {
     algorithm: wrappers.COSE_ALG_A256GCM,
     keyAlgorithm: wrappers.COSE_ALG_ECDH_ES_HKDF_256,
   });
 
-  assert.equal(fields.get(3), 3); // A256GCM
-  assert.equal(fields.get(5), -25); // ECDH-ES+HKDF-256
+  assert.equal(enc.fields.get(3), 3); // A256GCM
+  assert.equal(enc.fields.get(5), -25); // ECDH-ES+HKDF-256
 
-  const decrypted = wrappers.encryptDecode(fields, key);
+  const decrypted = wrappers.encryptDecode(enc, key);
   assert.deepEqual(decrypted, innerBytes);
 });
 
@@ -46,30 +46,30 @@ test('Algorithm/Key Algorithm accept a text-string fallback for anything not in 
   const key = crypto.randomBytes(32);
   const innerBytes = Buffer.from('some secret payload bytes');
 
-  const { fields } = wrappers.encryptEncode(innerBytes, key, {
+  const enc = wrappers.encryptEncode(innerBytes, key, {
     algorithm: 'A256GCM',
     keyAlgorithm: 'com.example/proprietary-key-wrap-v1',
   });
 
-  assert.equal(fields.get(3), 'A256GCM');
-  assert.equal(fields.get(5), 'com.example/proprietary-key-wrap-v1');
-  assert.deepEqual(wrappers.encryptDecode(fields, key), innerBytes);
+  assert.equal(enc.fields.get(3), 'A256GCM');
+  assert.equal(enc.fields.get(5), 'com.example/proprietary-key-wrap-v1');
+  assert.deepEqual(wrappers.encryptDecode(enc, key), innerBytes);
 });
 
 test('a decoder that pre-dates keys 3/5 silently ignores them instead of aborting the record', () => {
   const key = crypto.randomBytes(32);
   const innerBytes = Buffer.from('some secret payload bytes');
 
-  const { typeId, fields } = wrappers.encryptEncode(innerBytes, key, {
+  const enc = wrappers.encryptEncode(innerBytes, key, {
     algorithm: wrappers.COSE_ALG_A256GCM,
     keyAlgorithm: wrappers.COSE_ALG_DIRECT_HKDF_SHA_256,
   });
-  const encoded = core.encodeRecordBytes({ typeId, fields });
+  const encoded = core.encodeRecordBytes(enc);
 
   const rec = core.decodeRecordBytes(encoded);
   const checked = core.applyCriticality(rec, OLD_ENCRYPT_KNOWN_KEYS);
 
   assert.equal(checked.aborted, false);
   assert.deepEqual(checked.ignoredKeys.sort(), [3, 5]);
-  assert.deepEqual(wrappers.encryptDecode(checked.map, key), innerBytes);
+  assert.deepEqual(wrappers.encryptDecode(rec, key), innerBytes);
 });

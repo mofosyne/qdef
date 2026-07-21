@@ -83,11 +83,8 @@ function buildPgpBackupCodes(secretKeyBytes, aesKey) {
     fields: new Map([[0, secretKeyBytes]]),
   });
 
-  const { typeId: encTypeId, fields: encFields } = wrappers.encryptEncode(innerRecordBytes, aesKey);
-  const encryptRecordBytes = core.encodeRecordBytes({
-    typeId: encTypeId,
-    fields: encFields,
-  });
+  const enc = wrappers.encryptEncode(innerRecordBytes, aesKey);
+  const encryptRecordBytes = core.encodeRecordBytes(enc);
 
   const fragmentRecords = wrappers.splitEncode(encryptRecordBytes, {
     count: 3,
@@ -115,7 +112,7 @@ function decodePgpBackupFromCodes(codes, aesKey) {
   );
   assert.equal(encryptRec.aborted, false, encryptRec.abortReason);
 
-  const innerRecordBytes = wrappers.encryptDecode(encryptRec.map, aesKey);
+  const innerRecordBytes = wrappers.encryptDecode(encryptRec, aesKey);
   const pgpRec = core.applyCriticality(
     core.decodeRecordBytes(innerRecordBytes),
     rt.PGP_BACKUP_KNOWN_KEYS

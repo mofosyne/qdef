@@ -3,6 +3,9 @@
 // Each schema is just "which keys does this Record Type recognize" — the
 // minimum a decoder needs to apply the even/odd criticality rule (§3.2).
 
+const BUNDLE_TYPE = 0;
+const BUNDLE_KNOWN_KEYS = new Set([]);
+
 const WIFI_TYPE = 100;
 const WIFI_KNOWN_KEYS = new Set([0, 1, 2, 4]);
 
@@ -13,6 +16,8 @@ const PGP_BACKUP_TYPE = 950;
 const PGP_BACKUP_KNOWN_KEYS = new Set([0]);
 
 module.exports = {
+  BUNDLE_TYPE,
+  BUNDLE_KNOWN_KEYS,
   WIFI_TYPE,
   WIFI_KNOWN_KEYS,
   TAGDROP_REGISTRATION_TYPE,

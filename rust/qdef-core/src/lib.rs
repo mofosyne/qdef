@@ -9,7 +9,7 @@
 //! knowledge to skip past a Record it doesn't care about, only to skip
 //! one generic CBOR array (see docs/DESIGN.md for why this replaced the
 //! earlier flat, unwrapped Record shape). Its elements, in order:
-//! `[namespace?, typeId, ndefId?, map, subrecord*]`
+//! `[namespace?, typeId, map?, payload?, subrecord*]`
 //! - namespace (optional): a byte string, present only when the array's
 //!   first element is a byte string immediately followed by a valid
 //!   typeId. Scopes this Record's own typeId, overriding any container-
@@ -18,19 +18,14 @@
 //!   there is no backup-typeId accumulation — at most one typeId per
 //!   Record (see docs/FINDINGS.md for why decentralized Type IDs, Named
 //!   Type IDs, and backup typeIDs were all retired).
-//! - ndefId (optional): a bare CBOR text string immediately following
-//!   typeId — a stable, type-independent external reference mirroring
-//!   NDEF's own ID field (§3.1).
-//! - map (mandatory): the field Map, always present even when empty, so
-//!   a Record's own item count past `[namespace?, typeId, ndefId?]` is
-//!   never ambiguous with anything else.
+//! - map (optional): the field Map, omitted when empty (§3.1).
+//! - payload (optional): a bare CBOR byte string or text string (§3.1).
+//!   Text strings are assumed to be plaintext; byte strings are opaque
+//!   content. Not present in most Records.
 //! - subrecord* (zero or more): every remaining array element after the
-//!   map is itself a nested Record, recursively the same shape (§3.1's
-//!   `ID[]{}` shape generalized — see docs/DESIGN.md and
-//!   `Record::subrecords`). No separate wrapper array is needed for
-//!   these: the outer Record's own array is already self-bounded, so
-//!   "everything after the map" is unambiguous without an extra length
-//!   prefix.
+//!   payload (or after the map when no payload is present) is itself a
+//!   nested Record, recursively the same shape. No separate wrapper array
+//!   is needed: the outer Record's own array is already self-bounded.
 //!
 //! A malformed *inner* Record (one whose own array contents don't parse
 //! as valid Record grammar) never corrupts a sibling Record's
@@ -190,7 +185,7 @@ impl<'a> Iterator for Records<'a> {
 }
 
 /// A routed Record: its typeID (via the prefix item, §3.1's routing
-/// mechanism), its optional NDEF-ID text string, and its raw map bytes
+/// mechanism), its raw payload bytes, and its raw map bytes
 /// for a Record-Type-specific handler (e.g. `check_criticality`,
 /// `find_value`) to inspect further.
 pub struct Record<'a> {
@@ -202,24 +197,19 @@ pub struct Record<'a> {
     /// no override; interpretation-layer code falls back to whatever
     /// ambient namespace the container discriminator declared.
     local_namespace: Option<cbor::Key<'a>>,
-    /// The raw bytes of this Record's NDEF-ID-equivalent text string
-    /// (§3.1), if present. Uninterpreted -- this crate only recognizes
-    /// the shape (a bare text string immediately following the typeID
-    /// item), never what the string means.
-    ndef_id: Option<&'a [u8]>,
+    /// The raw bytes of this Record's payload (§3.1), if present —
+    /// a bare CBOR byte string or text string. Uninterpreted by this
+    /// crate.
+    payload: Option<&'a [u8]>,
     /// The raw bytes of every array element following this Record's own
-    /// field Map -- its subrecords (§3.1's generalized `ID[]{}` shape),
-    /// if any. `None` means no elements followed the map at all. Each
-    /// subrecord is itself a complete, self-bounded Record array, so
-    /// these bytes feed straight into the same `Records` iterator used
-    /// for the top-level Sequence — recursion at zero extra parsing
-    /// cost, see `subrecords()`.
+    /// payload — its subrecords, if any. `None` means no elements
+    /// followed the payload (or the map when no payload present).
     sub_bytes: Option<&'a [u8]>,
-    /// True if no typeID was found before the map — the record is
-    /// unroutable and should be ignored by dispatch logic.
+    /// True if no typeID was found — the record is unroutable and
+    /// should be ignored by dispatch logic.
     pub ignored: bool,
     /// The field map bytes (from the map delimiter to the end of the
-    /// map). Empty slice if no map was found (incomplete record).
+    /// map). Empty slice if no map was found.
     pub map_bytes: &'a [u8],
 }
 
@@ -239,18 +229,17 @@ impl<'a> Record<'a> {
         self.local_namespace
     }
 
-    /// The raw bytes of this Record's NDEF-ID-equivalent text string
-    /// (§3.1), if present.
-    pub fn ndef_id(&self) -> Option<&'a [u8]> {
-        self.ndef_id
+    /// The raw bytes of this Record's payload (§3.1), if present.
+    pub fn payload(&self) -> Option<&'a [u8]> {
+        self.payload
     }
 
-    /// This Record's own subrecords (§3.1's generalized `ID[]{}` shape),
-    /// if any -- an iterator over the array elements following this
-    /// Record's field Map, parsed with the exact same Record grammar as
+    /// This Record's own subrecords, if any — an iterator over the
+    /// array elements following this Record's payload (or map, when no
+    /// payload is present), parsed with the exact same Record grammar as
     /// the top-level Sequence (the same `Records` iterator, reused
     /// recursively, not a new grammar). `None` if no elements followed
-    /// the map at all.
+    /// at all.
     pub fn subrecords(&self) -> Option<Records<'a>> {
         self.sub_bytes.map(|b| Records {
             remaining: b,
@@ -264,7 +253,7 @@ impl<'a> Record<'a> {
 /// header plus every one of its declared elements, no more, no less;
 /// see `Records::next`, which determines this bound generically via
 /// `cbor::skip_any_item` before calling this function):
-///   `[namespace?, typeId, ndefId?, map, subrecord*]`
+///   `[namespace?, typeId, map?, payload?, subrecord*]`
 ///
 /// - namespace: recognized only when the array's first element is a
 ///   byte string AND the element immediately after it is a valid
@@ -272,15 +261,13 @@ impl<'a> Record<'a> {
 ///   the same "malformed prefix means unroutable, not a crash"
 ///   tolerance as before.
 /// - typeId: a bare uint (major type 0). No other shape is recognized.
-/// - ndefId: a bare text string immediately following typeId, if
-///   present.
-/// - Unrecognized items between ndefId and the map are skipped
-///   (forward-compat padding), same as always.
-/// - map: the first map-shaped element reached. Everything from here to
-///   the end of this Record's own array, past the map, is subrecords --
-///   no separate wrapper array is needed to bound them, since this
-///   Record's own array (already exactly bounded by the caller) already
-///   is one.
+/// - map: the first map-shaped element reached, if any. Optional --
+///   absent when empty (§3.1).
+/// - payload: a bare byte string (major 2) or text string (major 3)
+///   immediately following the map (or typeId if no map), if present.
+/// - subrecords: everything remaining after the payload (or map when no
+///   payload is present) to the end of this Record's own (already exactly
+///   bounded) array.
 fn parse_record_array(buf: &[u8]) -> Result<Record<'_>, Error> {
     let head = cbor::read_head(buf).map_err(Error::Cbor)?;
     let mut remaining_items = head.arg;
@@ -288,17 +275,12 @@ fn parse_record_array(buf: &[u8]) -> Result<Record<'_>, Error> {
 
     let mut type_id: Option<cbor::Key<'_>> = None;
     let mut local_namespace: Option<cbor::Key<'_>> = None;
-    let mut ndef_id: Option<&[u8]> = None;
+    let mut payload: Option<&[u8]> = None;
 
     // [namespace?] typeId
     if remaining_items > 0 {
         let item_head = cbor::read_head(&buf[pos..]).map_err(Error::Cbor)?;
         if item_head.major == 2 && remaining_items > 1 {
-            // Candidate namespace: a byte string. Only commit if the
-            // element right after it is a valid typeId -- otherwise this
-            // isn't a namespace-prefixed Record after all, and pos/
-            // remaining_items are left untouched so Phase 2 below treats
-            // the byte string as an ordinary unrecognized item.
             let (ns_key, ns_len) = cbor::read_key(&buf[pos..]).map_err(Error::Cbor)?;
             let next_pos = pos + ns_len;
             let next_head = cbor::read_head(&buf[next_pos..]).map_err(Error::Cbor)?;
@@ -317,48 +299,52 @@ fn parse_record_array(buf: &[u8]) -> Result<Record<'_>, Error> {
         }
     }
 
-    // The NDEF-ID text string only follows a *recognized* typeID item --
-    // a bare text string with no preceding typeID is not this Record's
-    // NDEF-ID, it's an unrouted Record's first unrecognized item (Phase
-    // 2 below skips it as forward-compat padding, same as always).
-    if type_id.is_some() && remaining_items > 0 {
-        let item_head = cbor::read_head(&buf[pos..]).map_err(Error::Cbor)?;
-        if item_head.major == 3 && !item_head.is_indefinite() {
-            let (payload, len) = cbor::read_definite_string(&buf[pos..]).map_err(Error::Cbor)?;
-            ndef_id = Some(payload);
-            pos += len;
-            remaining_items -= 1;
-        }
-    }
-
-    // Phase 2: skip non-map items until the map delimiter.
+    // Phase 2: skip forward-compat items until map, payload, or subrecord
+    // array. Only items that are NOT a map (5), NOT a byte string (2), NOT
+    // a text string (3), and NOT an array (4) are skipped — matching the
+    // JS parser's behavior where payload (bstr/tstr) is recognized after
+    // the map (or directly after typeId when no map is present).
     let mut map_bytes: &[u8] = &[];
     while remaining_items > 0 {
         let item_head = cbor::read_head(&buf[pos..]).map_err(Error::Cbor)?;
-        let item_len = cbor::skip_any_item(&buf[pos..]).map_err(Error::Cbor)?;
-        if item_head.major == 5 {
-            // It's a map — the record delimiter. remaining_items is not
-            // read again after this break, so it's not decremented here.
-            map_bytes = &buf[pos..pos + item_len];
-            pos += item_len;
+        let item_major = item_head.major;
+        if item_major == 5 || item_major == 2 || item_major == 3 || item_major == 4 {
             break;
         }
-        // Not a map — skip it (forward-compat unknown item).
+        let item_len = cbor::skip_any_item(&buf[pos..]).map_err(Error::Cbor)?;
         pos += item_len;
         remaining_items -= 1;
     }
 
-    // Well-formedness check: walk every field value once so a truncated
-    // or malformed map is caught during parsing, not silently passed
-    // through. §3.2 no longer restricts field-value *shape* (any
-    // well-formed CBOR item is legal now), so this only ever checks
-    // well-formedness, never shape.
+    // Map, if present, immediately after Phase 2.
+    if remaining_items > 0 {
+        let item_head = cbor::read_head(&buf[pos..]).map_err(Error::Cbor)?;
+        if item_head.major == 5 {
+            let item_len = cbor::skip_any_item(&buf[pos..]).map_err(Error::Cbor)?;
+            map_bytes = &buf[pos..pos + item_len];
+            pos += item_len;
+        }
+    }
+
+    // Well-formedness check.
     if !map_bytes.is_empty() {
         walk_map_pairs(map_bytes, |_k, _v| Ok(ControlFlow::Continue)).map_err(Error::Cbor)?;
     }
 
-    // Everything remaining, past the map, to the end of this Record's
-    // own (already exactly bounded) array is subrecords.
+    // Payload: a bare byte string (major 2) or text string (major 3)
+    // immediately following the map (or typeId if no map was found).
+    // Only recognized for routed records (type_id.is_some()).
+    if type_id.is_some() && pos < buf.len() {
+        let item_head = cbor::read_head(&buf[pos..]).map_err(Error::Cbor)?;
+        if (item_head.major == 2 || item_head.major == 3) && !item_head.is_indefinite() {
+            let (raw, len) = cbor::read_definite_string(&buf[pos..]).map_err(Error::Cbor)?;
+            payload = Some(raw);
+            pos += len;
+        }
+    }
+
+    // Everything remaining to the end of this Record's own (already
+    // exactly bounded) array is subrecords.
     let sub_bytes: Option<&[u8]> = if pos < buf.len() {
         Some(&buf[pos..])
     } else {
@@ -370,7 +356,7 @@ fn parse_record_array(buf: &[u8]) -> Result<Record<'_>, Error> {
     Ok(Record {
         type_id,
         local_namespace,
-        ndef_id,
+        payload,
         sub_bytes,
         ignored,
         map_bytes,

@@ -123,19 +123,20 @@ that's the actual line, not tier width or magnitude:**
 +------------------------+------------------+-------------+-------------+
 ```
 
-**Why Type ID `0` sits unassigned in the Standards Action tier.** It
-isn't reserved for anything — it's simply the one number in `0`–`22`
-with a past. An earlier design used `0` for an optional leading
+**Why Type ID `0` is assigned to the Bundle record type** rather than
+sitting unassigned. An earlier design used `0` for an optional leading
 container-level header Record; a decoder couldn't structurally tell
 "header present" from "header absent, this is Record 1's own prefix
 typeID `0`" (FINDINGS.md #26), which is why the container discriminator
 (spec §3.5) exists instead — mandatory, positionally fixed, dispatched
 by CBOR major type rather than by being typeID-prefixed at all. That
-fix means `0` carries no live ambiguity risk today and could be
-assigned to an ordinary standard Record Type same as `14`–`22`; nothing
-has needed it yet. Future container-level (not per-Record) metadata has
-its own growth point already — the discriminator's extensible map form
-— so `0` isn't earmarked as its future home either.
+fix meant `0` carried no live ambiguity risk and could be assigned to
+an ordinary standard Record Type. The Bundle record (§4.6) fills this
+slot: a structural grouping record with no map data of its own, whose
+subrecords are the bundled content. An empty map is implicit and
+typically omitted (`[0, [Rec1][Rec2]]`). Future container-level (not
+per-Record) metadata has its own growth point already — the
+discriminator's extensible map form — so `0` isn't earmarked for that.
 
 There is no longer a Decentralized (byte string) or Named (text string)
 row here — both Type ID forms were retired entirely once namespace-
@@ -488,9 +489,9 @@ zero-coordination identity — turned out to be better and more cheaply
 served by a declared namespace, §3.5), Type Hint itself had nothing left
 to attach a name to and was retired alongside it, not just relocated
 again. The bare-text-string slot that used to carry it (and, before
-that, a reserved-for-future "Named ID" typeID form) now carries the
-NDEF-ID-equivalent instead (spec §3.1) — one unambiguous meaning for a
-position that used to be split between two retired purposes.
+that, a reserved-for-future "Named ID" typeID form) later became the
+payload slot (spec §3.1) — one unambiguous meaning for a position that
+used to be split between two retired purposes.
 
 ## Media Payload (Type 6): why it never reused the (now-retired) decentralized-ID + Hint pattern
 
@@ -761,15 +762,14 @@ Hint's own verification string — was sitting unclaimed, already
 structurally reserved, already at the correct architectural layer (Phase
 1, parsed by the mandatory core before any Type-specific interpretation,
 exactly the property this whole entry was checking for). A bare CBOR
-text string immediately following the typeID-bearing item became the
-NDEF-ID-equivalent: no new prefix-item shape for Phase 1 to learn (it's
-just "a text string, if present, right after the typeID" — dispatched by
-CBOR major type like everything else in the prefix), no reserved
-negative map key needed, and — the deciding property neither Option A
-nor B could claim — literally zero design cost, since the slot already
-existed and had already been paid for structurally by two now-retired
-mechanisms. Both experimental prototypes were deleted as dead code once
-this shipped; see spec §3.1's "NDEF-ID-equivalent" and FINDINGS.md.
+text or byte string immediately following the typeID-bearing item (or
+the field Map) became the payload slot: no new prefix-item shape for
+Phase 1 to learn (it's dispatched by CBOR major type like everything
+else in the prefix), no reserved negative map key needed, and — the
+deciding property neither Option A nor B could claim — literally zero
+design cost, since the slot already existed and had already been paid
+for structurally by two now-retired mechanisms, plus the NDEF-ID that
+occupied it briefly before payload replaced it. See spec §3.1.
 
 This doesn't retroactively validate or invalidate the Option A/B
 tradeoff analysis above — that reasoning is still correct for what it
@@ -801,7 +801,7 @@ unrecognized critical Preview drops out of the Sequence, and the real
 Body — previously "index 1" — is now sitting at "index 0," with no
 coherent way to say what "index 0 means Preview" should do once the
 thing that used to occupy index 0 is gone. Every other QDEF correlation
-mechanism (`group_id`, namespace pairing, NDEF-ID) survives partial loss
+mechanism (`group_id`, namespace pairing, payload) survives partial loss
 because none of them depend on index. Second, Open/Hint URI (§4.2) is
 already a real, shipped plain sibling Record with no position
 requirement — an encoder emitting it before the content Records (a
@@ -822,7 +822,7 @@ which Preview belongs to which Body. That's the one place explicit
 grouping is structurally required.
 
 **Resolved as a new optional Phase-1 item, not a new Wrapper Type ID.**
-A definite-length array positioned between the typeID/NDEF-ID prefix
+A definite-length array positioned between the typeID/map/payload prefix
 items and the mandatory field Map, whose elements parse with the *same*
 Record grammar already defined for the top-level Sequence — recursion,
 not a second grammar. This was checked against, and preferred over,
@@ -938,12 +938,12 @@ namespace. But the proposed fix (a universal trailing `[]`, present even
 when empty) taxes the overwhelmingly common case — ordinary fields, no
 subrecords — to spare the rare one, backwards from the zero-cost-when-
 unused discipline this format has followed everywhere else (Wrapper
-Records opt-in, NDEF-ID free when absent, `ID[]{}` itself free when
+Records opt-in, payload free when absent, `ID[]{}` itself free when
 unused). The sub-scoping problem is real; that specific fix didn't earn
 its cost.
 
 **Resolved instead by making every Record its own self-delimited CBOR
-array — `[namespace?, typeId, ndefId?, map, subrecord*]`** — replacing
+array — `[namespace?, typeId, map?, payload?, subrecord*]`** — replacing
 both `ID[]{}` and the earlier 2-element `[namespace, typeId]` pairing
 array. What this actually buys, precisely: not easier interpretation of
 a Record you care about (Phase 1's own recognition logic is exactly as
@@ -2108,8 +2108,8 @@ overrides-ambient and falls-back-to-ambient resolution, the
 even-typeId-is-vacuous case, a `resolveStack` case where the
 Wrapper-resolved terminal Record carries its own override, and the
 byte-cost FINDING above. (A pairing item stacking with a following
-NDEF-ID-equivalent text string, §3.1, is covered separately — see
-`prototype/test/ndef-id.test.js`; there's no longer a backup-typeID
+payload slot, §3.1, is covered in the prototype's core tests; there's no
+longer a backup-typeID
 interaction to test, since that mechanism was retired.)
 
 Cross-validated in `rust/qdef-core`: `parse_record`'s Phase 1 gained the
@@ -2121,7 +2121,7 @@ the crate — matching the container discriminator's own precedent. Tests
 confirm the pairing round-trips for both namespace forms and degrades
 correctly when a Record carries no pairing item.
 
-## Text string Type IDs — historical: the reserved slot went to the NDEF-ID-equivalent instead
+## Text string Type IDs — historical: the reserved slot became the NDEF-ID, then the payload slot
 
 **Superseded.** This entry originally worked out placeholder-grade
 caution guidance (definite-length required, exact byte comparison, a
@@ -2133,19 +2133,20 @@ kind of Type ID — no longer exists at all: §3.1's redesign retired
 decentralized Type IDs entirely (both the byte string and the reserved
 text string forms) once a declared namespace turned out to do that job
 strictly better, and repurposed the now-freed bare-text-string prefix
-position for something with a clearer job: the NDEF-ID-equivalent, a
-stable external reference immediately following the typeID-bearing
-item, mirroring NDEF's own `ID` field (spec §3.1).
+position for something with a clearer job: first the NDEF-ID-equivalent
+(historical, see earlier entries), then the payload slot (spec §3.1),
+which accepts both text strings (as plaintext) and byte strings (as
+opaque content).
 
 Every one of the three gaps this entry originally closed carried
-forward into the NDEF-ID-equivalent's own spec text almost verbatim,
+forward into the payload slot's own spec text almost verbatim,
 since they're properties of "a bare text string prefix item," not
 specific to what it used to mean as a Type ID: definite-length required
 (§3.4 already covers this for every encoder-emitted string, not just
 this position), exact raw-UTF-8-byte comparison for anyone matching
 against it, and no ambiguity about what "reserved" meant, since the slot
 is no longer reserved at all — it has exactly one meaning now. See
-"Implementer caution for the NDEF-ID-equivalent," spec §3.1.
+spec §3.1's "Payload" subsection.
 
 This entry is kept for the historical trail: the reasoning that "an
 unclaimed-but-parseable text string slot accumulates informal, hard-to-

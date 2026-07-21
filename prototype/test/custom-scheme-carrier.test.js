@@ -85,6 +85,6 @@ test('FINDING: skipping magic, the discriminator, and namespace-scoping together
   // entry) -- the relative saving of skipping magic/discriminator/
   // namespace-scoping is unaffected, since both paths pay that same
   // array-header cost once.
-  assert.equal(sharedContainerPath, 12);
-  assert.equal(ownSchemePath, 5);
+  assert.equal(sharedContainerPath, 11);
+  assert.equal(ownSchemePath, 4);
 });

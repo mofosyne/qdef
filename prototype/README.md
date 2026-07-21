@@ -10,12 +10,11 @@ found.
 
 - `src/core.js` — the mandatory core: magic framing, the mandatory
   container discriminator, CBOR-Sequence encode/decode, per-Record
-  prefix typeID recognition (a bare uint, or a namespace-pairing array)
-  plus the optional NDEF-ID-equivalent text string, and the even/odd
-  criticality rule (spec §2–§3). No knowledge of any specific Record
-  Type. Encodes every Record with RFC 8949 §4.2.1 canonical CBOR
-  (spec §3.4), not just whatever the `cbor` package's default encoder
-  happens to produce.
+   prefix typeID recognition (a bare uint, or a namespace-pairing array),
+   the optional payload slot, and the even/odd criticality rule (spec
+   §2–§3). No knowledge of any specific Record Type. Encodes every Record
+   with RFC 8949 §4.2.1 canonical CBOR (spec §3.4), not just whatever the
+   `cbor` package's default encoder happens to produce.
 - `src/header.js` — interprets the container discriminator (spec §3.5):
   namespace parsing, namespace-Hint hash-derivation verification, and
   Type ID lookup-key resolution (even = always global, odd = requires a
@@ -58,9 +57,10 @@ found.
 - `test/custom-scheme-carrier.test.js` — the implied-namespace pattern
   for an isolated carrier (own URI scheme / own NDEF MIME type): a
   namespace fixed by the carrier itself, never transmitted.
-- `test/ndef-id.test.js` — the NDEF-ID-equivalent bare text string
-  (spec §3.1): round-trips alongside an ordinary typeID and alongside a
-  namespace-pairing item, absent at zero cost, and its edge cases.
+- `test/ndef-id.test.js` — the NDEF-ID was removed from the grammar;
+  this file now documents residual behaviors (a Record without it has
+  the property undefined, and an unroutable text string before a map
+  is skipped).
 - `test/nested-field-values.test.js` — §3.2's field-value-shape rule
   relaxation: a field value may be any well-formed CBOR item now (bare
   arrays, nested maps, multi-level nesting), and criticality is

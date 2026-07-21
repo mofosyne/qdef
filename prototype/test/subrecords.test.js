@@ -1,6 +1,6 @@
 'use strict';
 // Subrecords (§3.1's generalized shape): every Record is now exactly one
-// self-delimited CBOR array, [namespace?, typeId, ndefId?, map, sub*] --
+// self-delimited CBOR array, [namespace?, typeId, map?, payload?, sub*] --
 // everything past the mandatory field Map, for the rest of that Record's
 // own array, is itself a nested Record, recursively the same grammar.
 // No separate wrapper array is needed to bound them anymore: the outer
@@ -62,7 +62,7 @@ test('multiple subrecords dispatch by their own typeID, never by position', () =
   assert.equal(rec.subrecords[1].map.get(1), 'b.txt');
 });
 
-test('a subrecord can itself carry an NDEF-ID and a namespace, and its own further subrecords -- reused grammar, not a reduced one', () => {
+test('a subrecord can itself carry a namespace and its own further subrecords -- reused grammar, not a reduced one', () => {
   const namespace = Buffer.from('cdcdcdcd', 'hex');
   const bytes = core.encodeRecordBytes({
     typeId: 20,
@@ -71,7 +71,6 @@ test('a subrecord can itself carry an NDEF-ID and a namespace, and its own furth
       {
         typeId: 1,
         localNamespace: namespace,
-        ndefId: 'inner-record-1',
         fields: new Map([[0, 'payload']]),
         subrecords: [{ typeId: 22, fields: new Map([[0, 'leaf']]) }],
       },
@@ -81,17 +80,17 @@ test('a subrecord can itself carry an NDEF-ID and a namespace, and its own furth
   const inner = rec.subrecords[0];
   assert.equal(inner.typeId, 1);
   assert.ok(inner.localNamespace.equals(namespace));
-  assert.equal(inner.ndefId, 'inner-record-1');
   assert.equal(inner.map.get(0), 'payload');
   assert.equal(inner.subrecords[0].typeId, 22);
   assert.equal(inner.subrecords[0].map.get(0), 'leaf');
 });
 
-test('a non-array item after the map is not a subrecord -- skipped, same forward-compat tolerance as the top-level Sequence', () => {
-  const bytes = cbor.encodeCanonical([20, new Map([[0, 'payload']]), 'stray-forward-compat-item']);
+test('a non-array non-payload item after the map is not a subrecord -- skipped, same forward-compat tolerance as the top-level Sequence', () => {
+  const bytes = cbor.encodeCanonical([20, new Map([[0, 'payload']]), 42]);
   const rec = core.decodeRecordBytes(bytes);
   assert.equal(rec.typeId, 20);
   assert.equal(rec.map.get(0), 'payload');
+  assert.equal(rec.payload, undefined);
   assert.deepEqual(rec.subrecords, []);
 });
 

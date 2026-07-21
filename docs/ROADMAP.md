@@ -50,14 +50,9 @@ only.
 
 **Format-wide mechanisms resolved and prototyped:** every Record is now
 exactly one self-delimited CBOR array (§3.1) — `[namespace?, typeId,
-ndefId?, map, subrecord*]` — so any decoder can skip a whole Record it
-doesn't care about using nothing but ordinary CBOR array-skipping, with
-no Record-grammar knowledge at all, and a malformed inner Record can no
-longer corrupt discovery of its siblings (FINDINGS.md #41). Subrecords
-generalize what was briefly a narrower `ID[]{}` mechanism into the same
-recursive grammar used everywhere else, resolving a real correlation
-problem TagDrop's own Media Preview/Payload proposal ran into. Also
-resolved: the NDEF-ID-equivalent (a bare text string following a
+map?, payload?, subrecord*]` — so any decoder can skip a whole Record it
+
+resolved: the payload slot (a bare byte or text string following the
 Record's typeID, mirroring NDEF's own `ID` field, costing the mandatory
 core nothing beyond recognizing one more array-element shape),
 namespace-scoped Type IDs and their hash-derivation self-certification

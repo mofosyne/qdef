@@ -174,8 +174,8 @@ test('FINDING: the pairing form is NOT a cheaper substitute for the container di
   const paired = bareCost(1, undefined, OVERRIDE_NAMESPACE);
   const bareTypeIdNoOverride = bareCost(1);
 
-  assert.equal(paired, 8);
-  assert.equal(bareTypeIdNoOverride, 3);
+  assert.equal(paired, 7);
+  assert.equal(bareTypeIdNoOverride, 2);
   // Verified, not asserted: pairing with a namespace override costs MORE
   // per Record than the same typeID with no override at all (8 > 3) --
   // because it bundles a full namespace declaration onto every Record

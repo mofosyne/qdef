@@ -124,7 +124,7 @@ test('Media Preview composes with Compress: Compress outermost, Preview as its s
 
   const rec = core.applyCriticality(records[0], wrappers.COMPRESS_KNOWN_KEYS);
   assert.equal(rec.aborted, false);
-  assert.deepEqual(wrappers.compressDecode(rec.map), inner);
+  assert.deepEqual(wrappers.compressDecode(rec), inner);
   assert.equal(rec.subrecords[0].typeId, wrappers.MEDIA_PREVIEW_TYPE);
   assert.equal(rec.subrecords[0].map.get(3), 'doc.txt');
 });
@@ -141,7 +141,7 @@ test('Media Preview composes with Encrypt: Encrypt outermost, Preview as its sub
 
   const rec = core.applyCriticality(records[0], wrappers.ENCRYPT_KNOWN_KEYS);
   assert.equal(rec.aborted, false);
-  assert.deepEqual(wrappers.encryptDecode(rec.map, key), inner);
+  assert.deepEqual(wrappers.encryptDecode(rec, key), inner);
   assert.equal(rec.subrecords[0].typeId, wrappers.MEDIA_PREVIEW_TYPE);
   assert.equal(rec.subrecords[0].map.get(0), 'application/octet-stream');
 });
