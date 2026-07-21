@@ -318,6 +318,21 @@ already holds typed field values (§3.2). The payload is always a byte
 string or text string; a decoder MUST NOT accept any other CBOR major
 type in this position.
 
+**A conformant encoder MUST emit the payload as a definite-length byte
+or text string** — §3.4's canonical-encoding requirement already implies
+this. An indefinite-length byte or text string in this position is
+still well-formed CBOR a decoder MUST be able to skip generically, but a
+decoder MAY treat it as though no payload were present (falling through
+to subrecord-scanning, §3.1, where it is then skipped again as a
+non-array item) rather than recognizing it as this Record's payload —
+the same decoder-side tolerance §3.2 already permits for indefinite-
+length field values. Both shipped prototypes are conformant here despite
+disagreeing: `rust/qdef-core` never recognizes an indefinite-length
+payload candidate, while the Node prototype does (its underlying `cbor`
+library normalizes indefinite-length strings before application code
+ever sees them). Only a conformant encoder's own output — always
+definite-length — is required to round-trip identically everywhere.
+
 **Subrecords.** Every array element following the payload (or following
 the map when no payload is present, or following typeId when neither map
 nor payload is present) is itself a nested Record, recursively the same
@@ -1150,9 +1165,12 @@ omitted, and the grouped Records sit as subrecords:
 
 A Bundle has no routing semantics of its own — a decoder that doesn't
 recognize Type 0 skips the entire Bundle (including all its subrecords)
-via §3.2's even/odd rule (Type 0 is even/critical). A decoder that does
-recognize Type 0 reads its subrecords independently, exactly like
-top-level sibling Records in the Sequence.
+generically, via §3.1's ordinary array-skip: any unrecognized Record
+Type is skipped this way, regardless of typeID parity — this isn't an
+even/odd effect (§3.2's even/odd rule governs unrecognized *map keys*
+within a Record Type a decoder already recognizes, a distinct axis, see
+§3.2). A decoder that does recognize Type 0 reads its subrecords
+independently, exactly like top-level sibling Records in the Sequence.
 
 **A Bundle is never needed for ordinary grouping.** The container's CBOR
 Sequence and any Record's own subrecord slots already group Records
@@ -1169,7 +1187,10 @@ recognize without reading every Record's typeId:
 ]
 ```
 
-Prototyped in `prototype/src/recordTypes.js` as `BUNDLE_TYPE = 0`.
+Prototyped in `prototype/test/bundle.test.js`: round-trip with the
+empty map omitted, an unaware decoder skipping the whole Bundle (and
+its subrecords) by Type ID alone, and the namespace-scoping claim above
+verified against `header.js`'s `resolveLookupKeysDeep`.
 
 ## 5. Adopting QDEF for an existing application-specific format
 

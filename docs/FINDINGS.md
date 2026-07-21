@@ -1990,10 +1990,12 @@ bytes, §4.1) and text strings (plaintext) — which wrapper records and
 media content actually needed. See the spec's "Payload" subsection,
 §3.1, and DESIGN.md's "Why not carry a literal NDEF message" entry.
 
-Prototyped in `prototype/test/ndef-id.test.js` (2 residual-behavior
-tests: zero-cost absence and a stray text string before a map) and
-`rust/qdef-core/src/tests.rs` (3 tests covering the identical cases,
-updated when the payload slot shipped).
+The one still-meaningful residual test (a stray text string with no
+preceding typeID is unroutable, not mistaken for payload) now lives in
+`prototype/test/core.test.js` alongside the format's other Phase-1/
+Phase-2 routing tests, since `ndef-id.test.js` had nothing left to say
+once the payload slot shipped its own real coverage (see the spec's
+"Payload" subsection's own citation).
 
 ### 39. The field-value-shape rule was dropped entirely — `skip_any_item`'s existing bounded-stack mechanism already covered the case that mattered
 

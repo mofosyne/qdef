@@ -275,12 +275,17 @@ const uintNamespaceSlotUnrecognizedContainer = core.encodeContainer([
   },
 ]);
 
-// --- Namespace prefix with a scoped typeId and payload slot ---
+// --- Namespace prefix with a scoped typeId, a map, AND a real payload ---
+// value -- proves Rust's decoder actually extracts a *present* payload's
+// bytes correctly (not just that it's None), stacked with a namespace
+// override and an ordinary field map. Every other Rust payload test
+// before this one only ever asserted absence.
 
 const namespacePairingWithPayloadContainer = core.encodeContainer([
   {
     typeId: 1,
-    fields: new Map([[0, 'payload']]),
+    fields: new Map([[0, 'field, not payload']]),
+    payload: Buffer.from('real payload bytes'),
     localNamespace: Buffer.from('cdcdcdcd', 'hex'),
   },
 ]);
@@ -291,6 +296,34 @@ const plainMapOnlyContainer = core.encodeContainer([
   {
     typeId: rt.WIFI_TYPE,
     fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]),
+  },
+]);
+
+// --- Payload with no map at all (the shipped Wrapper Type shape, e.g. ---
+// Compress: `[8, h'<deflate bytes>']`, no map because there's nothing
+// else to put in one) -- proves Rust correctly treats the item right
+// after typeId as payload, not as a stray forward-compat item, when no
+// map precedes it.
+
+const payloadOnlyNoMapContainer = core.encodeContainer([
+  {
+    typeId: 8,
+    payload: Buffer.from('deflate-style opaque bytes'),
+  },
+]);
+
+// --- Map, payload, AND subrecords all present on the same Record -- the ---
+// full grammar in one shot (§3.1's actual shipped Wrapper-Record-plus-
+// Media-Preview-subrecord pattern, e.g. Compress wrapping content with
+// Media Preview identification riding along), not each piece tested in
+// isolation.
+
+const mapPayloadAndSubrecordsContainer = core.encodeContainer([
+  {
+    typeId: 8,
+    fields: new Map([[9, 'not the compress key -- just an ordinary field']]),
+    payload: Buffer.from('deflate-style opaque bytes'),
+    subrecords: [{ typeId: 14, fields: new Map([[0, 'image/png']]) }],
   },
 ]);
 
@@ -397,6 +430,10 @@ console.log();
 console.log(rustBytes('NAMESPACE_PAIRING_WITH_PAYLOAD_CONTAINER', namespacePairingWithPayloadContainer));
 console.log();
 console.log(rustBytes('PLAIN_MAP_ONLY_CONTAINER', plainMapOnlyContainer));
+console.log();
+console.log(rustBytes('PAYLOAD_ONLY_NO_MAP_CONTAINER', payloadOnlyNoMapContainer));
+console.log();
+console.log(rustBytes('MAP_PAYLOAD_AND_SUBRECORDS_CONTAINER', mapPayloadAndSubrecordsContainer));
 console.log();
 console.log(rustBytes('SUBRECORDS_CONTAINER', subrecordsContainer));
 console.log();

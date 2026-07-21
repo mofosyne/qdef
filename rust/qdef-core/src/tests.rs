@@ -338,13 +338,23 @@ fn a_record_with_no_pairing_item_has_no_local_namespace() {
 }
 
 #[test]
-fn namespace_pairing_yields_no_payload_when_only_map_is_present() {
+fn namespace_pairing_stacks_with_a_map_and_a_real_present_payload() {
+    // Not just "payload is absent" -- proves Rust's decoder actually
+    // extracts a *present* payload's real bytes correctly, cross-
+    // validated against a Node-encoded fixture, stacked with a namespace
+    // override and an ordinary field map on the same Record.
     let container =
         Container::parse(NAMESPACE_PAIRING_WITH_PAYLOAD_CONTAINER).expect("valid container");
     let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
     let rec = &records[0];
     assert_eq!(rec.type_id(), Some(Key::Uint(1)));
-    assert_eq!(rec.payload(), None);
+    assert!(rec.local_namespace().is_some());
+
+    let field = find_value(rec.map_bytes, 0).unwrap().unwrap();
+    assert_eq!(read_definite_string(field).unwrap(), b"field, not payload");
+
+    let payload = rec.payload().expect("payload must be present");
+    assert_eq!(payload, b"real payload bytes");
 }
 
 // ---------------------------------------------------------------------
@@ -372,12 +382,66 @@ fn a_record_with_no_payload_has_it_absent_zero_cost_when_unused() {
 }
 
 #[test]
-fn a_payload_text_string_is_absent_when_the_record_only_has_a_map() {
-    let container =
-        Container::parse(PLAIN_MAP_ONLY_CONTAINER).expect("valid container");
+fn a_present_payload_with_no_map_at_all_is_recognized_directly_after_typeid() {
+    // The shipped Wrapper-Record shape (e.g. Compress: `[8, h'...']`) --
+    // no map, because there was nothing else to put in one. Proves the
+    // item right after typeId is read as payload, not skipped as an
+    // unrecognized forward-compat item, when no map precedes it.
+    let container = Container::parse(PAYLOAD_ONLY_NO_MAP_CONTAINER).expect("valid container");
     let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
     let rec = &records[0];
     assert!(!rec.ignored);
+    assert_eq!(rec.type_id(), Some(Key::Uint(8)));
+    assert_eq!(rec.map_bytes, &[] as &[u8]);
+    assert_eq!(rec.payload(), Some(&b"deflate-style opaque bytes"[..]));
+}
+
+#[test]
+fn map_payload_and_subrecords_all_present_on_the_same_record_the_full_grammar_at_once() {
+    // Each piece (map, payload, subrecords) has its own dedicated test
+    // elsewhere; this proves the full `[typeId, map, payload, subrecord*]`
+    // shape parses correctly together, not just each piece in isolation --
+    // the shipped Wrapper-plus-Media-Preview-subrecord pattern (§4.5).
+    let container =
+        Container::parse(MAP_PAYLOAD_AND_SUBRECORDS_CONTAINER).expect("valid container");
+    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
+    let rec = &records[0];
+    assert!(!rec.ignored);
+    assert_eq!(rec.type_id(), Some(Key::Uint(8)));
+
+    let field = find_value(rec.map_bytes, 9).unwrap().unwrap();
+    assert_eq!(
+        read_definite_string(field).unwrap(),
+        b"not the compress key -- just an ordinary field"
+    );
+    assert_eq!(rec.payload(), Some(&b"deflate-style opaque bytes"[..]));
+
+    let subrecords: Vec<_> = rec.subrecords().unwrap().collect::<Result<_, _>>().unwrap();
+    assert_eq!(subrecords.len(), 1);
+    assert_eq!(subrecords[0].type_id(), Some(Key::Uint(14)));
+    let media_type = find_value(subrecords[0].map_bytes, 0).unwrap().unwrap();
+    assert_eq!(read_definite_string(media_type).unwrap(), b"image/png");
+}
+
+#[test]
+fn an_indefinite_length_payload_is_not_recognized_here_documented_node_divergence() {
+    // A conformant encoder never emits this (§3.4 requires definite-length
+    // forms), but a decoder MAY still encounter one. rust/qdef-core
+    // deliberately does NOT recognize it as payload (explicit
+    // !is_indefinite() guard) -- it falls through to subrecord-scanning,
+    // where it's skipped again as a non-array item, same as any other
+    // forward-compat item this crate doesn't understand. The Node
+    // prototype DOES recognize this shape (its `cbor` library normalizes
+    // indefinite-length strings before application code sees them); both
+    // are conformant per §3.1's decoder-tolerance wording -- only a
+    // conformant encoder's own (always definite-length) output is
+    // required to round-trip identically everywhere.
+    //
+    // array(2) [ typeID uint(20), indefinite-length byte string "hello" ]
+    const BYTES: &[u8] = &[0x82, 0x14, 0x5f, 0x45, 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0xff];
+    let mut records = records_from_sequence(BYTES);
+    let rec = records.next().unwrap().unwrap();
+    assert_eq!(rec.type_id(), Some(Key::Uint(20)));
     assert_eq!(rec.payload(), None);
 }
 
@@ -526,8 +590,7 @@ fn a_record_with_no_subrecords_has_them_absent_zero_cost_when_unused() {
 
 #[test]
 fn a_subrecord_can_itself_carry_a_namespace_and_its_own_further_subrecords() {
-    let container =
-        Container::parse(SUBRECORDS_WITH_NAMESPACE_CONTAINER).expect("valid container");
+    let container = Container::parse(SUBRECORDS_WITH_NAMESPACE_CONTAINER).expect("valid container");
     let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
     let outer = &records[0];
     assert_eq!(outer.type_id(), Some(Key::Uint(21)));

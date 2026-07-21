@@ -51,11 +51,20 @@ only.
 **Format-wide mechanisms resolved and prototyped:** every Record is now
 exactly one self-delimited CBOR array (§3.1) — `[namespace?, typeId,
 map?, payload?, subrecord*]` — so any decoder can skip a whole Record it
-
-resolved: the payload slot (a bare byte or text string following the
-Record's typeID, mirroring NDEF's own `ID` field, costing the mandatory
-core nothing beyond recognizing one more array-element shape),
-namespace-scoped Type IDs and their hash-derivation self-certification
+doesn't care about using nothing but ordinary CBOR array-skipping, with
+no Record-grammar knowledge at all, and a malformed inner Record can no
+longer corrupt discovery of its siblings (FINDINGS.md #41). Subrecords
+generalize what was briefly a narrower `ID[]{}` mechanism into the same
+recursive grammar used everywhere else, resolving a real correlation
+problem TagDrop's own Media Preview/Payload proposal ran into. Also
+resolved: the payload slot (an optional bare byte or text string
+carrying a Wrapper Record's opaque content or a Record's own direct
+application data, replacing the earlier NDEF-ID-equivalent and saving
+real bytes on every Wrapper Type — Compress, Encrypt, and Split's own
+fragment bytes no longer need a map key at all) and the field Map
+itself becoming optional (omitted entirely when empty, another byte
+saved on every fieldless Record), namespace-scoped Type IDs and their
+hash-derivation self-certification
 (§3.5, the general-purpose primitive Type Hint originally introduced
 before being retired alongside decentralized Type IDs — see
 FINDINGS.md), and canonical encoding (§3.4, RFC 8949's deterministic
