@@ -204,13 +204,14 @@ flowchart TD
     typeId --> skip{"skip* loop<br/>(Phase-2)"}
     skip -->|"map (mjr 5)"| map["map"]
     skip -->|"bstr/tstr"| payload["payload"]
-    skip -->|"array (mjr 4)"| subrecords
+    skip -->|"array (mjr 4)"| subrecord["subrecord"]
     skip -->|"other (padding)"| skip
 
     map --> afterMap{"payload?"}
     afterMap -->|"yes (bstr/tstr)"| payload
     afterMap -->|"absent"| subrecords
     payload --> subrecords
+    subrecord --> subrecords
 
     subrecords{"subrecord*"} -->|"array"| process["process subrecord<br/>(recursive)"]
     process --> subrecords
