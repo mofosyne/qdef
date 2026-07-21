@@ -1089,18 +1089,25 @@ new payload slot — a bare byte or text string immediately after it —
 replaced the retired NDEF-ID-equivalent. Both are genuine wins on their
 own terms:
 
-- **Real, measured byte savings on the hottest path.** Every Wrapper
-  Record's opaque content used to live at an arbitrary map key (Compress
-  key `0`, Encrypt key `2`, Split's fragment bytes at key `6`), paying a
-  map header plus a key byte for content that was never actually a
-  *field* — it was always meant to be read as raw bytes, not looked up
-  by key. `[8, {0: h'<deflate bytes>'}]` (map header + key byte + the
-  bytes) shrinks to `[8, h'<deflate bytes>']` (just the bytes) once
-  Compress's map has nothing else in it to justify the map's own
-  existence. Verified directly against the encoder, not estimated: the
-  minimal Wi-Fi Record case in `large-type-id.test.js` moved from 4
-  bytes (`82 18 64 a0`, empty map still paying `a0`) to 3 (`81 18 64`,
-  the map dropped from the array entirely).
+- **Real, measured byte savings on the hottest path — not uniform
+  across the three, worth being precise about rather than assuming.**
+  Every Wrapper Record's opaque content used to live at an arbitrary map
+  key (Compress key `0`, Encrypt key `2`, Split's fragment bytes at key
+  `6`), paying at minimum a key byte for content that was never actually
+  a *field* — it was always meant to be read as raw bytes, not looked up
+  by key. Verified directly against the encoder for all three, not
+  estimated or assumed identical (`payload-byte-cost.test.js`):
+  **Compress saves 2 bytes** — `[8, {0: h'<deflate bytes>'}]` shrinks to
+  `[8, h'<deflate bytes>']`, dropping the map header *and* the key byte,
+  since Compress's map holds nothing else to justify the map's own
+  existence. **Encrypt and Split each save exactly 1 byte** — their maps
+  still hold other fields (Encrypt's nonce; Split's `group_id`/index/
+  count/`total_bytes`), so only the payload's own key byte goes away,
+  not the map header, which is unchanged either way for a map that still
+  has content. The minimal Wi-Fi Record case in `large-type-id.test.js`
+  shows the same map-elimination pattern as Compress: 4 bytes
+  (`82 18 64 a0`, empty map still paying `a0`) to 3 (`81 18 64`, the map
+  dropped from the array entirely).
 - **A cleaner semantic split.** "Map holds typed fields, payload holds
   raw pass-through bytes" is a real distinction Wrapper Records always
   had implicitly (their map keys were never meant to be *interpreted*,

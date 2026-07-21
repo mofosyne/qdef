@@ -97,6 +97,11 @@ found.
   the empty map omitted, an unaware decoder skips the whole Bundle (and
   its subrecords) by Type ID alone, and it scopes a namespace override
   across its subrecords without repeating it on each one.
+- `test/payload-byte-cost.test.js` — the payload slot's (§3.1) actual
+  savings for the three shipped Wrapper Records, verified against the
+  encoder rather than assumed uniform: Compress saves 2 bytes (its map
+  is dropped entirely), Encrypt and Split each save exactly 1 (their
+  maps still hold other fields).
 
 ## Running
 
