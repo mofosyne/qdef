@@ -138,6 +138,18 @@ typically omitted (`[0, [Rec1][Rec2]]`). Future container-level (not
 per-Record) metadata has its own growth point already — the
 discriminator's extensible map form — so `0` isn't earmarked for that.
 
+**Built without a concrete adopter asking for it — worth flagging
+against this project's own stated discipline** (see the Sign entry
+below, held back explicitly for lack of one). The distinction that
+makes this a reasonable exception rather than a lapse: Bundle's
+marginal cost was close to zero — no new grammar, no new parsing logic
+in either prototype, just an assigned number plus subrecords and
+namespace-pairing composing the way they already did. Sign would need
+real, hard-to-reverse choices (a signature algorithm, a coverage
+encoding) that a real adopter's constraints should inform; Bundle
+needed none. "Wait for a real need" scales with what there is to get
+wrong, not applied as a blanket rule regardless of cost.
+
 There is no longer a Decentralized (byte string) or Named (text string)
 row here — both Type ID forms were retired entirely once namespace-
 scoped odd uints existed to give the identical zero-coordination
@@ -1069,6 +1081,63 @@ CBOR array's elements are byte-for-byte identical in shape to a CBOR
 Sequence of the same items, recursively, at any depth). See
 `prototype/test/subrecords.test.js` and the subrecord tests in
 `rust/qdef-core/src/tests.rs`.
+
+## The payload slot and the optional field Map — real byte savings, at a real cost to the glanceable-Map property above
+
+The field Map became optional (omitted entirely when empty, §3.1) and a
+new payload slot — a bare byte or text string immediately after it —
+replaced the retired NDEF-ID-equivalent. Both are genuine wins on their
+own terms:
+
+- **Real, measured byte savings on the hottest path.** Every Wrapper
+  Record's opaque content used to live at an arbitrary map key (Compress
+  key `0`, Encrypt key `2`, Split's fragment bytes at key `6`), paying a
+  map header plus a key byte for content that was never actually a
+  *field* — it was always meant to be read as raw bytes, not looked up
+  by key. `[8, {0: h'<deflate bytes>'}]` (map header + key byte + the
+  bytes) shrinks to `[8, h'<deflate bytes>']` (just the bytes) once
+  Compress's map has nothing else in it to justify the map's own
+  existence. Verified directly against the encoder, not estimated: the
+  minimal Wi-Fi Record case in `large-type-id.test.js` moved from 4
+  bytes (`82 18 64 a0`, empty map still paying `a0`) to 3 (`81 18 64`,
+  the map dropped from the array entirely).
+- **A cleaner semantic split.** "Map holds typed fields, payload holds
+  raw pass-through bytes" is a real distinction Wrapper Records always
+  had implicitly (their map keys were never meant to be *interpreted*,
+  just stored) and now have explicitly. Media Payload's own key `2` and
+  Split's fragment key were always payload in spirit; they're payload in
+  the grammar now.
+
+**The cost, named plainly rather than left implicit: this erodes some of
+the glanceable-structure property the entry above was built to
+establish.** Bracket-matching still finds a Record's own boundary
+reliably — nothing about subrecord nesting changed. What changed is
+*inside* that boundary: a reader (human or LLM) can no longer assume a
+given array position means "the field Map." Position 2 (after
+`namespace?, typeId`) might be a map, might be the payload, might be the
+first subrecord, distinguishable only by inspecting each item's own CBOR
+major type — exactly the "content, not position, decides meaning"
+pattern the array-wrapping entry above fought to remove between
+Records, now reintroduced in miniature *within* one. This is a real,
+accepted tradeoff, not an oversight: the byte savings are concrete and
+recurring (paid on every Wrapper Record, which is the majority of
+real-world QDEF traffic in the worked examples so far), while the
+readability cost is bounded (major-type dispatch, not open-ended
+inference) and mirrors a distinction — "is this a Map or a byte string"
+— any CBOR-aware reader already has to make constantly anyway.
+
+**Cross-implementation note, found by testing rather than assumed
+identical:** an indefinite-length byte or text string in the payload
+position is well-formed CBOR either implementation can skip, but the
+two shipped prototypes disagree on whether they *recognize* it as
+payload — `rust/qdef-core` requires definite-length explicitly, while
+the Node prototype's underlying `cbor` library normalizes
+indefinite-length strings before application code ever sees them, so it
+always recognizes one. Documented as decoder-tolerance-only (§3.1),
+matching the same asymmetry §3.2 already allows for indefinite-length
+field values: a conformant encoder never produces this shape (§3.4), so
+only encoder output is required to round-trip identically everywhere.
+See `core.test.js`'s and `tests.rs`'s matching tests for this case.
 
 ## Why not just carry a literal NDEF message as the QR byte-mode payload, instead of a new format?
 
