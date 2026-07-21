@@ -28,6 +28,18 @@ test('a record with no typeID before the map is ignored (not routed)', () => {
   assert.equal(records[0].typeId, null);
 });
 
+test('a bare text string with no preceding typeID is not a payload -- it is this Record\'s own unroutable first item, skipped as forward-compat padding', () => {
+  // A leading text string superficially matches the payload slot's own
+  // shape (bstr/tstr), but payload is only ever recognized after a
+  // *recognized* typeID -- with none, this Record has no typeId at all
+  // and is unroutable, the same as the bare-map case above.
+  const bytes = cbor.encodeCanonical(['stray-string', new Map([[0, 'payload']])]);
+  const rec = core.decodeRecordBytes(bytes);
+  assert.equal(rec.ignored, true);
+  assert.equal(rec.typeId, null);
+  assert.equal(rec.payload, undefined);
+});
+
 // ---------------------------------------------------------------------
 // NDEF path (§2): no magic prefix, just the bare CBOR Sequence,
 // because NDEF's own MIME type (application/vnd.qdef) already identifies it.
@@ -122,4 +134,23 @@ test('unknown items between typeIDs and map are skipped transparently', () => {
   const { records } = core.decodeContainer(container);
   assert.equal(records[0].typeId, 100);
   assert.equal(records[0].map.get(0), 'SSID');
+});
+
+test('an indefinite-length payload candidate is recognized as payload -- decoder-tolerance-only, documented divergence from rust/qdef-core (§3.1)', () => {
+  // A conformant encoder never emits this (§3.4 requires definite-length),
+  // but a decoder MAY still recognize it. The Node prototype does, because
+  // its underlying `cbor` library normalizes indefinite-length byte/text
+  // strings into a single definite value before application code ever
+  // sees them -- there is no way, post-decode, to tell it apart from a
+  // conformant definite-length payload. rust/qdef-core deliberately does
+  // NOT recognize this shape (an explicit is_indefinite() guard); both
+  // are conformant per §3.1's decoder-tolerance wording.
+  //
+  // array(2) [ typeID uint(20), indefinite-length byte string "hello" ]
+  const bytes = Buffer.from([0x82, 0x14, 0x5f, 0x45, 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0xff]);
+  const rec = core.decodeRecordBytes(bytes);
+
+  assert.equal(rec.typeId, 20);
+  assert.ok(Buffer.isBuffer(rec.payload));
+  assert.equal(rec.payload.toString(), 'hello');
 });

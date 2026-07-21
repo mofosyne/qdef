@@ -57,10 +57,6 @@ found.
 - `test/custom-scheme-carrier.test.js` — the implied-namespace pattern
   for an isolated carrier (own URI scheme / own NDEF MIME type): a
   namespace fixed by the carrier itself, never transmitted.
-- `test/ndef-id.test.js` — the NDEF-ID was removed from the grammar;
-  this file now documents residual behaviors (a Record without it has
-  the property undefined, and an unroutable text string before a map
-  is skipped).
 - `test/nested-field-values.test.js` — §3.2's field-value-shape rule
   relaxation: a field value may be any well-formed CBOR item now (bare
   arrays, nested maps, multi-level nesting), and criticality is
@@ -97,6 +93,10 @@ found.
   proves two independent encodes of the same fields produce byte-
   identical output (relying on §3.4's canonical encoding, not assuming
   it holds).
+- `test/bundle.test.js` — Bundle (Type 0, spec §4.6): round-trips with
+  the empty map omitted, an unaware decoder skips the whole Bundle (and
+  its subrecords) by Type ID alone, and it scopes a namespace override
+  across its subrecords without repeating it on each one.
 
 ## Running
 

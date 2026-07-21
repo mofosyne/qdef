@@ -373,11 +373,32 @@ fn a_record_with_no_payload_has_it_absent_zero_cost_when_unused() {
 
 #[test]
 fn a_payload_text_string_is_absent_when_the_record_only_has_a_map() {
-    let container =
-        Container::parse(PLAIN_MAP_ONLY_CONTAINER).expect("valid container");
+    let container = Container::parse(PLAIN_MAP_ONLY_CONTAINER).expect("valid container");
     let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
     let rec = &records[0];
     assert!(!rec.ignored);
+    assert_eq!(rec.payload(), None);
+}
+
+#[test]
+fn an_indefinite_length_payload_is_not_recognized_here_documented_node_divergence() {
+    // A conformant encoder never emits this (§3.4 requires definite-length
+    // forms), but a decoder MAY still encounter one. rust/qdef-core
+    // deliberately does NOT recognize it as payload (explicit
+    // !is_indefinite() guard) -- it falls through to subrecord-scanning,
+    // where it's skipped again as a non-array item, same as any other
+    // forward-compat item this crate doesn't understand. The Node
+    // prototype DOES recognize this shape (its `cbor` library normalizes
+    // indefinite-length strings before application code sees them); both
+    // are conformant per §3.1's decoder-tolerance wording -- only a
+    // conformant encoder's own (always definite-length) output is
+    // required to round-trip identically everywhere.
+    //
+    // array(2) [ typeID uint(20), indefinite-length byte string "hello" ]
+    const BYTES: &[u8] = &[0x82, 0x14, 0x5f, 0x45, 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0xff];
+    let mut records = records_from_sequence(BYTES);
+    let rec = records.next().unwrap().unwrap();
+    assert_eq!(rec.type_id(), Some(Key::Uint(20)));
     assert_eq!(rec.payload(), None);
 }
 
@@ -526,8 +547,7 @@ fn a_record_with_no_subrecords_has_them_absent_zero_cost_when_unused() {
 
 #[test]
 fn a_subrecord_can_itself_carry_a_namespace_and_its_own_further_subrecords() {
-    let container =
-        Container::parse(SUBRECORDS_WITH_NAMESPACE_CONTAINER).expect("valid container");
+    let container = Container::parse(SUBRECORDS_WITH_NAMESPACE_CONTAINER).expect("valid container");
     let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
     let outer = &records[0];
     assert_eq!(outer.type_id(), Some(Key::Uint(21)));
