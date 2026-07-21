@@ -1082,7 +1082,7 @@ Sequence of the same items, recursively, at any depth). See
 `prototype/test/subrecords.test.js` and the subrecord tests in
 `rust/qdef-core/src/tests.rs`.
 
-## The payload slot and the optional field Map — real byte savings, at a real cost to the glanceable-Map property above
+## The payload slot and the optional field Map — real byte savings, at a small and bounded cost to the glanceable-Map property above
 
 The field Map became optional (omitted entirely when empty, §3.1) and a
 new payload slot — a bare byte or text string immediately after it —
@@ -1108,23 +1108,25 @@ own terms:
   Split's fragment key were always payload in spirit; they're payload in
   the grammar now.
 
-**The cost, named plainly rather than left implicit: this erodes some of
-the glanceable-structure property the entry above was built to
-establish.** Bracket-matching still finds a Record's own boundary
-reliably — nothing about subrecord nesting changed. What changed is
-*inside* that boundary: a reader (human or LLM) can no longer assume a
-given array position means "the field Map." Position 2 (after
-`namespace?, typeId`) might be a map, might be the payload, might be the
-first subrecord, distinguishable only by inspecting each item's own CBOR
-major type — exactly the "content, not position, decides meaning"
-pattern the array-wrapping entry above fought to remove between
-Records, now reintroduced in miniature *within* one. This is a real,
-accepted tradeoff, not an oversight: the byte savings are concrete and
-recurring (paid on every Wrapper Record, which is the majority of
-real-world QDEF traffic in the worked examples so far), while the
-readability cost is bounded (major-type dispatch, not open-ended
-inference) and mirrors a distinction — "is this a Map or a byte string"
-— any CBOR-aware reader already has to make constantly anyway.
+**A smaller cost than it first looks, and worth being precise about
+rather than overstating.** Bracket-matching still finds a Record's own
+boundary reliably — nothing about subrecord nesting changed. Inside that
+boundary, a reader can no longer assume a fixed array position always
+means "the field Map" — but what replaces that assumption is a strictly
+ordered, one-directional scan, not open-ended ambiguity: map (if
+present) always precedes payload (if present) always precedes
+subrecords (if any), never interleaved and never revisited once the
+read has moved past a slot, in both shipped parsers. A reader doesn't
+need to track nesting depth or resolve a genuine either/or the way the
+retired Type-`0` header or `ID[]{}` vs. `ID{}[]` did — just notice each
+item's own major type and advance through the same fixed sequence every
+time. That's a materially smaller ask than "content, not position,
+decides meaning" implies, closer in spirit to counting Map closes than
+to real ambiguity. The actual, narrower cost: one more state to track
+during the scan (was I still in map-or-earlier territory, or have I
+already moved past it) instead of a single fixed assumption — bounded,
+recurring on every Record, but not the same category of problem
+array-wrapping was built to eliminate.
 
 **Cross-implementation note, found by testing rather than assumed
 identical:** an indefinite-length byte or text string in the payload
