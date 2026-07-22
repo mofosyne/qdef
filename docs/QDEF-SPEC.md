@@ -106,8 +106,8 @@ a decoder can always skip an entire Record generically, using nothing
 but ordinary CBOR array-skipping, without any Record-grammar knowledge
 at all. An optional byte string namespace may lead the array (§3.1),
 exactly one typeID-bearing item is mandatory, an optional field Map may
-appear (omitted when empty, §3.1), an optional payload (byte string or
-text string, §3.1) follows the map or typeId, and any remaining elements
+appear (omitted when empty, §3.1), an optional payload (any well-formed
+CBOR item, §3.1) follows the map or typeId, and any remaining elements
 after the payload are subrecords (§3.1). The minimum viable Record is
 just `[typeID]` (typeId alone, no fields, no payload, no subrecords).
 
@@ -166,28 +166,28 @@ skipping its whole array as one well-formed CBOR item, independent of
 whether the array's own contents turn out to be valid Record grammar —
 then walks that bounded span with a two-phase loop to find the Record's
 own structure within it: Phase 1 recognizes the Record's optional
-namespace and its single typeID-bearing item. Phase 2 skips items that
-are neither a Map, a byte string, a text string, nor an array
-(forward-compat padding) until it reaches the first Map, which serves
-as the field delimiter when present; if the first non-padding item is
-a text or byte string instead, the Map is absent and it is consumed as
-payload; if it is an array, both Map and payload are absent and
-subrecords begin immediately. The payload slot (byte string or text
-string) follows the Map (or follows typeId when no Map is present).
-Everything after the payload is subrecords (§3.1). Because the Record's
-total span is already known before this walk begins, a Record whose own
-contents fail to parse as valid grammar still cannot corrupt discovery
-of the next sibling Record — only Record grammar within the
-(already-known-well-formed) span is uncertain, never where that span
-ends.
+namespace and its single typeID-bearing item. Phase 2 checks the very
+next item: a Map (major type 5) is always the field Map, full stop —
+nothing else in the grammar is ever map-shaped, so there is no padding
+to skip in search of one. Whatever remains after that (or immediately
+after typeId, if no Map) is unconditionally the payload, of any
+well-formed CBOR shape — there is no separate "is this bstr/tstr/array"
+branch, since the payload slot is defined to accept the same shapes a
+field value can (§3.2). Everything after the payload is subrecords
+(§3.1). Because the Record's total span is already known before this
+walk begins, a Record whose own contents fail to parse as valid grammar
+still cannot corrupt discovery of the next sibling Record — only Record
+grammar within the (already-known-well-formed) span is uncertain, never
+where that span ends.
 
 ### 3.1 The Record array: namespace, Type ID, Map, Payload, and subrecords
 
 Every Record is exactly one definite-length CBOR array (major type 4).
 Its elements, in order: an optional namespace, exactly one typeID-
 bearing item, an optional field Map (omitted when empty — saves one
-byte per record with no fields), an optional payload (a bare CBOR byte
-string or text string), and zero or more subrecords.
+byte per record with no fields), an optional payload (any well-formed
+CBOR item — present whenever anything follows the Map, §3.1's payload
+paragraph below), and zero or more subrecords.
 
 ```
 [ namespace?, typeId, map?, payload?, subrecord* ]
@@ -201,33 +201,34 @@ flowchart TD
     ns -->|"bstr, if followed by typeId"| typeId["typeId (uint)"]
     ns -->|"no namespace"| typeId
 
-    typeId --> skip{"skip* loop<br/>(Phase-2)"}
-    skip -->|"map (mjr 5)"| map["map"]
-    skip -->|"bstr/tstr"| payload["payload"]
-    skip -->|"array (mjr 4)"| subrecords
-    skip -->|"other (padding)"| skip
+    typeId --> checkMap{"next item?"}
+    checkMap -->|"map (mjr 5)"| map["map"]
+    checkMap -->|"anything else, or end"| afterMap
 
-    map --> afterMap{"payload?"}
-    afterMap -->|"yes (bstr/tstr)"| payload
-    afterMap -->|"absent"| subrecords
+    map --> afterMap{"anything remain?"}
+    afterMap -->|"yes"| payload["payload<br/>(any CBOR shape)"]
+    afterMap -->|"no"| End["]"]
     payload --> subrecords
 
     subrecords{"subrecord*"} -->|"array"| process["process subrecord<br/>(recursive)"]
     process --> subrecords
-    subrecords -->|"end"| End["]"]
+    subrecords -->|"end"| End
 ```
 
-Phase-2 semantics: after the typeId, the decoder enters a skip loop.
-For each subsequent item within the Record's bounded span:
-- If it is a **map** (major 5): consume it as the field map. Exit the
-  loop. The next item (if bstr/tstr) is payload; everything after that
-  is subrecords.
-- If it is a **byte string** (major 2) or **text string** (major 3):
-  consume it as payload. No map is present. Everything after it is
-  subrecords.
-- If it is an **array** (major 4): it is the first subrecord. No map
-  and no payload are present.
-- Otherwise: forward-compat padding. Skip it and continue the loop.
+Phase-2 semantics: after the typeId, the decoder checks exactly one
+item, then (if anything remains) exactly one more:
+- If the next item is a **map** (major 5): consume it as the field map.
+  Nothing else in the grammar is ever map-shaped, so this check needs
+  no lookahead or padding-skipping — major type 5 here always means
+  "field map," unconditionally.
+- Whatever remains after that (or immediately after typeId, if no map
+  was found) is unconditionally the **payload**, of any well-formed CBOR
+  shape — the same shape rule a field value has (§3.2), including
+  another Record (major type 4, recursively this same grammar). A bare
+  `null` here means "no real payload, but subrecords follow" (see the
+  payload paragraph below for why this placeholder is mandatory in that
+  case). If nothing remains at all, there is no payload.
+- Everything remaining after the payload is **subrecords**.
 
 A Record whose own array header is at least well-formed CBOR is always
 generically isolable — any decoder can skip a whole Record it doesn't care about
@@ -299,53 +300,86 @@ tag (CBOR tag `2`/`3`). Verify your specific encoder does this, not just
 that some CBOR library is present. See FINDINGS.md #14.
 
 **Payload.** Immediately following the optional field Map (or following
-typeId when no Map is present), a Record MAY carry exactly one bare CBOR
-byte string (major type 2) or text string (major type 3) as its payload.
-A text-string payload is assumed to be plaintext — a decoder may infer
-a media type (e.g. `text/plain`) at its discretion — while a byte-string
-payload is opaque: its meaning is described by the Record's own field
-map. Absent, it costs nothing.
+typeId when no Map is present), a Record MAY carry exactly one payload:
+any well-formed CBOR item, the same shape rule an ordinary field value
+has (§3.2) — a byte string, a text string, a scalar, or a nested array,
+map, or tag. A text-string payload is assumed to be plaintext — a
+decoder may infer a media type (e.g. `text/plain`) at its discretion —
+a byte-string payload is opaque, its meaning described by the Record's
+own field map, and an array-shaped payload is itself a nested Record
+(recursively this same grammar, §3.1), decoded the same way a subrecord
+is. Absent, it costs nothing.
 
 ```
 [ 8, h'<deflate bytes>' ]             // typeID 8, payload (byte string)
 [ 20, { 0: "image/png" }, 'hello' ]   // typeID 20, map, payload (plain text)
+[ 14, { 0: "image/png" }, [ 6, { 0: "image/png" }, h'<bytes>' ] ]
+                                       // typeID 14, map, payload is itself
+                                       //   a Record (typeID 6)
 ```
 
-The payload slot exists for wrapper records (§4.1) and for content that
-the decoder reads and passes through without interpreting. Typed scalars
-(integers, booleans, null) do not belong in the payload slot — the map
-already holds typed field values (§3.2). The payload is always a byte
-string or text string; a decoder MUST NOT accept any other CBOR major
-type in this position.
+The payload slot exists for wrapper records (§4.1), for content that the
+decoder reads and passes through without interpreting, and for a nested
+Record too — the encoder's choice of where to put typed field-like data
+(the field Map vs. the payload slot) is Type-specific guidance, not a
+core-level shape restriction (see DESIGN.md for why the earlier
+byte/text-string-only restriction was dropped).
 
-**A conformant encoder MUST emit the payload as a definite-length byte
-or text string** — §3.4's canonical-encoding requirement already implies
-this. An indefinite-length byte or text string in this position is
-still well-formed CBOR a decoder MUST be able to skip generically, but a
-decoder MAY treat it as though no payload were present (falling through
-to subrecord-scanning, §3.1, where it is then skipped again as a
-non-array item) rather than recognizing it as this Record's payload —
-the same decoder-side tolerance §3.2 already permits for indefinite-
-length field values. Both shipped prototypes are conformant here despite
-disagreeing: `rust/qdef-core` never recognizes an indefinite-length
-payload candidate, while the Node prototype does (its underlying `cbor`
-library normalizes indefinite-length strings before application code
-ever sees them). Only a conformant encoder's own output — always
-definite-length — is required to round-trip identically everywhere.
+**Mandatory presence whenever anything follows the Map.** A conformant
+encoder MUST make the payload slot explicit — emitting a bare CBOR
+`null` when there is no real payload but subrecords follow — whenever
+anything follows the Map. This is what lets a decoder tell "the payload
+is a Record" apart from "no payload, this array is subrecord 0" without
+inspecting anything beyond the immediate item's own major type: since
+the payload slot, once non-absent, is never skipped, a trailing array
+directly after the Map (or typeId) is always the payload, never
+subrecord 0. A decoder MUST treat a `null` payload item the same as
+true absence.
 
-**Subrecords.** Every array element following the payload (or following
-the map when no payload is present, or following typeId when neither map
-nor payload is present) is itself a nested Record, recursively the same
+```
+[ 14, { 0: "image/png" }, null, [ 6, { 0: "image/png" }, h'<bytes>' ] ]
+                                       // typeID 14, map, no payload
+                                       //   (explicit null), one subrecord
+```
+
+**A map-shaped payload requires the field Map to also be explicitly
+present** — even empty (`{}`, one byte) — since major type 5
+immediately after typeId is otherwise always the field Map, never the
+payload (§3.1's Phase-2 rule). This is the one payload shape that needs
+a carve-out: every other shape is disambiguated by position and
+cardinality alone, but map-shape is already claimed by the field Map's
+own recognition rule.
+
+**A conformant encoder MUST emit the payload as a definite-length CBOR
+item** — §3.4's canonical-encoding requirement already implies this. An
+indefinite-length item in this position is still well-formed CBOR a
+decoder MUST be able to skip generically, but a decoder MAY treat it as
+though no payload were present (falling through to subrecord-scanning,
+§3.1, where it is then skipped again as a non-array item) rather than
+recognizing it as this Record's payload — the same decoder-side
+tolerance §3.2 already permits for indefinite-length field values. Both
+shipped prototypes are conformant here despite disagreeing:
+`rust/qdef-core` never recognizes an indefinite-length payload
+candidate, while the Node prototype does (its underlying `cbor` library
+normalizes indefinite-length strings before application code ever sees
+them). Only a conformant encoder's own output — always definite-length —
+is required to round-trip identically everywhere.
+
+**Subrecords.** Every array element following the payload slot is itself
+a nested Record, recursively the same
 `[namespace?, typeId, map?, payload?, subrecord*]` grammar defined in
 this section — there is no separate grammar for "a Record when it's
 nested," only this one, reused, and no separate wrapper array needed to
 bound them: the outer Record's own array is already self-bounded, so
-"everything after the payload (or after map/no-map when no payload is
-present)" is unambiguous without an extra length prefix.
+"everything after the payload slot" is unambiguous without an extra
+length prefix. Because the payload slot is mandatory whenever anything
+follows the Map, a Record with subrecords but no real payload of its
+own carries an explicit `null` first:
 
 ```
 [ 20,
   { 0: "image/png", 3: "map.png" },
+  null,
   [ 2, { 0: h'<group_id>', 2: 0, 4: 3 }, h'<fragment>' ]
 ]
 ```
@@ -1107,6 +1141,7 @@ The identified content itself is carried as a subrecord, typically a
 
 ```
 [ 14, { 0: "image/png", 1: h'...', 3: "photo.png" },
+  null,                             // no payload of its own (§3.1)
   [ 6, { 0: "image/png" }, h'<payload bytes>' ] ]
 ```
 
@@ -1153,11 +1188,13 @@ Type 0: {                        // Bundle (standard record type)
 }
 ```
 
-On the wire this is simply `[0, [Rec1][Rec2]...]` — the empty map is
-omitted, and the grouped Records sit as subrecords:
+On the wire this is simply `[0, null, [Rec1][Rec2]...]` — the empty map
+is omitted, the mandatory `null` marks "no payload of its own" (§3.1,
+since subrecords follow), and the grouped Records sit as subrecords:
 
 ```
 [ 0,
+  null,
   [ 100, { 0: "SSID", 2: "pass", 4: 2 } ],
   [ 10, { 0: "https://example.com/open" } ]
 ]
@@ -1182,6 +1219,7 @@ recognize without reading every Record's typeId:
 
 ```
 [ namespace, 0,
+  null,
   [ 1, { 0: "scoped by bundle's namespace" } ],
   [ 3, { 0: "same scope, no per-record namespace paid" } ]
 ]

@@ -280,6 +280,11 @@ fn a_byte_string_typeid_is_no_longer_recognized_the_record_is_unroutable() {
 
 #[test]
 fn a_second_typeid_shaped_item_is_not_accumulated_as_a_backup_it_is_silently_skipped() {
+    // There is no forward-compat padding left between typeId and the
+    // map: payload now accepts any well-formed CBOR shape (§3.1/§3.2),
+    // so a bare uint immediately after typeId -- with no map before it
+    // -- is unconditionally this Record's payload, not a skipped stray
+    // item.
     let container =
         Container::parse(SECOND_TYPE_ID_NOT_ACCUMULATED_CONTAINER).expect("valid container");
     let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
@@ -287,9 +292,8 @@ fn a_second_typeid_shaped_item_is_not_accumulated_as_a_backup_it_is_silently_ski
     let rec = &records[0];
     assert!(!rec.ignored);
     assert_eq!(rec.type_id(), Some(Key::Uint(100)));
-
-    let ssid = find_value(rec.map_bytes, 0).unwrap().unwrap();
-    assert_eq!(read_definite_string(ssid).unwrap(), b"SSID");
+    assert_eq!(rec.map_bytes, &[] as &[u8]);
+    assert_eq!(read_uint(rec.payload().unwrap()).unwrap(), 900);
 }
 
 #[test]
@@ -354,14 +358,21 @@ fn namespace_pairing_stacks_with_a_map_and_a_real_present_payload() {
     assert_eq!(read_definite_string(field).unwrap(), b"field, not payload");
 
     let payload = rec.payload().expect("payload must be present");
-    assert_eq!(payload, b"real payload bytes");
+    assert_eq!(
+        read_definite_string(payload).unwrap(),
+        b"real payload bytes"
+    );
 }
 
 // ---------------------------------------------------------------------
-// Payload slot (§3.1): a bare byte string (major 2) or text string
-// (major 3) following the field map. The NDEF-ID-equivalent that
-// previously occupied this position was removed; the slot now carries
-// opaque or plaintext content for wrapper records and media.
+// Payload slot (§3.1): any well-formed CBOR item following the field
+// map -- the same shape rule field values already have (§3.2),
+// including another Record. `payload()` exposes the raw encoded item
+// bytes, uninterpreted; `read_definite_string`/`read_uint`/
+// `payload_as_record` peel off a specific expected shape. The NDEF-ID-
+// equivalent that previously occupied this position was removed; the
+// slot now carries opaque or plaintext content for wrapper records and
+// media.
 // ---------------------------------------------------------------------
 
 #[test]
@@ -393,7 +404,10 @@ fn a_present_payload_with_no_map_at_all_is_recognized_directly_after_typeid() {
     assert!(!rec.ignored);
     assert_eq!(rec.type_id(), Some(Key::Uint(8)));
     assert_eq!(rec.map_bytes, &[] as &[u8]);
-    assert_eq!(rec.payload(), Some(&b"deflate-style opaque bytes"[..]));
+    assert_eq!(
+        read_definite_string(rec.payload().unwrap()).unwrap(),
+        b"deflate-style opaque bytes"
+    );
 }
 
 #[test]
@@ -414,7 +428,10 @@ fn map_payload_and_subrecords_all_present_on_the_same_record_the_full_grammar_at
         read_definite_string(field).unwrap(),
         b"not the compress key -- just an ordinary field"
     );
-    assert_eq!(rec.payload(), Some(&b"deflate-style opaque bytes"[..]));
+    assert_eq!(
+        read_definite_string(rec.payload().unwrap()).unwrap(),
+        b"deflate-style opaque bytes"
+    );
 
     let subrecords: Vec<_> = rec.subrecords().unwrap().collect::<Result<_, _>>().unwrap();
     assert_eq!(subrecords.len(), 1);
@@ -634,16 +651,19 @@ fn every_record_is_self_bounded_a_record_with_subrecords_never_bleeds_into_its_s
     }
 }
 
-/// `[typeId(24), { 0: "parent payload" }, [{ 0: "no typeid here" }]]` --
-/// the trailing subrecord slot holds a well-formed CBOR array whose own
+/// `[typeId(24), { 0: "parent payload" }, null, [{ 0: "no typeid here" }]]`
+/// -- the explicit `null` marks "no real payload, subrecords follow"
+/// (§3.1's mandatory placeholder; an array directly here, with no
+/// marker, would instead be read as a record-shaped payload). The
+/// trailing subrecord slot holds a well-formed CBOR array whose own
 /// first (and only) element is a bare map, with nothing namespace/
 /// typeId-shaped before it: well-formed CBOR, invalid Record grammar.
 /// Hand-constructed (not via gen-rust-fixtures.js, which has no direct
 /// way to encode a malformed subrecord).
 const RECORD_WITH_MALFORMED_SUBRECORD: &[u8] = &[
-    0x83, 0x18, 0x18, 0xa1, 0x00, 0x6e, 0x70, 0x61, 0x72, 0x65, 0x6e, 0x74, 0x20, 0x70, 0x61, 0x79,
-    0x6c, 0x6f, 0x61, 0x64, 0x81, 0xa1, 0x00, 0x6e, 0x6e, 0x6f, 0x20, 0x74, 0x79, 0x70, 0x65, 0x69,
-    0x64, 0x20, 0x68, 0x65, 0x72, 0x65,
+    0x84, 0x18, 0x18, 0xa1, 0x00, 0x6e, 0x70, 0x61, 0x72, 0x65, 0x6e, 0x74, 0x20, 0x70, 0x61, 0x79,
+    0x6c, 0x6f, 0x61, 0x64, 0xf6, 0x81, 0xa1, 0x00, 0x6e, 0x6e, 0x6f, 0x20, 0x74, 0x79, 0x70, 0x65,
+    0x69, 0x64, 0x20, 0x68, 0x65, 0x72, 0x65,
 ];
 
 /// `[typeId(1), { 0: "sibling payload" }]` immediately following
@@ -680,4 +700,55 @@ fn a_malformed_subrecord_does_not_corrupt_its_parent_or_any_sibling_top_level_re
     assert_eq!(records[1].type_id(), Some(Key::Uint(1)));
     let payload = find_value(records[1].map_bytes, 0).unwrap().unwrap();
     assert_eq!(read_definite_string(payload).unwrap(), b"sibling payload");
+}
+
+// ---------------------------------------------------------------------
+// Payload's generalized shape rule (§3.1/§3.2): any well-formed CBOR
+// item, not just byte/text string -- including another Record (major
+// type 4), decoded recursively via `payload_as_record`. A map-shaped
+// payload needs the field Map explicitly present, since major type 5
+// right after typeId is otherwise always the field Map.
+// ---------------------------------------------------------------------
+
+#[test]
+fn a_record_shaped_payload_is_decoded_recursively_via_payload_as_record() {
+    let container = Container::parse(RECORD_SHAPED_PAYLOAD_CONTAINER).expect("valid container");
+    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
+    let rec = &records[0];
+    assert_eq!(rec.type_id(), Some(Key::Uint(14)));
+    assert!(rec.subrecords().is_none());
+
+    let nested = rec
+        .payload_as_record()
+        .expect("payload is array-shaped")
+        .expect("valid nested Record");
+    assert_eq!(nested.type_id(), Some(Key::Uint(6)));
+    let media_type = find_value(nested.map_bytes, 0).unwrap().unwrap();
+    assert_eq!(read_definite_string(media_type).unwrap(), b"image/png");
+    assert_eq!(
+        read_definite_string(nested.payload().unwrap()).unwrap(),
+        b"jpeg bytes"
+    );
+}
+
+#[test]
+fn a_byte_string_payload_is_not_record_shaped() {
+    let container = Container::parse(PAYLOAD_ONLY_NO_MAP_CONTAINER).expect("valid container");
+    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
+    assert!(records[0].payload_as_record().is_none());
+}
+
+#[test]
+fn a_map_shaped_payload_with_no_other_fields_gets_an_explicit_empty_field_map() {
+    let container =
+        Container::parse(MAP_SHAPED_PAYLOAD_NO_FIELDS_CONTAINER).expect("valid container");
+    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
+    let rec = &records[0];
+    assert_eq!(rec.type_id(), Some(Key::Uint(20)));
+    // The field Map is present but empty -- not absent -- disambiguating
+    // it from the map-shaped payload that follows.
+    assert_eq!(rec.map_bytes, &[0xa0][..]);
+
+    let payload = rec.payload().expect("payload present");
+    assert_eq!(payload[0] >> 5, 5, "payload's own major type is map (5)");
 }

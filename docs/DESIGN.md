@@ -1148,6 +1148,116 @@ field values: a conformant encoder never produces this shape (§3.4), so
 only encoder output is required to round-trip identically everywhere.
 See `core.test.js`'s and `tests.rs`'s matching tests for this case.
 
+## Payload generalized to any CBOR shape, with a mandatory presence marker — three rejected alternatives along the way
+
+Two gaps in the payload slot above surfaced together: (1) a QDEF
+debugger reading an unrecognized Record's payload has no way to tell
+"opaque bytes" from "this is itself a Record" without Type-specific
+knowledge, and (2) a Record wanting its content to unambiguously *be* a
+single Record — not one of an open-ended, positionally-unordered
+subrecord list — had no way to say so at the grammar level, only by
+prose convention (Media Preview's spec text saying "typically Media
+Payload"). Three fixes were considered and rejected before landing on
+the one actually shipped.
+
+**Rejected: reserve map key `0` as "payload."** Every shipped standard
+Record Type already uses key `0` for its own ordinary critical field —
+Wi-Fi SSID, Split `group_id`, Encrypt nonce, Media Payload/Preview media
+type, App Route domain (same collision already documented above for
+"key 0 as a Record's own typeID"). Even setting compatibility aside
+entirely, reserving `0` globally would force every *future* Type to
+start its own critical-field numbering at `2` forever, since `0` sits
+inside the same even/critical numbering space every Type already uses
+for its first required field — a permanent tax on every Type, including
+ones that never want a payload-in-map at all. A negative key doesn't
+have this problem: nothing currently uses negative keys for anything, so
+reserving one costs nothing against the `0, 1, 2, 3…` convention Types
+already rely on.
+
+**Rejected: a reserved negative map key (e.g. `-1`) holding the payload,
+of any shape including a Record.** Structurally sound — a map value
+never competes with subrecord-array scanning — but two real costs.
+First, measured byte cost: moving payload into a map key forces a map
+to exist where none did before, undoing exactly the "no map at all"
+saving that was the flagship win of the payload slot itself (see
+above). Verified directly: Compress (`[8, h'<deflate bytes>']`, no map
+today) grows from 15 to 17 bytes moving its payload to `{-1: ...}` — a
+worse regression than either shipped alternative, and it lands hardest
+on precisely the minimal Wrapper Records that most wanted to stay
+mapless. Second, and more fundamental: for `-1` to mean "payload"
+*unconditionally regardless of Type*, every decoder needs to recognize
+it globally, not per-Type — a core-level parsing rule, not a Type
+convention. That's the same bar DESIGN.md's earlier rejected proposal
+("a reserved negative key signaling an embedded-Records array," see
+above) failed for being "per-Type convenience," except here the
+blocker is worse: the two shipped prototypes currently disagree on how
+negative keys are even evaluated for criticality. `prototype/src/core.js`'s
+`applyCriticality` has no special-casing at all — a negative key goes
+through ordinary `key % 2 === 0` parity like any other key (and JS's
+`%` preserves sign, so `-2 % 2 === -0 === 0`: treated as
+critical/even). `rust/qdef-core`'s `check_criticality` explicitly
+matches only `cbor::Key::Uint`, silently skipping every negative key
+regardless of parity. Identical wire bytes carrying an unrecognized
+negative-even key currently abort under the JS decoder and pass
+silently under the Rust one — a genuine, previously undocumented
+cross-implementation divergence, found while evaluating this proposal,
+independent of it, and still open (not resolved by the design adopted
+here, since that design never needs negative keys at all).
+
+**Rejected: widen the existing payload slot to accept major type 4
+(array) with no other change.** This looked like the cheapest fix —
+reuse the slot payload already has, just relax its shape restriction —
+but it broke the exact guarantee that made the slot safe to reference
+positionally in the first place. Payload and subrecords could coexist
+unambiguously only because payload's shape (byte/text string) never
+overlapped with a subrecord's shape (array); once payload can also be
+an array, a bare array immediately after the Map is structurally
+ambiguous between "the payload is a Record" and "no payload, this is
+subrecord 0" — a Type-agnostic decoder cannot tell which without
+guessing. This is the identical failure mode already rejected for
+"subrecord 0 is always Preview" (TagDrop's original, abandoned design,
+see the Embedded Records section above): treating an unmarked position
+as meaningful, with nothing on the wire to catch an encoder that
+produces the "wrong" one.
+
+**Adopted: the payload slot is mandatory whenever anything follows the
+Map, and its value may be any well-formed CBOR item** — the same shape
+rule §3.2 already gives field values, reused verbatim rather than
+maintained as a second, parallel rule. A conformant encoder emits a
+bare CBOR `null` when there is no real payload but subrecords follow,
+so the ambiguity above cannot arise: once the payload slot is known to
+be present-or-absent unconditionally (never skipped), a bare array in
+that position is *always* the payload, never subrecord 0, full stop —
+resolved by position and cardinality alone, no shape-based guessing, no
+new key space, no map required for records that don't otherwise need
+one. This also fixes the debugger problem for free: "is the payload a
+Record" is a single major-type check (4, or not), the same certainty a
+subrecord already has, no opportunistic CBOR-sniffing needed. The one
+shape needing a carve-out is a map-shaped payload: major type 5
+immediately after typeId is otherwise always the field Map, so a
+map-shaped payload requires the field Map to also be explicitly present
+(even empty, one byte: `0xa0`) — every other shape is disambiguated by
+position alone.
+
+**Cost, measured, not assumed:** zero except in the specific case of
+"subrecords present, no real payload," where it's a flat one byte (the
+`null`, `0xf6`) — verified against Media Preview's real shipped shape
+(map + Media Payload subrecord, no payload of its own): 28 bytes before,
+29 after. That case is narrower than it might sound: checked against
+all eight standard Record Types (§4), only Bundle and Media Preview use
+subrecords in their own *baseline* shape at all — Split/Encrypt/Compress
+only pick one up when something else (typically Media Preview) is
+deliberately composed on top, and every other standard Type has none.
+Wi-Fi, Media Payload, Open/Hint URI, App Route, and the three Wrapper
+Records in their unwrapped form all pay nothing.
+
+Prototyped in `prototype/test/payload-any-shape.test.js` and
+`rust/qdef-core/src/tests.rs`'s matching payload-shape tests; the
+three regenerated fixtures that gained the `null` marker (`SUBRECORDS_CONTAINER`,
+`SUBRECORDS_WITH_NAMESPACE_CONTAINER`, `SUBRECORDS_SIBLING_CONTAINER`)
+are cross-validated the same way every other fixture is — encoded by
+the Node prototype, decoded by the independent Rust implementation.
+
 ## Why not just carry a literal NDEF message as the QR byte-mode payload, instead of a new format?
 
 It's technically possible — nothing stops encoding actual NDEF bytes into

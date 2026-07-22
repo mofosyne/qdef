@@ -18,14 +18,24 @@
 //!   there is no backup-typeId accumulation — at most one typeId per
 //!   Record (see docs/FINDINGS.md for why decentralized Type IDs, Named
 //!   Type IDs, and backup typeIDs were all retired).
-//! - map (optional): the field Map, omitted when empty (§3.1).
-//! - payload (optional): a bare CBOR byte string or text string (§3.1).
-//!   Text strings are assumed to be plaintext; byte strings are opaque
-//!   content. Not present in most Records.
+//! - map (optional): the field Map, omitted when empty (§3.1). Major
+//!   type 5 immediately after typeId (or namespace/typeId) is always the
+//!   field Map -- never padding, never payload.
+//! - payload (optional): whatever remains immediately after the map (or
+//!   after typeId when no map is present) is unconditionally this
+//!   Record's payload, of any well-formed, definite-length CBOR shape
+//!   (§3.1/§3.2 -- the same shape rule field values already have,
+//!   including a nested Record). A bare `null` is the explicit "no real
+//!   payload, but subrecords follow" placeholder a conformant encoder
+//!   emits so a trailing array is never ambiguous between "the payload
+//!   is a Record" and "no payload, this is subrecord 0" -- exposed as
+//!   `None`, the same as true absence. A map-shaped payload requires the
+//!   field Map to also be present (even empty), since major type 5 right
+//!   after typeId is otherwise always the field Map.
 //! - subrecord* (zero or more): every remaining array element after the
-//!   payload (or after the map when no payload is present) is itself a
-//!   nested Record, recursively the same shape. No separate wrapper array
-//!   is needed: the outer Record's own array is already self-bounded.
+//!   payload is itself a nested Record, recursively the same shape. No
+//!   separate wrapper array is needed: the outer Record's own array is
+//!   already self-bounded.
 //!
 //! A malformed *inner* Record (one whose own array contents don't parse
 //! as valid Record grammar) never corrupts a sibling Record's
@@ -197,9 +207,12 @@ pub struct Record<'a> {
     /// no override; interpretation-layer code falls back to whatever
     /// ambient namespace the container discriminator declared.
     local_namespace: Option<cbor::Key<'a>>,
-    /// The raw bytes of this Record's payload (§3.1), if present —
-    /// a bare CBOR byte string or text string. Uninterpreted by this
-    /// crate.
+    /// The raw encoded bytes of this Record's payload item (§3.1), if
+    /// present -- of whatever CBOR shape it turned out to be (byte/text
+    /// string, uint, map, or an array meaning the payload is itself a
+    /// nested Record). Uninterpreted by this crate; a `null` placeholder
+    /// (meaning "no real payload, subrecords follow") is normalized to
+    /// `None` here, same as true absence.
     payload: Option<&'a [u8]>,
     /// The raw bytes of every array element following this Record's own
     /// payload — its subrecords, if any. `None` means no elements
@@ -229,9 +242,26 @@ impl<'a> Record<'a> {
         self.local_namespace
     }
 
-    /// The raw bytes of this Record's payload (§3.1), if present.
+    /// The raw encoded bytes of this Record's payload item (§3.1), if
+    /// present, of whatever CBOR shape it turned out to be. Uninterpreted
+    /// by this crate -- use `payload_as_record` when the payload is
+    /// array-shaped, `qdef_core::read_definite_string`/`read_uint` for a
+    /// string/uint-shaped payload, or a raw CBOR read for anything else.
     pub fn payload(&self) -> Option<&'a [u8]> {
         self.payload
+    }
+
+    /// If this Record's payload is itself array-shaped (major type 4),
+    /// parses it as a nested Record using the exact same grammar as a
+    /// subrecord or the top-level Sequence -- not a separate shape.
+    /// `None` if there is no payload, or it isn't array-shaped.
+    pub fn payload_as_record(&self) -> Option<Result<Record<'a>, Error>> {
+        let bytes = self.payload?;
+        let head = cbor::read_head(bytes).ok()?;
+        if head.major != 4 {
+            return None;
+        }
+        Some(parse_record_array(bytes))
     }
 
     /// This Record's own subrecords, if any — an iterator over the
@@ -261,13 +291,14 @@ impl<'a> Record<'a> {
 ///   the same "malformed prefix means unroutable, not a crash"
 ///   tolerance as before.
 /// - typeId: a bare uint (major type 0). No other shape is recognized.
-/// - map: the first map-shaped element reached, if any. Optional --
-///   absent when empty (§3.1).
-/// - payload: a bare byte string (major 2) or text string (major 3)
-///   immediately following the map (or typeId if no map), if present.
-/// - subrecords: everything remaining after the payload (or map when no
-///   payload is present) to the end of this Record's own (already exactly
-///   bounded) array.
+/// - map: the element immediately following typeId, if map-shaped.
+///   Optional -- absent when empty (§3.1). Major type 5 in this position
+///   is unconditionally the field Map, never padding, never payload.
+/// - payload: whatever remains immediately after the map (or typeId if
+///   no map), of any well-formed, definite-length CBOR shape, if
+///   present -- a `null` placeholder is normalized to `None`.
+/// - subrecords: everything remaining after the payload to the end of
+///   this Record's own (already exactly bounded) array.
 fn parse_record_array(buf: &[u8]) -> Result<Record<'_>, Error> {
     let head = cbor::read_head(buf).map_err(Error::Cbor)?;
     let mut remaining_items = head.arg;
@@ -299,24 +330,11 @@ fn parse_record_array(buf: &[u8]) -> Result<Record<'_>, Error> {
         }
     }
 
-    // Phase 2: skip forward-compat items until map, payload, or subrecord
-    // array. Only items that are NOT a map (5), NOT a byte string (2), NOT
-    // a text string (3), and NOT an array (4) are skipped — matching the
-    // JS parser's behavior where payload (bstr/tstr) is recognized after
-    // the map (or directly after typeId when no map is present).
+    // Map, if present, immediately after typeId -- major type 5 in this
+    // position is always the field Map, never padding, never payload
+    // (§3.1's map-shape carve-out: a map-shaped payload requires this
+    // slot to be explicitly, even emptily, present).
     let mut map_bytes: &[u8] = &[];
-    while remaining_items > 0 {
-        let item_head = cbor::read_head(&buf[pos..]).map_err(Error::Cbor)?;
-        let item_major = item_head.major;
-        if item_major == 5 || item_major == 2 || item_major == 3 || item_major == 4 {
-            break;
-        }
-        let item_len = cbor::skip_any_item(&buf[pos..]).map_err(Error::Cbor)?;
-        pos += item_len;
-        remaining_items -= 1;
-    }
-
-    // Map, if present, immediately after Phase 2.
     if remaining_items > 0 {
         let item_head = cbor::read_head(&buf[pos..]).map_err(Error::Cbor)?;
         if item_head.major == 5 {
@@ -331,15 +349,25 @@ fn parse_record_array(buf: &[u8]) -> Result<Record<'_>, Error> {
         walk_map_pairs(map_bytes, |_k, _v| Ok(ControlFlow::Continue)).map_err(Error::Cbor)?;
     }
 
-    // Payload: a bare byte string (major 2) or text string (major 3)
-    // immediately following the map (or typeId if no map was found).
-    // Only recognized for routed records (type_id.is_some()).
+    // Payload: whatever remains immediately after the map (or typeId if
+    // no map was found) is unconditionally this Record's payload, of any
+    // well-formed, definite-length CBOR shape (§3.1/§3.2) -- a bare
+    // `null` is the explicit "no real payload, but subrecords follow"
+    // placeholder and is left as `None`. An indefinite-length item here
+    // is not recognized (generalizes the pre-existing bstr/tstr decoder-
+    // tolerance divergence, docs/QDEF-SPEC.md §3.1, to every shape) --
+    // it falls through to subrecord-scanning instead, skipped again
+    // there as a non-array item. Only recognized for routed records
+    // (type_id.is_some()).
     if type_id.is_some() && pos < buf.len() {
         let item_head = cbor::read_head(&buf[pos..]).map_err(Error::Cbor)?;
-        if (item_head.major == 2 || item_head.major == 3) && !item_head.is_indefinite() {
-            let (raw, len) = cbor::read_definite_string(&buf[pos..]).map_err(Error::Cbor)?;
-            payload = Some(raw);
-            pos += len;
+        if !item_head.is_indefinite() {
+            let item_len = cbor::skip_any_item(&buf[pos..]).map_err(Error::Cbor)?;
+            let is_null_placeholder = item_head.major == 7 && item_head.arg == 22;
+            if !is_null_placeholder {
+                payload = Some(&buf[pos..pos + item_len]);
+            }
+            pos += item_len;
         }
     }
 

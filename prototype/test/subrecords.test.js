@@ -85,13 +85,13 @@ test('a subrecord can itself carry a namespace and its own further subrecords --
   assert.equal(inner.subrecords[0].map.get(0), 'leaf');
 });
 
-test('a non-array non-payload item after the map is not a subrecord -- skipped, same forward-compat tolerance as the top-level Sequence', () => {
+test('a non-array item after the map is read as this Record\'s payload, not skipped -- payload accepts any CBOR shape', () => {
   const bytes = cbor.encodeCanonical([20, new Map([[0, 'payload']]), 42]);
   const rec = core.decodeRecordBytes(bytes);
   assert.equal(rec.typeId, 20);
   assert.equal(rec.map.get(0), 'payload');
-  assert.equal(rec.payload, undefined);
-  assert.deepEqual(rec.subrecords, []);
+  assert.equal(rec.payload, 42);
+  assert.equal(rec.subrecords, undefined);
 });
 
 test('every Record is self-bounded by its own array -- two top-level Records, one with subrecords and one without, never bleed into each other', () => {
@@ -116,9 +116,13 @@ test('a malformed subrecord does not corrupt its parent or any sibling top-level
   // grammar (no typeID at all: a bare map as the malformed subrecord's
   // own first and only element) still has a well-defined byte boundary
   // -- the outer walker never needs to understand it to skip past it.
+  // The explicit `null` marks "no real payload, subrecords follow" (an
+  // array right after the map, with no marker, would instead be read as
+  // a record-shaped payload -- see the payload-slot tests).
   const parentWithMalformedSub = cbor.encodeCanonical([
     20,
     new Map([[0, 'parent payload']]),
+    null,
     [new Map([[0, 'no typeid here']])], // malformed subrecord: an array with no typeId
   ]);
   const sibling = core.encodeRecordBytes({ typeId: 1, fields: new Map([[0, 'sibling payload']]) });
@@ -154,7 +158,7 @@ test('ambient namespace cascades from a namespace-paired Record down to its own 
   assert.ok(resolved[2].key.namespace.equals(otherNamespace)); // its own override wins
 });
 
-test('FINDING: byte cost of a subrecord is exactly its own array plus one element slot on the parent -- no separate wrapper Type ID or byte-string re-encoding needed', () => {
+test('FINDING: byte cost of a subrecord is its own array, plus one element slot on the parent, plus a 1-byte null marker when there is no real payload', () => {
   const withSub = core.encodeRecordBytes({
     typeId: 20,
     fields: new Map(),
@@ -166,8 +170,12 @@ test('FINDING: byte cost of a subrecord is exactly its own array plus one elemen
   });
   const subBytes = core.encodeRecordBytes({ typeId: 2, fields: new Map([[0, 1]]) });
 
-  // withSub's own array grew by one element (the subrecord), and its
-  // header may grow by at most a byte if the element count crosses a
-  // CBOR length-encoding boundary (never happens for 2 vs 3 items here).
-  assert.equal(withSub.length, withoutSub.length + subBytes.length);
+  // withSub's own array grew by two elements over withoutSub: the
+  // mandatory `null` payload-absence marker (§3.1 -- otherwise the
+  // subrecord array would be ambiguous with a record-shaped payload)
+  // and the subrecord itself. Its header may grow by at most a byte if
+  // the element count crosses a CBOR length-encoding boundary (doesn't
+  // happen for 2 vs 4 items here).
+  const NULL_MARKER_BYTES = 1;
+  assert.equal(withSub.length, withoutSub.length + NULL_MARKER_BYTES + subBytes.length);
 });
