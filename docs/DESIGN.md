@@ -1776,7 +1776,7 @@ Cover by content hash of each covered Record's own canonical bytes,
 never by Sequence index: an index breaks the moment anything is
 reordered or an unrelated Record is inserted, while a hash doesn't care
 where a Record sits. This also reuses the canonical-encoding machinery
-`group_id` already needs. Two refinements needed:
+`group_id` already needs. Three refinements needed:
 
 - **The hash list MUST be a packed, fixed-width byte string, not a bare
   CBOR array** — `N` concatenated 32-byte SHA-256 hashes in one
@@ -1787,6 +1787,19 @@ where a Record sits. This also reuses the canonical-encoding machinery
   many physical codes the content happened to be fragmented into. Sign
   a Record after any Wrapper stack resolves, the same layer `group_id`'s
   own hash already operates on.
+- **Coverage is always deep, by construction, not a choice a signer
+  makes.** §3.1's grammar nests subrecords *inside* their parent's own
+  array (`[namespace?, typeId, map?, payload?, subrecord*]`), not
+  beside it as separate Sequence items, so a Record's canonical bytes
+  and "a Record plus everything nested under it" are the same byte
+  range — there is no separate, narrower "this Record's own fields
+  only" range to hash without re-serializing a truncated copy first,
+  which canonical encoding does not define and this design does not
+  attempt. Signing a parent always signs its whole subrecord subtree.
+  A signer that wants to add subrecords after signing has to sign a
+  different, still-childless Record instead — the parent's
+  already-signed, subrecord-free form doesn't exist on the wire to
+  append to.
 
 Strippable-but-not-forgeable is an accepted property of this design,
 not a gap to close: deleting a sibling Sign Record downgrades signed to
