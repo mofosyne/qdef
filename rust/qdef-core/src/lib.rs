@@ -22,16 +22,15 @@
 //!   type 5 immediately after typeId (or namespace/typeId) is always the
 //!   field Map -- never padding, never payload.
 //! - payload (optional): whatever remains immediately after the map (or
-//!   after typeId when no map is present) is unconditionally this
-//!   Record's payload, of any well-formed, definite-length CBOR shape
-//!   (§3.1/§3.2 -- the same shape rule field values already have,
-//!   including a nested Record). A bare `null` is the explicit "no real
-//!   payload, but subrecords follow" placeholder a conformant encoder
-//!   emits so a trailing array is never ambiguous between "the payload
-//!   is a Record" and "no payload, this is subrecord 0" -- exposed as
-//!   `None`, the same as true absence. A map-shaped payload requires the
-//!   field Map to also be present (even empty), since major type 5 right
-//!   after typeId is otherwise always the field Map.
+//!   after typeId when no map is present) is this Record's payload, of
+//!   any well-formed, definite-length CBOR shape EXCEPT an array
+//!   (§3.1/§3.2 -- the same shape rule field values already have, minus
+//!   major type 4). Arrays are excluded specifically so a bare array in
+//!   this position is always unambiguously the start of subrecords, no
+//!   marker needed (array-shaped payload was tried and reverted after
+//!   real adopter feedback -- see docs/DESIGN.md). A map-shaped payload
+//!   requires the field Map to also be present (even empty), since major
+//!   type 5 right after typeId is otherwise always the field Map.
 //! - subrecord* (zero or more): every remaining array element after the
 //!   payload is itself a nested Record, recursively the same shape. No
 //!   separate wrapper array is needed: the outer Record's own array is
@@ -211,10 +210,8 @@ pub struct Record<'a> {
     local_namespace: Option<cbor::Key<'a>>,
     /// The raw encoded bytes of this Record's payload item (§3.1), if
     /// present -- of whatever CBOR shape it turned out to be (byte/text
-    /// string, uint, map, or an array meaning the payload is itself a
-    /// nested Record). Uninterpreted by this crate; a `null` placeholder
-    /// (meaning "no real payload, subrecords follow") is normalized to
-    /// `None` here, same as true absence.
+    /// string, uint, map, ...), never an array. Uninterpreted by this
+    /// crate.
     payload: Option<&'a [u8]>,
     /// The raw bytes of every array element following this Record's own
     /// payload — its subrecords, if any. `None` means no elements
@@ -245,25 +242,13 @@ impl<'a> Record<'a> {
     }
 
     /// The raw encoded bytes of this Record's payload item (§3.1), if
-    /// present, of whatever CBOR shape it turned out to be. Uninterpreted
-    /// by this crate -- use `payload_as_record` when the payload is
-    /// array-shaped, `qdef_core::read_definite_string`/`read_uint` for a
-    /// string/uint-shaped payload, or a raw CBOR read for anything else.
+    /// present, of whatever CBOR shape it turned out to be (never an
+    /// array -- see `subrecords` for nested Records). Uninterpreted by
+    /// this crate -- use `qdef_core::read_definite_string`/`read_uint`
+    /// for a string/uint-shaped payload, or a raw CBOR read for anything
+    /// else.
     pub fn payload(&self) -> Option<&'a [u8]> {
         self.payload
-    }
-
-    /// If this Record's payload is itself array-shaped (major type 4),
-    /// parses it as a nested Record using the exact same grammar as a
-    /// subrecord or the top-level Sequence -- not a separate shape.
-    /// `None` if there is no payload, or it isn't array-shaped.
-    pub fn payload_as_record(&self) -> Option<Result<Record<'a>, Error>> {
-        let bytes = self.payload?;
-        let head = cbor::read_head(bytes).ok()?;
-        if head.major != 4 {
-            return None;
-        }
-        Some(parse_record_array(bytes))
     }
 
     /// This Record's own subrecords, if any — an iterator over the
@@ -297,8 +282,9 @@ impl<'a> Record<'a> {
 ///   Optional -- absent when empty (§3.1). Major type 5 in this position
 ///   is unconditionally the field Map, never padding, never payload.
 /// - payload: whatever remains immediately after the map (or typeId if
-///   no map), of any well-formed, definite-length CBOR shape, if
-///   present -- a `null` placeholder is normalized to `None`.
+///   no map), if present and not array-shaped, of any well-formed,
+///   definite-length CBOR shape. An array in this position is never
+///   payload -- it's always subrecord 0.
 /// - subrecords: everything remaining after the payload to the end of
 ///   this Record's own (already exactly bounded) array.
 fn parse_record_array(buf: &[u8]) -> Result<Record<'_>, Error> {
@@ -352,23 +338,20 @@ fn parse_record_array(buf: &[u8]) -> Result<Record<'_>, Error> {
     }
 
     // Payload: whatever remains immediately after the map (or typeId if
-    // no map was found) is unconditionally this Record's payload, of any
-    // well-formed, definite-length CBOR shape (§3.1/§3.2) -- a bare
-    // `null` is the explicit "no real payload, but subrecords follow"
-    // placeholder and is left as `None`. An indefinite-length item here
-    // is not recognized (generalizes the pre-existing bstr/tstr decoder-
-    // tolerance divergence, docs/QDEF-SPEC.md §3.1, to every shape) --
-    // it falls through to subrecord-scanning instead, skipped again
-    // there as a non-array item. Only recognized for routed records
-    // (type_id.is_some()).
+    // no map was found) is this Record's payload, of any well-formed,
+    // definite-length CBOR shape (§3.1/§3.2) EXCEPT an array -- an array
+    // here is never payload, always subrecord 0 (no marker needed to
+    // tell the two apart; array-shaped payload was tried and reverted,
+    // see docs/DESIGN.md). An indefinite-length item here is not
+    // recognized either (matches the pre-existing bstr/tstr decoder-
+    // tolerance divergence, docs/QDEF-SPEC.md §3.1) -- it falls through
+    // to subrecord-scanning instead, skipped again there as a non-array
+    // item. Only recognized for routed records (type_id.is_some()).
     if type_id.is_some() && pos < buf.len() {
         let item_head = cbor::read_head(&buf[pos..]).map_err(Error::Cbor)?;
-        if !item_head.is_indefinite() {
+        if !item_head.is_indefinite() && item_head.major != 4 {
             let item_len = cbor::skip_any_item(&buf[pos..]).map_err(Error::Cbor)?;
-            let is_null_placeholder = item_head.major == 7 && item_head.arg == 22;
-            if !is_null_placeholder {
-                payload = Some(&buf[pos..pos + item_len]);
-            }
+            payload = Some(&buf[pos..pos + item_len]);
             pos += item_len;
         }
     }

@@ -376,43 +376,14 @@ const subrecordsSiblingContainer = core.encodeContainer([
   { typeId: 1, localNamespace: Buffer.from('cdcdcdcd', 'hex'), fields: new Map([[0, 'B']]) },
 ]);
 
-// --- Record-shaped payload (§3.1's generalized payload shape rule): ---
-// Media Preview (14) with its payload slot -- not a subrecord -- holding
-// a nested Media Payload (6) Record directly. Proves the payload slot
-// accepts major type 4 (array), decoded recursively as a nested Record.
-
-const recordShapedPayloadContainer = core.encodeContainer([
-  {
-    typeId: 14,
-    fields: new Map([[0, 'image/png']]),
-    payload: { typeId: 6, fields: new Map([[0, 'image/png']]), payload: Buffer.from('jpeg bytes') },
-  },
-]);
-
 // --- Map-shaped payload, no other fields: the encoder auto-inserts an ---
 // empty field Map ahead of it, since major type 5 right after typeId is
 // otherwise always the field Map, never the payload (§3.1's map-shape
-// carve-out).
+// carve-out). Payload can never be array-shaped -- see docs/DESIGN.md
+// for why that was tried and reverted.
 
 const mapShapedPayloadNoFieldsContainer = core.encodeContainer([
   { typeId: 20, payload: new Map([[1, 'arbitrary map-shaped payload value']]) },
-]);
-
-// --- Payload-as-record nests to depth 2: a Record whose payload is a ---
-// Record whose own payload is a Record. Proves payload_as_record chains
-// correctly, not just one level deep.
-
-const nestedPayloadAsRecordDepth2Container = core.encodeContainer([
-  {
-    typeId: 30,
-    payload: {
-      typeId: 31,
-      payload: {
-        typeId: 32,
-        payload: Buffer.from('innermost bytes'),
-      },
-    },
-  },
 ]);
 
 // --- Output ---
@@ -482,10 +453,4 @@ console.log(
 console.log();
 console.log(rustBytes('SUBRECORDS_SIBLING_CONTAINER', subrecordsSiblingContainer));
 console.log();
-console.log(rustBytes('RECORD_SHAPED_PAYLOAD_CONTAINER', recordShapedPayloadContainer));
-console.log();
 console.log(rustBytes('MAP_SHAPED_PAYLOAD_NO_FIELDS_CONTAINER', mapShapedPayloadNoFieldsContainer));
-console.log();
-console.log(
-  rustBytes('NESTED_PAYLOAD_AS_RECORD_DEPTH2_CONTAINER', nestedPayloadAsRecordDepth2Container),
-);

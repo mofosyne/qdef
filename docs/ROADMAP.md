@@ -58,12 +58,11 @@ generalize what was briefly a narrower `ID[]{}` mechanism into the same
 recursive grammar used everywhere else, resolving a real correlation
 problem TagDrop's own Media Preview/Payload proposal ran into. Also
 resolved: the payload slot (an optional CBOR item — any well-formed
-shape, including a nested Record, since a mandatory `null` placeholder
-disambiguates it from subrecord 0 whenever a Record has no real payload
-of its own — carrying a Wrapper Record's opaque content or a Record's
-own direct application data, saving real bytes on every Wrapper Type —
-Compress, Encrypt, and Split's own fragment bytes no longer need a map
-key at all) and the field Map
+shape except an array, so it's never ambiguous with a subrecord, no
+marker needed — carrying a Wrapper Record's opaque content or a
+Record's own direct application data, saving real bytes on every
+Wrapper Type — Compress, Encrypt, and Split's own fragment bytes no
+longer need a map key at all) and the field Map
 itself becoming optional (omitted entirely when empty, another byte
 saved on every fieldless Record), namespace-scoped Type IDs and their
 hash-derivation self-certification

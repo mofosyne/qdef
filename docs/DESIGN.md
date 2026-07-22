@@ -1177,6 +1177,16 @@ See `core.test.js`'s and `tests.rs`'s matching tests for this case.
 
 ## Payload generalized to any CBOR shape, with a mandatory presence marker — three rejected alternatives along the way
 
+**Superseded.** Array-shaped payload (letting a Record's payload itself
+be a nested Record) and the mandatory-`null`-placeholder rule it
+required were both reverted shortly after shipping, on direct feedback
+from a real adopter (`mofosyne/tagdrop`) — see "Array-shaped payload
+reverted" below. The reasoning in this entry for *why* array-shaped
+payload looked worth building is kept as the real trail; the shape
+generalization for every other type (scalar, map, tag) and the
+map-shape carve-out were unaffected and are still exactly as described
+here.
+
 Two gaps in the payload slot above surfaced together: (1) a QDEF
 debugger reading an unrecognized Record's payload has no way to tell
 "opaque bytes" from "this is itself a Record" without Type-specific
@@ -1287,6 +1297,71 @@ three regenerated fixtures that gained the `null` marker (`SUBRECORDS_CONTAINER`
 `SUBRECORDS_WITH_NAMESPACE_CONTAINER`, `SUBRECORDS_SIBLING_CONTAINER`)
 are cross-validated the same way every other fixture is — encoded by
 the Node prototype, decoded by the independent Rust implementation.
+
+## Array-shaped payload reverted — real adopter feedback found the benefit unusable, not just expensive
+
+`mofosyne/tagdrop` had two of its own Types already shaped
+`[typeId, map, subrecord]` before this session's change — Media Preview
+nesting Media Payload, Split nesting Media Preview — both now needing a
+backward-incompatible re-encode to insert the mandatory `null`. That's
+a real, measured cost, not a hypothetical one, and it was the first
+thing tagdrop flagged. But the argument that actually settled this
+wasn't the migration cost — it was tagdrop tracing the debugger-
+detection justification (the reason array-shaped payload was built in
+the first place, per the entry above) all the way through and finding
+it didn't survive contact with what a debugger can actually do with the
+information.
+
+**The claimed benefit, restated precisely: the wire itself flags one
+child as canonical, so a decoder doesn't need the Type's schema to find
+it.** Checked against what a schema-ignorant decoder can actually *do*
+with that flag: nothing. Knowing an item is structurally "the payload"
+rather than "a subrecord" says nothing about what the payload *means* —
+that's exactly as schema-dependent as knowing what map key `3` means
+for a Type the decoder has never heard of, which nothing about payload
+vs. subrecord changes. A schema-*aware* decoder doesn't need the flag
+either — it already knows which subrecord Type to look for. The flag
+had no reader who could use it. Tagdrop went further and pointed out
+the asymmetry actually runs the other way: rendering "this is a nested
+Record" needs a major-type check on the payload slot specifically,
+while every subrecord already, unconditionally, by grammar, *is* a
+nested Record — no check required at all. Array-shaped payload didn't
+just fail to clear its own bar; it added a check the subrecord-only
+path never needed.
+
+That closes out the two-gap framing the original entry opened with.
+Gap 1 (debugger detection) is answered *more* cheaply by subrecords
+alone than array-shaped payload ever answered it. Gap 2 (a wire-level
+"this is the one canonical child" guarantee) turns out to be the same
+unusable flag under a different name — nothing reads it, on either side
+of the schema-awareness line.
+
+**Reverted:** payload excludes arrays again, permanently — an array
+immediately after the Map (or typeId) is unconditionally subrecord 0,
+no marker, no lookahead. The mandatory-`null`-placeholder rule goes
+with it, since it existed for no other reason (every other payload
+shape was already unambiguous against subrecords, since subrecords are
+exclusively arrays). This also deletes FINDINGS.md #46's footgun
+outright rather than just documenting around it — a mistake that can't
+be made needs no warning label. Every shape *other* than array (scalar,
+string, map with its carve-out, tag) is untouched; this narrows exactly
+the one addition the debugger justification doesn't survive scrutiny
+for.
+
+Migration-free for tagdrop's own `[typeId, map, subrecord]` shapes, and
+for anything else already built against the shape this format shipped
+with for most of its life — the reverted grammar is a strict subset of
+what was already correct before array-shaped payload existed. Verified:
+`prototype/test/payload-any-shape.test.js` and `subrecords.test.js`
+rewritten for the excluded-array rule; `rust/qdef-core`'s
+`payload_as_record` method removed outright (dead code once payload can
+never be array-shaped); the three `SUBRECORDS_*` fixtures regenerated
+back to their pre-marker byte length. 128 Node tests, 39 Rust tests,
+`cargo fmt`/`clippy -D warnings` clean.
+
+See FINDINGS.md for the adopter-feedback trail in full, including the
+follow-up refinement on the debugger-detection argument that actually
+closed the question.
 
 ## Common Field Keys (§3.6) — the negative-key space's actual use, once the JS/Rust criticality divergence was fixed rather than just documented
 

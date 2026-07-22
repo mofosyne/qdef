@@ -706,19 +706,16 @@ fn every_record_is_self_bounded_a_record_with_subrecords_never_bleeds_into_its_s
     }
 }
 
-/// `[typeId(24), { 0: "parent payload" }, null, [{ 0: "no typeid here" }]]`
-/// -- the explicit `null` marks "no real payload, subrecords follow"
-/// (§3.1's mandatory placeholder; an array directly here, with no
-/// marker, would instead be read as a record-shaped payload). The
-/// trailing subrecord slot holds a well-formed CBOR array whose own
+/// `[typeId(24), { 0: "parent payload" }, [{ 0: "no typeid here" }]]` --
+/// the trailing subrecord slot holds a well-formed CBOR array whose own
 /// first (and only) element is a bare map, with nothing namespace/
 /// typeId-shaped before it: well-formed CBOR, invalid Record grammar.
 /// Hand-constructed (not via gen-rust-fixtures.js, which has no direct
 /// way to encode a malformed subrecord).
 const RECORD_WITH_MALFORMED_SUBRECORD: &[u8] = &[
-    0x84, 0x18, 0x18, 0xa1, 0x00, 0x6e, 0x70, 0x61, 0x72, 0x65, 0x6e, 0x74, 0x20, 0x70, 0x61, 0x79,
-    0x6c, 0x6f, 0x61, 0x64, 0xf6, 0x81, 0xa1, 0x00, 0x6e, 0x6e, 0x6f, 0x20, 0x74, 0x79, 0x70, 0x65,
-    0x69, 0x64, 0x20, 0x68, 0x65, 0x72, 0x65,
+    0x83, 0x18, 0x18, 0xa1, 0x00, 0x6e, 0x70, 0x61, 0x72, 0x65, 0x6e, 0x74, 0x20, 0x70, 0x61, 0x79,
+    0x6c, 0x6f, 0x61, 0x64, 0x81, 0xa1, 0x00, 0x6e, 0x6e, 0x6f, 0x20, 0x74, 0x79, 0x70, 0x65, 0x69,
+    0x64, 0x20, 0x68, 0x65, 0x72, 0x65,
 ];
 
 /// `[typeId(1), { 0: "sibling payload" }]` immediately following
@@ -758,40 +755,12 @@ fn a_malformed_subrecord_does_not_corrupt_its_parent_or_any_sibling_top_level_re
 }
 
 // ---------------------------------------------------------------------
-// Payload's generalized shape rule (§3.1/§3.2): any well-formed CBOR
-// item, not just byte/text string -- including another Record (major
-// type 4), decoded recursively via `payload_as_record`. A map-shaped
-// payload needs the field Map explicitly present, since major type 5
-// right after typeId is otherwise always the field Map.
+// Payload's shape rule (§3.1/§3.2): any well-formed CBOR item EXCEPT an
+// array -- arrays are always subrecords, never payload, no marker
+// needed. A map-shaped payload needs the field Map explicitly present,
+// since major type 5 right after typeId is otherwise always the field
+// Map.
 // ---------------------------------------------------------------------
-
-#[test]
-fn a_record_shaped_payload_is_decoded_recursively_via_payload_as_record() {
-    let container = Container::parse(RECORD_SHAPED_PAYLOAD_CONTAINER).expect("valid container");
-    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
-    let rec = &records[0];
-    assert_eq!(rec.type_id(), Some(Key::Uint(14)));
-    assert!(rec.subrecords().is_none());
-
-    let nested = rec
-        .payload_as_record()
-        .expect("payload is array-shaped")
-        .expect("valid nested Record");
-    assert_eq!(nested.type_id(), Some(Key::Uint(6)));
-    let media_type = find_value(nested.map_bytes, 0).unwrap().unwrap();
-    assert_eq!(read_definite_string(media_type).unwrap(), b"image/png");
-    assert_eq!(
-        read_definite_string(nested.payload().unwrap()).unwrap(),
-        b"jpeg bytes"
-    );
-}
-
-#[test]
-fn a_byte_string_payload_is_not_record_shaped() {
-    let container = Container::parse(PAYLOAD_ONLY_NO_MAP_CONTAINER).expect("valid container");
-    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
-    assert!(records[0].payload_as_record().is_none());
-}
 
 #[test]
 fn a_map_shaped_payload_with_no_other_fields_gets_an_explicit_empty_field_map() {
@@ -808,64 +777,25 @@ fn a_map_shaped_payload_with_no_other_fields_gets_an_explicit_empty_field_map() 
     assert_eq!(payload[0] >> 5, 5, "payload's own major type is map (5)");
 }
 
-#[test]
-fn payload_as_record_nests_to_depth_2() {
-    let container =
-        Container::parse(NESTED_PAYLOAD_AS_RECORD_DEPTH2_CONTAINER).expect("valid container");
-    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
-    let outer = &records[0];
-    assert_eq!(outer.type_id(), Some(Key::Uint(30)));
-
-    let middle = outer
-        .payload_as_record()
-        .expect("outer payload is array-shaped")
-        .expect("valid nested Record");
-    assert_eq!(middle.type_id(), Some(Key::Uint(31)));
-
-    let inner = middle
-        .payload_as_record()
-        .expect("middle payload is array-shaped")
-        .expect("valid nested Record");
-    assert_eq!(inner.type_id(), Some(Key::Uint(32)));
-    assert_eq!(
-        read_definite_string(inner.payload().unwrap()).unwrap(),
-        b"innermost bytes"
-    );
-}
-
 /// `[20, { 0: "image/png" }, [6, { 0: "image/png" }], [7, { 0: "extra" }]]`
-/// -- MISSING the mandatory `null` placeholder before what was intended
-/// as two subrecords. Hand-constructed (not via gen-rust-fixtures.js,
-/// which always emits a correct encoder's output) to demonstrate what a
-/// hand-crafter's mistake actually decodes to.
-const TWO_INTENDED_SUBRECORDS_MISSING_NULL_MARKER: &[u8] = &[
-    0x84, 0x14, 0xa1, 0x00, 0x69, 0x69, 0x6d, 0x61, 0x67, 0x65, 0x2f, 0x70, 0x6e, 0x67, 0x82, 0x06,
-    0xa1, 0x00, 0x69, 0x69, 0x6d, 0x61, 0x67, 0x65, 0x2f, 0x70, 0x6e, 0x67, 0x82, 0x07, 0xa1, 0x00,
-    0x65, 0x65, 0x78, 0x74, 0x72, 0x61,
-];
-
 #[test]
-fn gotcha_a_missing_null_marker_silently_reads_the_first_intended_subrecord_as_payload_instead() {
-    // Not an error -- a different, well-formed, spec-mandated
-    // interpretation (§3.1): the first array right after the Map is
-    // always the payload when non-null, never subrecord 0. A hand-
-    // crafter who forgets the marker loses their first subrecord this
-    // way, silently, not via a decode failure.
-    let mut records = records_from_sequence(TWO_INTENDED_SUBRECORDS_MISSING_NULL_MARKER);
+fn a_bare_array_right_after_the_map_is_always_subrecord_0_never_payload() {
+    let bytes: &[u8] = &[
+        0x84, 0x14, 0xa1, 0x00, 0x69, 0x69, 0x6d, 0x61, 0x67, 0x65, 0x2f, 0x70, 0x6e, 0x67, 0x82,
+        0x06, 0xa1, 0x00, 0x69, 0x69, 0x6d, 0x61, 0x67, 0x65, 0x2f, 0x70, 0x6e, 0x67, 0x82, 0x07,
+        0xa1, 0x00, 0x65, 0x65, 0x78, 0x74, 0x72, 0x61,
+    ];
+    let mut records = records_from_sequence(bytes);
     let rec = records.next().unwrap().unwrap();
     assert_eq!(rec.type_id(), Some(Key::Uint(20)));
-
-    let payload_as_record = rec
-        .payload_as_record()
-        .expect("payload is array-shaped")
-        .expect("valid nested Record");
-    assert_eq!(payload_as_record.type_id(), Some(Key::Uint(6)));
+    assert!(rec.payload().is_none());
 
     let subs: Vec<_> = rec
         .subrecords()
-        .expect("one subrecord slot remains")
+        .expect("two subrecord slots")
         .collect::<Result<_, _>>()
         .unwrap();
-    assert_eq!(subs.len(), 1);
-    assert_eq!(subs[0].type_id(), Some(Key::Uint(7)));
+    assert_eq!(subs.len(), 2);
+    assert_eq!(subs[0].type_id(), Some(Key::Uint(6)));
+    assert_eq!(subs[1].type_id(), Some(Key::Uint(7)));
 }
