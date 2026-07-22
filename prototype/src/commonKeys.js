@@ -8,8 +8,8 @@
 // change to support this, since it already applies `key % 2 === 0`
 // uniformly to any integer key, negative or not.
 //
-// All six starter keys below are odd (optional): none is load-bearing
-// for a Type's own function, only descriptive/correlating metadata a
+// All starter keys below are odd (optional): none is load-bearing for
+// a Type's own function, only descriptive/correlating metadata a
 // generic tool (a debugger, a search index) can render without knowing
 // anything about the Record's Type.
 //
@@ -41,6 +41,14 @@ const COMMON_KEY_CONTENT_HASH = -11; // bstr, multihash-style (1-byte
 //   Media Preview key 1 shape, see wrappers.js's contentHashPrefix)
 //   generalizing that pattern for any Record's content, not just Media
 //   Preview's
+const COMMON_KEY_SOURCE = -13; // tstr: a URL this content was
+//   captured/mirrored from -- provenance, not a correlation token
+//   (orthogonal to COMMON_KEY_ID, which carries no semantic meaning of
+//   its own)
+const COMMON_KEY_FILENAME = -15; // tstr: the original/machine-facing
+//   filename, distinct from COMMON_KEY_LABEL's human-facing display
+//   name ("IMG_2043.jpg" vs. "Beach sunset") -- generalizes §4.5's
+//   Media Preview key 3
 
 /**
  * Generate 16 random bytes suitable for COMMON_KEY_UUID -- a v4
@@ -70,6 +78,8 @@ module.exports = {
   COMMON_KEY_LABEL,
   COMMON_KEY_LANGUAGE,
   COMMON_KEY_CONTENT_HASH,
+  COMMON_KEY_SOURCE,
+  COMMON_KEY_FILENAME,
   randomUuidBytes,
   uuidBytesToString,
 };

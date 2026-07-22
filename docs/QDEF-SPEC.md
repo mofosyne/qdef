@@ -714,7 +714,7 @@ argument `1` (value `-2`) is even. A decoder MUST convert to the actual
 value before checking parity, not assume the argument's own parity
 carries over.
 
-**Starter registry.** All six are odd (optional) — descriptive or
+**Starter registry.** All entries are odd (optional) — descriptive or
 correlating metadata, never load-bearing for a Type's own function, so
 an old decoder that predates any of these stays fully functional:
 
@@ -745,6 +745,12 @@ an old decoder that predates any of these stays fully functional:
 |      |                 | inferred from the byte string itself --    |
 |      |                 | identical shape to §4.5's Media Preview    |
 |      |                 | key `1`, generalized to any Record         |
+| -13  | Source          | tstr -- a URL this content was              |
+|      |                 | captured/mirrored from (provenance, not    |
+|      |                 | a correlation token -- orthogonal to ID)   |
+| -15  | Filename        | tstr -- the original/machine-facing        |
+|      |                 | filename, distinct from Label's            |
+|      |                 | human-facing display name                  |
 +------+-----------------+--------------------------------------------+
 ```
 
@@ -755,6 +761,12 @@ scoped, no uniqueness requirement, the direct equivalent of NDEF's own
 outside the container entirely — tracking a specific piece of content
 across scans, sessions, or systems. A Record MAY carry either, both, or
 neither.
+
+**Filename vs. Label: machine-facing vs. human-facing, not the same
+field twice.** Filename is the original name a file or capture already
+had ("IMG_2043.jpg"); Label is a human-authored display name ("Beach
+sunset"). Plenty of content wants both independently — a Record MAY
+carry either, both, or neither, the same as ID and UUID.
 
 **A Type's own key `0` and the common `ID` key (`-1`) can never
 collide**, on the wire or in a decoder's own key-lookup logic — CBOR's

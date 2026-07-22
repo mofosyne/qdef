@@ -2576,3 +2576,41 @@ without replacement, not just rewritten, since the behavior they
 covered no longer exists), 39 Rust tests, `cargo fmt`/`clippy -D
 warnings` clean. See DESIGN.md's "Array-shaped payload reverted" entry
 for the full reasoning.
+
+### 49. Common Field Key registry, round two — the same real adopter checking real fields, one proposal declined for having no real users including its own proposer
+
+`mofosyne/tagdrop` came back to the registry with fields already
+shipped in their own codebase, not new speculation: `Source` (`-13`,
+a URL content was captured/mirrored from) and `Filename` (`-15`, the
+original/machine-facing name, distinct from `Label`'s human-facing
+display name) both cleared the bar the first round set. `Filename`
+turned out better-evidenced than the proposal itself claimed — QDEF's
+own Media Preview (§4.5, key `3`) already has this exact field,
+independently of tagdrop's identically-shaped one at the same key
+number in their own Media Preview Type. Two unrelated implementations
+landing on the same field, at the same key, without coordinating, is
+about as strong as this kind of evidence gets.
+
+Also proposed, and declined: `Reference`/`In-Reply-To`, a pointer from
+one Record to another it responds to or extends (tagdrop's own
+`in_reply_to`: a deliberately truncated, unauthenticated 8-byte
+pointer, cheap by design for their threading use case). The adopter's
+own analysis of what a *shared* version would need was correct — full
+multihash strength, matching `Content Hash`'s shape, since other
+adopters might need guarantees tagdrop's own truncated pointer doesn't
+provide — but they said directly they'd keep their own tighter field
+regardless of whether a Common Field Key existed. That's a key with
+zero adopters at launch, including the one proposing it — the same
+build-it-and-they-will-come risk this project keeps deliberately
+declining elsewhere (most recently: array-shaped payload, reverted in
+a separate PR around the same time as this entry, for the identical
+reason). Declined, not rejected outright — revisit the moment a second
+adopter wants the general form for an actual use, the same bar every
+accepted entry here already cleared.
+
+Implemented in `prototype/src/commonKeys.js` (now eight starter keys),
+`prototype/test/common-keys.test.js` (2 new Node tests, 131 total on
+this branch). No Rust changes needed — `check_criticality`'s even/odd
+handling is already generic over any negative key, per #47. See
+DESIGN.md's "Common Field Keys" entry for the full reasoning, including
+why the declined proposal is a "not yet" rather than a "no."

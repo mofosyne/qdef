@@ -1464,6 +1464,34 @@ wanting a payload regardless of whether it wanted this metadata at all.
 This tier is opt-in, additive, and only paid for by a Record that
 actually uses it.
 
+**Second round: two more accepted, one declined, all from the same real
+adopter checking the registry against fields they'd actually shipped.**
+`mofosyne/tagdrop` proposed `Source` (`-13`, a URL content was
+captured/mirrored from) and `Filename` (`-15`, the original/machine-
+facing name, distinct from `Label`'s human-facing display name) —
+both accepted on the identical bar the first round used. `Source` is
+independently duplicated across two of tagdrop's own Types (their
+Content Extension and Paper-Preview). `Filename` clears that bar twice
+over without anyone having to go looking for a second example: QDEF's
+own Media Preview (§4.5, key `3`) already carries this exact field,
+entirely independently of tagdrop's identically-shaped one at the same
+key number in their own Media Preview Type.
+
+Also proposed, and declined: a `Reference`/`In-Reply-To` key, pointing
+one Record at another it responds to or extends. The proposal was
+self-defeating in an instructive way — tagdrop's own field
+(`in_reply_to`) is a deliberately truncated, unauthenticated 8-byte
+pointer, cheap by design; the *correct* shape for a shared, general-
+purpose mechanism would need `Content Hash`'s full multihash strength,
+since other adopters might lean on it for guarantees tagdrop doesn't
+need. tagdrop said outright they'd keep their own tighter field either
+way. A key nobody would use, including the adopter proposing it, is
+exactly the pattern the array-shaped-payload revert above just
+corrected for — a real shape, a real concept, zero real users at
+launch. Declined for now, not permanently: the moment a second adopter
+wants the general form with an actual use for it, the bar is met the
+same way every other entry here was.
+
 Prototyped in `prototype/src/commonKeys.js` and
 `prototype/test/common-keys.test.js` (Node), and
 `rust/qdef-core/src/tests.rs`'s negative-key criticality tests (Rust,

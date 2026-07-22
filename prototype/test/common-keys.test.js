@@ -13,7 +13,7 @@ const wrappers = require('../src/wrappers');
 const WIFI_TYPE = 100;
 const WIFI_KNOWN_KEYS = new Set([0, 2, 4]);
 
-test('an unrecognized Common Field Key does not abort a Record that has no idea it exists -- all six starter keys are odd', () => {
+test('an unrecognized Common Field Key does not abort a Record that has no idea it exists -- all starter keys are odd', () => {
   for (const key of [
     commonKeys.COMMON_KEY_ID,
     commonKeys.COMMON_KEY_UUID,
@@ -21,6 +21,8 @@ test('an unrecognized Common Field Key does not abort a Record that has no idea 
     commonKeys.COMMON_KEY_LABEL,
     commonKeys.COMMON_KEY_LANGUAGE,
     commonKeys.COMMON_KEY_CONTENT_HASH,
+    commonKeys.COMMON_KEY_SOURCE,
+    commonKeys.COMMON_KEY_FILENAME,
   ]) {
     assert.equal(key % 2 === 0, false, `${key} must be odd/optional`);
 
@@ -136,4 +138,32 @@ test('COMMON_KEY_CONTENT_HASH reuses the exact multihash-style shape Media Previ
   const decodedHash = rec.map.get(commonKeys.COMMON_KEY_CONTENT_HASH);
   assert.equal(decodedHash[0], wrappers.MULTIHASH_SHA2_256);
   assert.ok(decodedHash.equals(hashPrefix));
+});
+
+test('COMMON_KEY_SOURCE carries provenance, orthogonal to COMMON_KEY_ID -- a Record may carry both with distinct meanings', () => {
+  const bytes = core.encodeRecordBytes({
+    typeId: wrappers.MEDIA_PAYLOAD_TYPE,
+    fields: new Map([
+      [0, 'image/jpeg'],
+      [commonKeys.COMMON_KEY_ID, Buffer.from('local-correlation-token')],
+      [commonKeys.COMMON_KEY_SOURCE, 'https://example.com/originals/photo.jpg'],
+    ]),
+  });
+  const rec = core.decodeRecordBytes(bytes);
+  assert.equal(rec.map.get(commonKeys.COMMON_KEY_SOURCE), 'https://example.com/originals/photo.jpg');
+  assert.ok(rec.map.get(commonKeys.COMMON_KEY_ID).equals(Buffer.from('local-correlation-token')));
+});
+
+test('COMMON_KEY_FILENAME is distinct from COMMON_KEY_LABEL -- machine-facing name vs. human-facing display name', () => {
+  const bytes = core.encodeRecordBytes({
+    typeId: wrappers.MEDIA_PAYLOAD_TYPE,
+    fields: new Map([
+      [0, 'image/jpeg'],
+      [commonKeys.COMMON_KEY_LABEL, 'Beach sunset'],
+      [commonKeys.COMMON_KEY_FILENAME, 'IMG_2043.jpg'],
+    ]),
+  });
+  const rec = core.decodeRecordBytes(bytes);
+  assert.equal(rec.map.get(commonKeys.COMMON_KEY_LABEL), 'Beach sunset');
+  assert.equal(rec.map.get(commonKeys.COMMON_KEY_FILENAME), 'IMG_2043.jpg');
 });
