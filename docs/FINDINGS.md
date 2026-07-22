@@ -2414,3 +2414,43 @@ longer hid that they were always the same mechanism), `ROADMAP.md`,
 `OPEN_HINT_URI_TYPE`/`OPEN_HINT_URI_KNOWN_KEYS`) plus the renamed test
 file (`open-hint-uri.test.js`). 109 Node tests still pass, unchanged in
 count — confirms the wire format truly didn't move.
+
+### 46. The payload slot's mandatory `null` marker is unrecoverable if an encoder forgets it — a silent reinterpretation, not a decode error
+
+Surfaced while auditing the payload-slot generalization (payload MAY
+now be any well-formed CBOR item, including a nested Record, §3.1) for
+implementer-facing clarity, not while writing the mechanism itself. The
+mechanism that makes a record-shaped payload unambiguous against
+subrecord 0 — a conformant encoder MUST emit a bare CBOR `null`
+whenever there's no real payload but subrecords follow — has a sharp
+edge nothing catches: a hand-crafted Record (or a buggy encoder) that
+omits the marker doesn't fail to parse. It parses into a different,
+fully well-formed Record than the one intended, with the first
+subrecord silently absorbed into the payload slot instead.
+
+Verified concretely rather than just reasoned about:
+`payload-any-shape.test.js`'s `GOTCHA` test builds
+`[20, {0: "image/png"}, [6, {0: "image/png"}], [7, {0: "extra"}]]` — two
+subrecords intended, no `null` before them — and confirms the decoder
+reads `[6, ...]` as `rec.payload` (a record-shaped payload) and only
+`[7, ...]` survives as `rec.subrecords`, with the first intended
+subrecord gone, not errored. Mirrored in
+`rust/qdef-core/src/tests.rs`'s
+`gotcha_a_missing_null_marker_silently_reads_the_first_intended_subrecord_as_payload_instead`
+against hand-constructed bytes (not run through `gen-rust-fixtures.js`,
+which always emits a correct encoder's output and so could never
+produce this case).
+
+Not a decoder bug — both prototypes are doing exactly what §3.1
+requires, and requiring anything else (e.g. "guess based on whether the
+array looks more like a Record or more like a bare subrecord") would
+reintroduce real ambiguity with no reliable signal to resolve it by.
+The fix is entirely on the encoder side: `prototype/src/core.js`'s
+`recordToItems` already inserts the marker automatically whenever
+`subrecords` is non-empty and no `payload` was given, so any caller
+going through it is safe by construction — the trap only exists for
+someone hand-assembling a Record array directly, or writing a second
+encoder that doesn't replicate this rule. Documented as a "Caution for
+your own encoder" note in `IMPLEMENTATION-NOTES.md`'s new payload-vs-
+subrecord decision guidance, so a future Type author reaches for the
+warning before hitting the bug, not after.

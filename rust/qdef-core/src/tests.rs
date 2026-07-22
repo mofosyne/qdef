@@ -752,3 +752,65 @@ fn a_map_shaped_payload_with_no_other_fields_gets_an_explicit_empty_field_map() 
     let payload = rec.payload().expect("payload present");
     assert_eq!(payload[0] >> 5, 5, "payload's own major type is map (5)");
 }
+
+#[test]
+fn payload_as_record_nests_to_depth_2() {
+    let container =
+        Container::parse(NESTED_PAYLOAD_AS_RECORD_DEPTH2_CONTAINER).expect("valid container");
+    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
+    let outer = &records[0];
+    assert_eq!(outer.type_id(), Some(Key::Uint(30)));
+
+    let middle = outer
+        .payload_as_record()
+        .expect("outer payload is array-shaped")
+        .expect("valid nested Record");
+    assert_eq!(middle.type_id(), Some(Key::Uint(31)));
+
+    let inner = middle
+        .payload_as_record()
+        .expect("middle payload is array-shaped")
+        .expect("valid nested Record");
+    assert_eq!(inner.type_id(), Some(Key::Uint(32)));
+    assert_eq!(
+        read_definite_string(inner.payload().unwrap()).unwrap(),
+        b"innermost bytes"
+    );
+}
+
+/// `[20, { 0: "image/png" }, [6, { 0: "image/png" }], [7, { 0: "extra" }]]`
+/// -- MISSING the mandatory `null` placeholder before what was intended
+/// as two subrecords. Hand-constructed (not via gen-rust-fixtures.js,
+/// which always emits a correct encoder's output) to demonstrate what a
+/// hand-crafter's mistake actually decodes to.
+const TWO_INTENDED_SUBRECORDS_MISSING_NULL_MARKER: &[u8] = &[
+    0x84, 0x14, 0xa1, 0x00, 0x69, 0x69, 0x6d, 0x61, 0x67, 0x65, 0x2f, 0x70, 0x6e, 0x67, 0x82, 0x06,
+    0xa1, 0x00, 0x69, 0x69, 0x6d, 0x61, 0x67, 0x65, 0x2f, 0x70, 0x6e, 0x67, 0x82, 0x07, 0xa1, 0x00,
+    0x65, 0x65, 0x78, 0x74, 0x72, 0x61,
+];
+
+#[test]
+fn gotcha_a_missing_null_marker_silently_reads_the_first_intended_subrecord_as_payload_instead() {
+    // Not an error -- a different, well-formed, spec-mandated
+    // interpretation (§3.1): the first array right after the Map is
+    // always the payload when non-null, never subrecord 0. A hand-
+    // crafter who forgets the marker loses their first subrecord this
+    // way, silently, not via a decode failure.
+    let mut records = records_from_sequence(TWO_INTENDED_SUBRECORDS_MISSING_NULL_MARKER);
+    let rec = records.next().unwrap().unwrap();
+    assert_eq!(rec.type_id(), Some(Key::Uint(20)));
+
+    let payload_as_record = rec
+        .payload_as_record()
+        .expect("payload is array-shaped")
+        .expect("valid nested Record");
+    assert_eq!(payload_as_record.type_id(), Some(Key::Uint(6)));
+
+    let subs: Vec<_> = rec
+        .subrecords()
+        .expect("one subrecord slot remains")
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(subs.len(), 1);
+    assert_eq!(subs[0].type_id(), Some(Key::Uint(7)));
+}

@@ -99,3 +99,57 @@ test('no payload and no subrecords costs nothing -- the placeholder is never emi
   assert.equal(rec.payload, undefined);
   assert.equal(rec.subrecords, undefined);
 });
+
+test('payload-as-record nests to depth 2 -- a Record whose payload is a Record whose own payload is a Record', () => {
+  const bytes = core.encodeRecordBytes({
+    typeId: 30,
+    payload: {
+      typeId: 31,
+      payload: {
+        typeId: 32,
+        payload: Buffer.from('innermost bytes'),
+      },
+    },
+  });
+  const rec = core.decodeRecordBytes(bytes);
+
+  assert.equal(rec.typeId, 30);
+  assert.equal(rec.payload.typeId, 31);
+  assert.equal(rec.payload.payload.typeId, 32);
+  assert.ok(rec.payload.payload.payload.equals(Buffer.from('innermost bytes')));
+});
+
+test('GOTCHA: a hand-encoder that forgets the mandatory null placeholder silently loses its first intended subrecord to the payload slot, not an error', () => {
+  // This is the trap the mandatory-null rule creates for anyone building
+  // Record arrays by hand instead of through an encoder that inserts the
+  // marker automatically (core.js's recordToItems does this correctly --
+  // see the FINDING test above). Two subrecords were intended here, but
+  // omitting the null before them means the first one is read as a
+  // record-shaped payload instead, leaving only one real subrecord.
+  const intendedTwoSubrecords = cbor.encodeCanonical([
+    20,
+    new Map([[0, 'image/png']]),
+    // MISSING: null placeholder should be here
+    [6, new Map([[0, 'image/png']])], // intended as subrecord 0
+    [7, new Map([[0, 'extra']])], // intended as subrecord 1
+  ]);
+  const rec = core.decodeRecordBytes(intendedTwoSubrecords);
+
+  // Not an error, not a crash -- a different, well-formed, and (per
+  // §3.1) mandated interpretation: the first array is the payload.
+  assert.equal(rec.payload.typeId, 6);
+  assert.equal(rec.subrecords.length, 1);
+  assert.equal(rec.subrecords[0].typeId, 7);
+
+  // The fix: emit the null explicitly (what a correct encoder does).
+  const correctedTwoSubrecords = cbor.encodeCanonical([
+    20,
+    new Map([[0, 'image/png']]),
+    null,
+    [6, new Map([[0, 'image/png']])],
+    [7, new Map([[0, 'extra']])],
+  ]);
+  const fixed = core.decodeRecordBytes(correctedTwoSubrecords);
+  assert.equal(fixed.payload, undefined);
+  assert.equal(fixed.subrecords.length, 2);
+});

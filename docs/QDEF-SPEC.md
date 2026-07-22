@@ -206,8 +206,11 @@ flowchart TD
     checkMap -->|"anything else, or end"| afterMap
 
     map --> afterMap{"anything remain?"}
-    afterMap -->|"yes"| payload["payload<br/>(any CBOR shape)"]
+    afterMap -->|"yes"| checkNull{"null?"}
     afterMap -->|"no"| End["]"]
+    checkNull -->|"yes"| noPayload["no payload<br/>(placeholder consumed)"]
+    checkNull -->|"no"| payload["payload<br/>(any other CBOR shape,<br/>incl. array = nested Record)"]
+    noPayload --> subrecords
     payload --> subrecords
 
     subrecords{"subrecord*"} -->|"array"| process["process subrecord<br/>(recursive)"]
@@ -217,10 +220,10 @@ flowchart TD
 
 Phase-2 semantics: after the typeId, the decoder checks exactly one
 item, then (if anything remains) exactly one more:
-- If the next item is a **map** (major 5): consume it as the field map.
+- If the next item is a **map** (major 5): consume it as the field Map.
   Nothing else in the grammar is ever map-shaped, so this check needs
   no lookahead or padding-skipping — major type 5 here always means
-  "field map," unconditionally.
+  "field Map," unconditionally.
 - Whatever remains after that (or immediately after typeId, if no map
   was found) is unconditionally the **payload**, of any well-formed CBOR
   shape — the same shape rule a field value has (§3.2), including
@@ -306,7 +309,7 @@ has (§3.2) — a byte string, a text string, a scalar, or a nested array,
 map, or tag. A text-string payload is assumed to be plaintext — a
 decoder may infer a media type (e.g. `text/plain`) at its discretion —
 a byte-string payload is opaque, its meaning described by the Record's
-own field map, and an array-shaped payload is itself a nested Record
+own field Map, and an array-shaped payload is itself a nested Record
 (recursively this same grammar, §3.1), decoded the same way a subrecord
 is. Absent, it costs nothing.
 
@@ -700,8 +703,11 @@ for that Record Type's own array (§3.1): `[N, { ... }]`, or
 `[namespace, N, { ... }]` when namespace-scoped. The brace-only form is
 used here purely for readability; the wire shape is always the full
 array. When the field Map is empty or absent, `{}` is omitted from
-the shorthand entirely — `Type N: [sub]` means `[N, [sub]]` on the
-wire (typeId with a subrecord and no fields).
+the shorthand entirely — `Type N: [sub]` means `[N, null, [sub]]` on
+the wire (typeId, the mandatory payload-absence marker, then the
+subrecord — §3.1's payload paragraph), not `[N, [sub]]`: a bare array
+right after typeId with no marker would instead be read as a
+record-shaped *payload*, not a subrecord.
 
 **Standard record type IDs:** even numbers `2`–`98` are reserved for
 these standard record types, maintained alongside the QDEF spec itself.
@@ -1188,9 +1194,10 @@ Type 0: {                        // Bundle (standard record type)
 }
 ```
 
-On the wire this is simply `[0, null, [Rec1][Rec2]...]` — the empty map
-is omitted, the mandatory `null` marks "no payload of its own" (§3.1,
-since subrecords follow), and the grouped Records sit as subrecords:
+On the wire this is simply `[0, null, [Rec1], [Rec2], ...]` — the empty
+map is omitted, the mandatory `null` marks "no payload of its own"
+(§3.1, since subrecords follow), and the grouped Records sit as
+subrecords:
 
 ```
 [ 0,
