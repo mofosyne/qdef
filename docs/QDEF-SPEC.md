@@ -413,6 +413,12 @@ This gives per-field forward compatibility: a future critical field doesn't
 require any version-bump mechanism, only choosing an even key
 number the current Record Type doesn't yet define.
 
+**This rule applies uniformly to negative keys too** — parity is
+well-defined on any integer, and a negative key isn't a special case
+requiring different treatment. §3.6 defines a spec-governed, Type-
+independent vocabulary that lives entirely in the negative-key space for
+exactly this reason.
+
 **A Record field's value MAY be any well-formed CBOR item** — a scalar,
 a string, or a nested array, map, or tag of any depth. See DESIGN.md
 and FINDINGS.md for why the earlier flat-scalar-only restriction was
@@ -686,6 +692,117 @@ Prototyped end to end in `prototype/src/header.js`,
 against `rust/qdef-core` (needs no discriminator-shape-specific code at
 all). See `prototype/test/header.test.js` and
 `prototype/test/multi-code-namespace.test.js`.
+
+### 3.6 Common Field Keys
+
+Every ordinary map key (§3.2) is owned by that Record's own Type — key
+`0` means something different in a Wi-Fi Record than in a Media Payload
+Record, and a decoder needs Type-specific knowledge to know which. A
+**Common Field Key** is the opposite: a negative integer key whose
+meaning is fixed by this spec, identically, in *any* Record's field Map
+regardless of Type — the same class of vocabulary CBOR Web Token's
+common claims (RFC 8392) or COSE's header parameters are for their own
+formats. A generic tool (a QDEF debugger, a search index) can render a
+Common Field Key the same way in every Record it sees, without knowing
+anything else about that Record's Type.
+
+```
+[ 100, { 0: "SSID", 2: "pass", 4: 2, -1: h'<id bytes>' } ]
+  //                                  ^^ Common Field Key (any Type's map)
+```
+
+**Governed by this spec document alone, never self-allocatable by an
+application** — unlike the `100`–`32767` Type ID tier. An
+application-invented negative key would break the one property this
+tier exists for: consistent, Type-independent recognition. Future
+additions to this tier follow the same Standards-Action model as Wrapper
+Type IDs (§4's `0`–`22` tier) — this document's own publication is the
+authoritative declaration.
+
+**Subject to the same even/odd criticality rule as any other map key
+(§3.2), unmodified.** Parity is computed on the key's actual
+mathematical value, not on its CBOR encoding or its sign: `-1` and `-3`
+are odd (optional; unrecognized, silently ignored), `-2` and `-4` are
+even (critical; unrecognized, abort that Record) — exactly the same
+rule already applied to positive keys. A decoder needs no new mechanism
+to support this tier, only to stop treating negative keys as a special
+case.
+
+**Implementer caution: a CBOR major-type-1 (negative integer) item's
+actual value is `-1 - argument`, not the raw encoded argument** (RFC
+8949 §3.1). Computing parity directly on the raw argument gives the
+*inverse* of the correct answer — argument `0` (value `-1`) is odd,
+argument `1` (value `-2`) is even. A decoder MUST convert to the actual
+value before checking parity, not assume the argument's own parity
+carries over.
+
+**Starter registry.** All six are odd (optional) — descriptive or
+correlating metadata, never load-bearing for a Type's own function, so
+an old decoder that predates any of these stays fully functional:
+
+```
++------+-----------------+--------------------------------------------+
+| Key  | Name            | Value shape                                 |
++------+-----------------+--------------------------------------------+
+|  -1  | ID              | bstr or tstr -- an NDEF-ID-equivalent       |
+|      |                 | correlation token: two Records sharing the |
+|      |                 | same value are linked, no further meaning  |
+|      |                 | or uniqueness guarantee implied            |
+|  -3  | UUID            | bstr, exactly 16 bytes -- a standard,       |
+|      |                 | globally-unique RFC 4122/9562 UUID,        |
+|      |                 | binary form only (no canonical-text        |
+|      |                 | variant: the dashed 36-byte string is      |
+|      |                 | display-only, never the wire form)         |
+|  -5  | Date            | CBOR tag 0 (RFC 3339 text) or tag 1 (epoch  |
+|      |                 | number) -- reuses CBOR's own date tags,    |
+|      |                 | no new format                              |
+|  -7  | Label           | tstr -- human-readable label                |
+|  -9  | Language        | tstr, BCP 47 -- language tag for whatever   |
+|      |                 | human-readable text this Record carries    |
+|      |                 | (its own Label if present, or a Type's     |
+|      |                 | own text field)                            |
+| -11  | Content Hash    | bstr, multihash-style: a 1-byte hash-      |
+|      |                 | function code (multiformats multicodec     |
+|      |                 | table) followed by the digest, length      |
+|      |                 | inferred from the byte string itself --    |
+|      |                 | identical shape to §4.5's Media Preview    |
+|      |                 | key `1`, generalized to any Record         |
++------+-----------------+--------------------------------------------+
+```
+
+**ID vs. UUID: two different jobs, not two shapes of the same field.**
+ID is for correlating Records *within* the same scan/tap — cheap,
+scoped, no uniqueness requirement, the direct equivalent of NDEF's own
+`ID` field. UUID is a stronger, standardized identifier meant to survive
+outside the container entirely — tracking a specific piece of content
+across scans, sessions, or systems. A Record MAY carry either, both, or
+neither.
+
+**Coexistence with a Type's own fields is automatic, not a mechanism of
+its own.** CBOR's major-type distinction between non-negative (major 0)
+and negative (major 1) integers already keeps the two key spaces
+disjoint — a Type's own key `0` and the common `ID` key (`-1`) can never
+collide, on the wire or in a decoder's own key-lookup logic, with no
+extra rule required.
+
+**A Type's own field takes precedence for that Type's own purpose.**
+Open/Hint URI's key `1` label (§4.2) and App Route's key `1` label
+(§4.4) stay exactly as specified — Common Field Key `-7` is additional,
+optional metadata a Record MAY also carry, useful mainly to generic
+tooling that doesn't recognize the Record's Type at all (and so has no
+other way to find a label for it), not a replacement for either Type's
+own field.
+
+**Byte cost is the same as adding any other field** — one map entry, no
+new grammar. Choosing to attach a Common Field Key costs nothing beyond
+what attaching any additional field already costs; it isn't a reason a
+Type that would otherwise stay mapless needs to gain a map (contrast
+with the rejected negative-key-as-payload proposal, which forced every
+Record wanting a payload to gain one).
+
+Prototyped in `prototype/src/commonKeys.js` and
+`prototype/test/common-keys.test.js`; the criticality-rule reuse cross-
+validated against `rust/qdef-core`'s `check_criticality`.
 
 ## 4. The QDEF Standard Record Types
 

@@ -77,8 +77,10 @@ pub enum Error {
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum CriticalityOutcome {
     Ok,
-    /// §3.2: an unrecognized even key aborted this record. Carries the key.
-    Aborted(u64),
+    /// §3.2: an unrecognized even key aborted this record. Carries the
+    /// key's actual signed value -- negative for a Common Field Key
+    /// (§3.6), non-negative for a Record-Type-owned key.
+    Aborted(i64),
 }
 
 enum ControlFlow {
@@ -400,17 +402,33 @@ fn parse_record_array(buf: &[u8]) -> Result<Record<'_>, Error> {
 /// it).
 pub fn check_criticality(
     map_bytes: &[u8],
-    known_keys: &[u64],
-    mut on_ignored: impl FnMut(u64),
+    known_keys: &[i64],
+    mut on_ignored: impl FnMut(i64),
 ) -> Result<CriticalityOutcome, Error> {
-    let mut aborted_on: Option<u64> = None;
+    let mut aborted_on: Option<i64> = None;
     walk_map_pairs(map_bytes, |k, _v| {
-        // Record-Type-owned keys are always non-negative (Key::Uint).
-        // Key 0 is a regular field key like any other — no special-case
-        // skip. Negative keys (Key::NegInt), byte-string keys, and
-        // text-string keys are silently skipped here -- not this Type's
-        // to interpret.
-        if let cbor::Key::Uint(key) = k {
+        // Criticality (even/odd, §3.2) applies uniformly to any
+        // integer-shaped key: Record-Type-owned non-negative keys
+        // (Key::Uint) and the spec-governed Common Field Key tier
+        // (Key::NegInt, negative, §3.6) alike -- parity is well-defined
+        // on the actual mathematical value either way, not just on
+        // non-negative ones. Byte-string and text-string keys have no
+        // defined parity and stay exempt, not this Type's to interpret
+        // regardless of key shape.
+        //
+        // Key::NegInt carries the *raw CBOR argument*, not the actual
+        // value -- RFC 8949 §3.1: a major-type-1 item's real value is
+        // `-1 - arg`. Converting to the real value before checking
+        // parity matters: arg's own parity is the *inverse* of the
+        // value's (arg 0 -> value -1, odd; arg 1 -> value -2, even), so
+        // checking `arg % 2` directly would classify every negative key
+        // backwards.
+        let value: Option<i64> = match k {
+            cbor::Key::Uint(v) => i64::try_from(v).ok(),
+            cbor::Key::NegInt(arg) => i64::try_from(arg).ok().map(|a| -1 - a),
+            _ => None,
+        };
+        if let Some(key) = value {
             if !known_keys.contains(&key) {
                 if key % 2 == 0 {
                     aborted_on = Some(key);

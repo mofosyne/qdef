@@ -790,6 +790,33 @@ existed that neither was checked against, because the prefix-item slot
 it reuses didn't become available until a much later, unrelated
 redesign freed it.
 
+**Correction, later still: the "Resolution" above conflated two
+different problems, and only actually solved one of them.** Re-read
+against what NDEF's `ID` field is actually *for* (line one of this
+section: "letting *external* systems reference a specific record's
+payload by a stable, type-independent identity") rather than against
+the payload slot's own eventual justification: the payload slot answers
+"where does a Record's own bulk content live" — a real, separate
+question, worth solving on its own merits, but not the same question.
+Giving a Record a stable, cross-reference identity that survives
+independent of container structure — the actual NDEF-`ID` job — was
+never delivered by the payload slot at all. (The identity/correlation
+problem QDEF *did* independently solve in the meantime is a narrower
+one: subrecords, §3.1, let a Media Preview find its own Media Payload
+by nesting, replacing TagDrop's positional proposal — see "Embedded
+Records" below. That's intra-container structural correlation between a
+parent and its own children, not a portable identity any Record can
+carry on its own.) Surfaced by a user question connecting this gap
+directly to the Common Field Key tier's `-1` (§3.6, added once the
+JS/Rust negative-key criticality divergence noted above was actually
+fixed rather than just documented) — `ID` there is, at last, the literal
+NDEF-`ID` equivalent this section originally set out to find: Type-
+independent, parsed the same way regardless of what Record carries it,
+costing nothing when absent, degrading safely (odd/optional) when
+unrecognized. See that section for why it landed as a *reserved*
+negative key after all, once negative-key criticality could actually be
+trusted to work identically in both shipped decoders.
+
 ## Embedded Records (§3.1's `ID[]{}` shape) — resolved, replacing a TagDrop proposal that relied on Record position
 
 **Superseded.** `ID[]{}` — a single optional array positioned before a
@@ -1201,8 +1228,11 @@ regardless of parity. Identical wire bytes carrying an unrecognized
 negative-even key currently abort under the JS decoder and pass
 silently under the Rust one — a genuine, previously undocumented
 cross-implementation divergence, found while evaluating this proposal,
-independent of it, and still open (not resolved by the design adopted
-here, since that design never needs negative keys at all).
+independent of it. Not resolved by the payload design adopted here,
+which never needs negative keys at all — but not left open either: see
+"Common Field Keys" below, where negative keys found an actual use and
+the divergence had to be fixed (not just documented) before that use
+could be trusted.
 
 **Rejected: widen the existing payload slot to accept major type 4
 (array) with no other change.** This looked like the cheapest fix —
@@ -1257,6 +1287,112 @@ three regenerated fixtures that gained the `null` marker (`SUBRECORDS_CONTAINER`
 `SUBRECORDS_WITH_NAMESPACE_CONTAINER`, `SUBRECORDS_SIBLING_CONTAINER`)
 are cross-validated the same way every other fixture is — encoded by
 the Node prototype, decoded by the independent Rust implementation.
+
+## Common Field Keys (§3.6) — the negative-key space's actual use, once the JS/Rust criticality divergence was fixed rather than just documented
+
+The payload section above rejected using negative keys as an
+alternative *payload* mechanism. That's a different question from
+whether negative keys should be used for anything — this entry is the
+answer to the second question, prompted directly by revisiting the
+"NDEF's ID field" entry above with a concrete want in mind: a QDEF
+debugger that can render certain fields the same way in *any* Record,
+regardless of Type, the way a JSON-LD `@id` or a CWT claim works.
+
+**The mechanism costs nothing new — it's the even/odd rule, unmodified,
+applied somewhere it already worked but was never actually used.**
+Parity is well-defined on any integer; nothing about the existing
+critical/optional rule (§3.2) is specific to non-negative numbers. Once
+a decoder stops treating negative keys as a special case, "an
+unrecognized Common Field Key degrades exactly like an unrecognized
+Type-owned key" falls out for free — same abort-on-even, ignore-on-odd
+behavior, same forward-compatibility story, zero new grammar.
+
+**This is precisely why the JS/Rust criticality divergence had to be
+fixed before this tier could be trusted, not after.** A Common Field
+Key's entire value proposition is *consistent* cross-implementation
+behavior — that's what makes it debugger-safe. Before the fix, an
+unrecognized even Common Field Key aborted under JS and passed silently
+under Rust: the exact inconsistency this tier exists to prevent, just
+one layer up. Fixed in `rust/qdef-core::check_criticality`, which no
+longer special-cases `Key::NegInt` — it converts to the key's actual
+value (RFC 8949 §3.1: `-1 - argument`, not the raw encoded argument —
+computing parity on the raw argument directly gives the *inverse* of
+the correct classification, `check_criticality`'s own doc comment now
+spells this out explicitly) and applies the identical even/odd check
+`Key::Uint` already got. `CriticalityOutcome::Aborted` and
+`on_ignored`'s callback signature both widened from `u64` to `i64`
+accordingly — a breaking API change to an unstable, pre-1.0 prototype
+crate, judged acceptable the same way the payload-slot grammar change
+above was. Pinned with a dedicated test walking all four small
+arg-to-value parity cases (`arg 0 → value -1, odd`; `arg 1 → value -2,
+even`; `arg 2 → value -3, odd`; `arg 3 → value -4, even`) so a future
+regression can't silently flip the classification again without a test
+failing. JS needed no corresponding change — its existing `key % 2 ===
+0` was already correct, since the `cbor` library decodes a negint item
+to its actual signed value directly, not a raw argument.
+
+**Governance: Standards-Action only, deliberately not mirroring the
+Type ID tiers' `100+` self-allocation option.** A Type ID collision is
+locally survivable — an application picks a namespace and the collision
+risk becomes that application's own problem to manage (§3.5). A Common
+Field Key that meant different things in different applications'
+Records would defeat the entire mechanism: nothing would tell a
+debugger which meaning applies to a given `-1` it encounters. So unlike
+positive Type IDs, there is no self-allocatable tier here at all — only
+this spec (or whatever governance eventually exists for it, same
+caveat already noted for the `100`–`32767` Type ID tier) assigns
+negative keys, full stop.
+
+**Starter registry, six keys, all odd (optional) — chosen from two
+sources, not invented speculatively.** `ID` and `UUID` came directly
+from revisiting the "NDEF's ID field" entry above with this mechanism
+available: `ID` (`-1`) is the literal NDEF-`ID` equivalent that entry
+originally went looking for and didn't find (see the correction added
+there); `UUID` (`-3`) is a deliberately separate, stronger key for a
+standardized globally-unique identifier, since NDEF's own `ID` field
+has no uniqueness guarantee and conflating "cheap local correlation
+token" with "globally unique identifier" into one field would force
+every consumer to guess which guarantee a given value actually carries.
+`Label` (`-7`) and `Language` (`-9`) came from the opposite direction —
+checked against the already-shipped standard Types first, not
+speculated: Open/Hint URI's key `1` and App Route's key `1` are already
+independently, coincidentally the same "human-readable label" field;
+Open/Hint URI's key `3` is already a BCP 47 language tag. Two Types
+reinventing the identical field is itself the evidence a common version
+is worth having — this is the repetition DESIGN.md's own "confession"
+entry (below) warns against ignoring. `Content Hash` (`-11`) is the
+same move applied to Media Preview's key `1` multihash-style value
+(§4.5) — one already-designed, already-tested value shape, generalized
+instead of re-invented the next time some other Type wants a content
+hash. `Date` (`-5`) is the one genuinely speculative addition — no
+existing Type duplicates it yet — justified only by how cheap it is
+(CBOR's own tag 0/1, no new format to design or maintain) and how
+commonly "when was this created" comes up across unrelated content
+types; kept in specifically because it was the user's own original
+suggestion, not manufactured need.
+
+**Deliberately not migrating Open/Hint URI's or App Route's own label
+fields to the new common key.** They stay exactly as specified — no
+breaking change forced on already-designed Types just to prove the new
+mechanism works. `Label`/`Language` exist for *future* Types, and for
+generic tooling that wants a label from a Record whose Type it doesn't
+recognize at all (where there is no Type-specific field to fall back
+on) — not as a mandatory replacement for fields that already do their
+job.
+
+**Byte cost is ordinary field-cost, not a repeat of the rejected
+payload-key proposal.** Attaching a Common Field Key costs exactly what
+attaching any other map entry costs — no map is forced into existence
+for a Record that wouldn't otherwise need one, unlike the earlier
+rejected "`-1` as payload" idea, which taxed every Wrapper Record
+wanting a payload regardless of whether it wanted this metadata at all.
+This tier is opt-in, additive, and only paid for by a Record that
+actually uses it.
+
+Prototyped in `prototype/src/commonKeys.js` and
+`prototype/test/common-keys.test.js` (Node), and
+`rust/qdef-core/src/tests.rs`'s negative-key criticality tests (Rust,
+cross-validated against the same even/odd behavior).
 
 ## Why not just carry a literal NDEF message as the QR byte-mode payload, instead of a new format?
 

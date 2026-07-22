@@ -7,7 +7,7 @@
 use super::fixtures::*;
 use super::*;
 
-const WIFI_KNOWN_KEYS: &[u64] = &[0, 1, 2, 4];
+const WIFI_KNOWN_KEYS: &[i64] = &[0, 1, 2, 4];
 
 #[test]
 fn wifi_record_routes_and_fields_extract() {
@@ -506,17 +506,72 @@ fn a_negative_map_key_no_longer_kills_decoding_of_sibling_records_in_the_same_se
 }
 
 #[test]
-fn check_criticality_silently_skips_negative_keys_they_are_not_this_types_to_interpret() {
+fn check_criticality_treats_an_unrecognized_odd_negative_key_the_same_as_an_odd_positive_one() {
+    // -1 is odd (§3.6's Common Field Key tier reuses the same even/odd
+    // rule §3.2 already gives positive keys) -- unrecognized, it's
+    // silently ignored, not skipped without a trace and not aborted.
     let records: Vec<_> = records_from_sequence(RECORD_WITH_NEG_KEY)
         .collect::<Result<_, _>>()
         .unwrap();
-    // WIFI_KNOWN_KEYS = &[0, 1, 2, 4]; it has no entry for -1, but that
-    // must not matter -- check_criticality only ever looks at Key::Uint.
-    let outcome = check_criticality(records[0].map_bytes, WIFI_KNOWN_KEYS, |_| {
-        panic!("the negative key must never reach a Type's on_ignored callback")
-    })
-    .unwrap();
+    let mut ignored = Vec::new();
+    let outcome =
+        check_criticality(records[0].map_bytes, WIFI_KNOWN_KEYS, |k| ignored.push(k)).unwrap();
     assert_eq!(outcome, CriticalityOutcome::Ok);
+    assert_eq!(ignored, vec![-1]);
+}
+
+/// Four fixtures pinning the raw-CBOR-argument-to-actual-value parity
+/// table directly: `Key::NegInt` carries the *raw argument* (RFC 8949
+/// §3.1: actual value is `-1 - arg`), which has the *inverse* parity of
+/// the argument itself. Each is `[typeId(100), { 0: "SSID", <key>: "a" }]`
+/// with `<key>` encoded at CBOR argument 0/1/2/3 respectively (heads
+/// 0x20/0x21/0x22/0x23) -- bytes generated from the Node prototype via
+/// an inline script, not `gen-rust-fixtures.js` (same EXPERIMENTAL
+/// status as `RECORD_WITH_NEG_KEY` above).
+const RECORD_WITH_NEG_KEY_ARG0_VALUE_NEG1_ODD: &[u8] = &[
+    0x82, 0x18, 0x64, 0xa2, 0x00, 0x64, 0x53, 0x53, 0x49, 0x44, 0x20, 0x61, 0x61,
+];
+const RECORD_WITH_NEG_KEY_ARG1_VALUE_NEG2_EVEN: &[u8] = &[
+    0x82, 0x18, 0x64, 0xa2, 0x00, 0x64, 0x53, 0x53, 0x49, 0x44, 0x21, 0x61, 0x61,
+];
+const RECORD_WITH_NEG_KEY_ARG2_VALUE_NEG3_ODD: &[u8] = &[
+    0x82, 0x18, 0x64, 0xa2, 0x00, 0x64, 0x53, 0x53, 0x49, 0x44, 0x22, 0x61, 0x61,
+];
+const RECORD_WITH_NEG_KEY_ARG3_VALUE_NEG4_EVEN: &[u8] = &[
+    0x82, 0x18, 0x64, 0xa2, 0x00, 0x64, 0x53, 0x53, 0x49, 0x44, 0x23, 0x61, 0x61,
+];
+
+#[test]
+fn negint_arg_to_value_parity_table_is_computed_correctly_not_just_the_raw_args_own_parity() {
+    let cases: &[(&[u8], i64, bool)] = &[
+        // (fixture, actual key value, is the value even/critical?)
+        (RECORD_WITH_NEG_KEY_ARG0_VALUE_NEG1_ODD, -1, false),
+        (RECORD_WITH_NEG_KEY_ARG1_VALUE_NEG2_EVEN, -2, true),
+        (RECORD_WITH_NEG_KEY_ARG2_VALUE_NEG3_ODD, -3, false),
+        (RECORD_WITH_NEG_KEY_ARG3_VALUE_NEG4_EVEN, -4, true),
+    ];
+    for &(bytes, value, is_even) in cases {
+        let records: Vec<_> = records_from_sequence(bytes)
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let mut ignored = Vec::new();
+        let outcome =
+            check_criticality(records[0].map_bytes, WIFI_KNOWN_KEYS, |k| ignored.push(k)).unwrap();
+        if is_even {
+            assert_eq!(
+                outcome,
+                CriticalityOutcome::Aborted(value),
+                "arg encoding for value {value} must abort (even/critical)"
+            );
+        } else {
+            assert_eq!(
+                outcome,
+                CriticalityOutcome::Ok,
+                "arg encoding for value {value} must not abort (odd/optional)"
+            );
+            assert_eq!(ignored, vec![value]);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------

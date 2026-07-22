@@ -2454,3 +2454,61 @@ encoder that doesn't replicate this rule. Documented as a "Caution for
 your own encoder" note in `IMPLEMENTATION-NOTES.md`'s new payload-vs-
 subrecord decision guidance, so a future Type author reaches for the
 warning before hitting the bug, not after.
+
+### 47. The negative-key criticality divergence (#33) was fixed, not just documented — and it retroactively completed an entry that had wrongly declared itself resolved
+
+Prompted by a user question connecting two previously separate threads:
+"can the negative-key space carry standard, cross-Type semantics for a
+debugger?" turned out to require actually fixing #33's cross-
+implementation disagreement first, and answering it surfaced a real
+correction owed to the "NDEF's ID field" DESIGN.md entry, which had
+declared the question resolved by the payload slot — checked against
+what NDEF's `ID` field is actually documented to do, that was wrong:
+the payload slot answers "where does a Record's own content live," not
+"how does a Record get a stable, external, Type-independent reference
+identity," which is what NDEF's `ID` actually provides. Neither the
+payload slot nor subrecords (which solve a narrower, structural,
+intra-container correlation problem) ever delivered that.
+
+**The criticality fix.** `rust/qdef-core::check_criticality` matched
+only `cbor::Key::Uint`, silently skipping every `Key::NegInt` regardless
+of parity — while `prototype/src/core.js`'s `applyCriticality` already
+(if accidentally) computed parity correctly, since the `cbor` package
+decodes a negint item to its real signed value directly. Fixing Rust to
+match had one sharp edge worth getting precisely right: `Key::NegInt`
+carries the *raw CBOR argument*, not the actual value (RFC 8949 §3.1:
+value = `-1 - argument`) — so the argument's own parity is the
+*inverse* of the value's. A fix that ran `arg % 2 == 0` directly, as if
+`arg` were the value, would compile, look plausible, and classify every
+single negative key backwards. Converted to the real value first, then
+applied the identical even/odd check `Key::Uint` already had — pinned
+with a dedicated test walking all four small cases (`arg 0 → value -1,
+odd`; `arg 1 → value -2, even`; `arg 2 → value -3, odd`; `arg 3 → value
+-4, even`). `CriticalityOutcome::Aborted` and the `on_ignored` callback
+both widened from `u64` to `i64` to carry negative values at all — a
+breaking API change to an unstable, pre-1.0 crate, same judgment call
+as the payload-slot grammar change (#46-adjacent). 42 Rust tests pass,
+`cargo fmt`/`clippy -D warnings` clean.
+
+**What it unblocked.** With both decoders agreeing, negative keys could
+finally be trusted to carry cross-implementation-consistent meaning —
+exactly the property a spec-governed, Type-independent "Common Field
+Key" tier (§3.6) needs to be worth anything. Shipped six starter keys:
+`ID` (`-1`, the actual NDEF-`ID` equivalent the DESIGN.md entry above
+went looking for and, per this entry's correction, never actually
+found) and `UUID` (`-3`, deliberately separate — a stronger, globally-
+unique identifier, not conflated with `ID`'s weaker local-correlation
+guarantee) from the user's own request; `Label` (`-7`) and `Language`
+(`-9`) because Open/Hint URI's key `1`/`3` and App Route's key `1`
+already, independently, duplicate the identical fields — two Types
+reinventing the same thing is itself the evidence a common version is
+worth having, not a hypothetical; `Content Hash` (`-11`) generalizes
+Media Preview's key `1` multihash-style shape (§4.5) the same way;
+`Date` (`-5`) is the one deliberately speculative addition, justified
+only by how cheap it is (CBOR's own tag 0/1) and being the user's
+original suggestion. All six odd/optional — none load-bearing, an old
+decoder that's never heard of any of them keeps working unchanged.
+Implemented in `prototype/src/commonKeys.js`,
+`prototype/test/common-keys.test.js` (8 new Node tests, 129 total), and
+`rust/qdef-core/src/tests.rs`'s negative-key tests. See DESIGN.md's
+"Common Field Keys" entry and its correction to "NDEF's ID field."
