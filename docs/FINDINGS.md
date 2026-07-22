@@ -2414,3 +2414,101 @@ longer hid that they were always the same mechanism), `ROADMAP.md`,
 `OPEN_HINT_URI_TYPE`/`OPEN_HINT_URI_KNOWN_KEYS`) plus the renamed test
 file (`open-hint-uri.test.js`). 109 Node tests still pass, unchanged in
 count — confirms the wire format truly didn't move.
+
+### 46. The payload slot's mandatory `null` marker is unrecoverable if an encoder forgets it — a silent reinterpretation, not a decode error
+
+Surfaced while auditing the payload-slot generalization (payload MAY
+now be any well-formed CBOR item, including a nested Record, §3.1) for
+implementer-facing clarity, not while writing the mechanism itself. The
+mechanism that makes a record-shaped payload unambiguous against
+subrecord 0 — a conformant encoder MUST emit a bare CBOR `null`
+whenever there's no real payload but subrecords follow — has a sharp
+edge nothing catches: a hand-crafted Record (or a buggy encoder) that
+omits the marker doesn't fail to parse. It parses into a different,
+fully well-formed Record than the one intended, with the first
+subrecord silently absorbed into the payload slot instead.
+
+Verified concretely rather than just reasoned about:
+`payload-any-shape.test.js`'s `GOTCHA` test builds
+`[20, {0: "image/png"}, [6, {0: "image/png"}], [7, {0: "extra"}]]` — two
+subrecords intended, no `null` before them — and confirms the decoder
+reads `[6, ...]` as `rec.payload` (a record-shaped payload) and only
+`[7, ...]` survives as `rec.subrecords`, with the first intended
+subrecord gone, not errored. Mirrored in
+`rust/qdef-core/src/tests.rs`'s
+`gotcha_a_missing_null_marker_silently_reads_the_first_intended_subrecord_as_payload_instead`
+against hand-constructed bytes (not run through `gen-rust-fixtures.js`,
+which always emits a correct encoder's output and so could never
+produce this case).
+
+Not a decoder bug — both prototypes are doing exactly what §3.1
+requires, and requiring anything else (e.g. "guess based on whether the
+array looks more like a Record or more like a bare subrecord") would
+reintroduce real ambiguity with no reliable signal to resolve it by.
+The fix is entirely on the encoder side: `prototype/src/core.js`'s
+`recordToItems` already inserts the marker automatically whenever
+`subrecords` is non-empty and no `payload` was given, so any caller
+going through it is safe by construction — the trap only exists for
+someone hand-assembling a Record array directly, or writing a second
+encoder that doesn't replicate this rule. Documented as a "Caution for
+your own encoder" note in `IMPLEMENTATION-NOTES.md`'s new payload-vs-
+subrecord decision guidance, so a future Type author reaches for the
+warning before hitting the bug, not after.
+
+### 47. The negative-key criticality divergence (#33) was fixed, not just documented — and it retroactively completed an entry that had wrongly declared itself resolved
+
+Prompted by a user question connecting two previously separate threads:
+"can the negative-key space carry standard, cross-Type semantics for a
+debugger?" turned out to require actually fixing #33's cross-
+implementation disagreement first, and answering it surfaced a real
+correction owed to the "NDEF's ID field" DESIGN.md entry, which had
+declared the question resolved by the payload slot — checked against
+what NDEF's `ID` field is actually documented to do, that was wrong:
+the payload slot answers "where does a Record's own content live," not
+"how does a Record get a stable, external, Type-independent reference
+identity," which is what NDEF's `ID` actually provides. Neither the
+payload slot nor subrecords (which solve a narrower, structural,
+intra-container correlation problem) ever delivered that.
+
+**The criticality fix.** `rust/qdef-core::check_criticality` matched
+only `cbor::Key::Uint`, silently skipping every `Key::NegInt` regardless
+of parity — while `prototype/src/core.js`'s `applyCriticality` already
+(if accidentally) computed parity correctly, since the `cbor` package
+decodes a negint item to its real signed value directly. Fixing Rust to
+match had one sharp edge worth getting precisely right: `Key::NegInt`
+carries the *raw CBOR argument*, not the actual value (RFC 8949 §3.1:
+value = `-1 - argument`) — so the argument's own parity is the
+*inverse* of the value's. A fix that ran `arg % 2 == 0` directly, as if
+`arg` were the value, would compile, look plausible, and classify every
+single negative key backwards. Converted to the real value first, then
+applied the identical even/odd check `Key::Uint` already had — pinned
+with a dedicated test walking all four small cases (`arg 0 → value -1,
+odd`; `arg 1 → value -2, even`; `arg 2 → value -3, odd`; `arg 3 → value
+-4, even`). `CriticalityOutcome::Aborted` and the `on_ignored` callback
+both widened from `u64` to `i64` to carry negative values at all — a
+breaking API change to an unstable, pre-1.0 crate, same judgment call
+as the payload-slot grammar change (#46-adjacent). 42 Rust tests pass,
+`cargo fmt`/`clippy -D warnings` clean.
+
+**What it unblocked.** With both decoders agreeing, negative keys could
+finally be trusted to carry cross-implementation-consistent meaning —
+exactly the property a spec-governed, Type-independent "Common Field
+Key" tier (§3.6) needs to be worth anything. Shipped six starter keys:
+`ID` (`-1`, the actual NDEF-`ID` equivalent the DESIGN.md entry above
+went looking for and, per this entry's correction, never actually
+found) and `UUID` (`-3`, deliberately separate — a stronger, globally-
+unique identifier, not conflated with `ID`'s weaker local-correlation
+guarantee) from the user's own request; `Label` (`-7`) and `Language`
+(`-9`) because Open/Hint URI's key `1`/`3` and App Route's key `1`
+already, independently, duplicate the identical fields — two Types
+reinventing the same thing is itself the evidence a common version is
+worth having, not a hypothetical; `Content Hash` (`-11`) generalizes
+Media Preview's key `1` multihash-style shape (§4.5) the same way;
+`Date` (`-5`) is the one deliberately speculative addition, justified
+only by how cheap it is (CBOR's own tag 0/1) and being the user's
+original suggestion. All six odd/optional — none load-bearing, an old
+decoder that's never heard of any of them keeps working unchanged.
+Implemented in `prototype/src/commonKeys.js`,
+`prototype/test/common-keys.test.js` (8 new Node tests, 129 total), and
+`rust/qdef-core/src/tests.rs`'s negative-key tests. See DESIGN.md's
+"Common Field Keys" entry and its correction to "NDEF's ID field."

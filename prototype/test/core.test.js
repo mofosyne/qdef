@@ -113,22 +113,25 @@ test('records decode incrementally off a byte stream, confirming the no-bufferin
 // bearing item per Record (see docs/FINDINGS.md). A second typeID-shaped
 // item is just an ordinary unrecognized prefix item now.
 // ---------------------------------------------------------------------
-test('a second, would-be-backup typeID is not accumulated -- silently skipped as an unrecognized item', () => {
+test('a second, would-be-backup typeID is not accumulated -- it is read as this Record\'s own payload instead', () => {
+  // There is no forward-compat padding left between typeId and the map:
+  // payload now accepts any well-formed CBOR shape (§3.1/§3.2), so a
+  // bare uint immediately after typeId -- with no map before it -- is
+  // unconditionally this Record's payload, not a skipped stray item.
   const discBytes = cbor.encodeCanonical(0); // no namespace
-  const recordBytes = cbor.encodeCanonical([100, 900, new Map([[0, 'SSID']])]); // 900 would have been a backup, once
+  const recordBytes = cbor.encodeCanonical([100, 900]); // 900 would have been a backup, once
   const container = Buffer.concat([core.MAGIC, discBytes, recordBytes]);
 
   const { records } = core.decodeContainer(container);
   assert.equal(records.length, 1);
   assert.equal(records[0].typeId, 100);
-  assert.equal(records[0].map.get(0), 'SSID');
+  assert.equal(records[0].map, null);
+  assert.equal(records[0].payload, 900);
 });
 
-test('unknown items between typeIDs and map are skipped transparently', () => {
-  // Manually construct a Record with an unknown item (e.g. a future
-  // QDEF version marker) between the typeID and the map.
+test('a map-shaped item right after typeId is always the field Map, never padding or payload', () => {
   const discBytes = cbor.encodeCanonical(0); // no namespace
-  const recordBytes = cbor.encodeCanonical([100, -1, new Map([[0, 'SSID']])]); // -1 = unknown item
+  const recordBytes = cbor.encodeCanonical([100, new Map([[0, 'SSID']])]);
   const container = Buffer.concat([core.MAGIC, discBytes, recordBytes]);
 
   const { records } = core.decodeContainer(container);

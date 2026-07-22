@@ -57,11 +57,13 @@ longer corrupt discovery of its siblings (FINDINGS.md #41). Subrecords
 generalize what was briefly a narrower `ID[]{}` mechanism into the same
 recursive grammar used everywhere else, resolving a real correlation
 problem TagDrop's own Media Preview/Payload proposal ran into. Also
-resolved: the payload slot (an optional bare byte or text string
-carrying a Wrapper Record's opaque content or a Record's own direct
-application data, replacing the earlier NDEF-ID-equivalent and saving
-real bytes on every Wrapper Type — Compress, Encrypt, and Split's own
-fragment bytes no longer need a map key at all) and the field Map
+resolved: the payload slot (an optional CBOR item — any well-formed
+shape, including a nested Record, since a mandatory `null` placeholder
+disambiguates it from subrecord 0 whenever a Record has no real payload
+of its own — carrying a Wrapper Record's opaque content or a Record's
+own direct application data, saving real bytes on every Wrapper Type —
+Compress, Encrypt, and Split's own fragment bytes no longer need a map
+key at all) and the field Map
 itself becoming optional (omitted entirely when empty, another byte
 saved on every fieldless Record), namespace-scoped Type IDs and their
 hash-derivation self-certification
@@ -69,7 +71,13 @@ hash-derivation self-certification
 before being retired alongside decentralized Type IDs — see
 FINDINGS.md), and canonical encoding (§3.4, RFC 8949's deterministic
 CBOR rules as a MUST for encoders, closing a live gap in `group_id`'s
-integrity guarantee before it saw real use).
+integrity guarantee before it saw real use). **Common Field Keys**
+(§3.6) closed the actual NDEF-`ID` gap the payload slot never did — a
+small, spec-governed, Type-independent vocabulary living entirely in
+negative map keys (`ID`, `UUID`, `Date`, `Label`, `Language`, `Content
+Hash`), reusing the existing even/odd criticality rule rather than
+inventing a new one, made trustworthy only once a real JS/Rust
+disagreement over negative-key parity was fixed (FINDINGS.md #47).
 
 **Checked against a real adopter, not just designed in the abstract.**
 `mofosyne/tagdrop` — the project QDEF's design was first worked out

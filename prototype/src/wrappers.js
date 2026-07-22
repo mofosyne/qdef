@@ -21,7 +21,7 @@ const SPLIT_KNOWN_KEYS = new Set([0, 2, 4, 7, 9]);
 const COMPRESS_KNOWN_KEYS = new Set([]);
 const ENCRYPT_KNOWN_KEYS = new Set([0, 3, 5]);
 const OPEN_HINT_URI_KNOWN_KEYS = new Set([0, 1, 3, 5]);
-const MEDIA_PAYLOAD_KNOWN_KEYS = new Set([0, 2]);
+const MEDIA_PAYLOAD_KNOWN_KEYS = new Set([0]); // key 2 retired -- content moved to the payload slot (§3.1, §4.3)
 const APP_ROUTE_KNOWN_KEYS = new Set([0, 1]);
 const MEDIA_PREVIEW_KNOWN_KEYS = new Set([0, 1, 3, 5]);
 

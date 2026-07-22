@@ -6,7 +6,9 @@ const core = require('../src/core');
 const wrappers = require('../src/wrappers');
 
 // ---------------------------------------------------------------------
-// §4.3's Media Payload (Type 6): a plain standard record type, not a wrapper.
+// §4.3's Media Payload (Type 6): a plain standard record type, not a
+// wrapper. Its content lives in the payload slot (§3.1), not the field
+// Map -- only the Media Type field (key 0) is a map field.
 // ---------------------------------------------------------------------
 
 test('Media Type as a CoAP Content-Format uint round-trips', () => {
@@ -14,10 +16,8 @@ test('Media Type as a CoAP Content-Format uint round-trips', () => {
   const container = core.encodeContainer([
     {
       typeId: wrappers.MEDIA_PAYLOAD_TYPE,
-      fields: new Map([
-        [0, wrappers.COAP_CONTENT_FORMAT_IMAGE_JPEG],
-        [2, payload],
-      ]),
+      fields: new Map([[0, wrappers.COAP_CONTENT_FORMAT_IMAGE_JPEG]]),
+      payload,
     },
   ]);
 
@@ -26,7 +26,7 @@ test('Media Type as a CoAP Content-Format uint round-trips', () => {
 
   assert.equal(rec.aborted, false);
   assert.equal(rec.map.get(0), 22);
-  assert.deepEqual(rec.map.get(2), payload);
+  assert.deepEqual(rec.payload, payload);
 });
 
 test('Media Type as a plain MIME string round-trips', () => {
@@ -34,10 +34,8 @@ test('Media Type as a plain MIME string round-trips', () => {
   const container = core.encodeContainer([
     {
       typeId: wrappers.MEDIA_PAYLOAD_TYPE,
-      fields: new Map([
-        [0, 'text/vcard'],
-        [2, payload],
-      ]),
+      fields: new Map([[0, 'text/vcard']]),
+      payload,
     },
   ]);
 
@@ -46,17 +44,15 @@ test('Media Type as a plain MIME string round-trips', () => {
 
   assert.equal(rec.aborted, false);
   assert.equal(rec.map.get(0), 'text/vcard');
-  assert.deepEqual(rec.map.get(2), payload);
+  assert.deepEqual(rec.payload, payload);
 });
 
 test('an application with no interest in Media Payload skips the whole Record cleanly by Type ID alone', () => {
   const container = core.encodeContainer([
     {
       typeId: wrappers.MEDIA_PAYLOAD_TYPE,
-      fields: new Map([
-        [0, wrappers.COAP_CONTENT_FORMAT_APPLICATION_CBOR],
-        [2, Buffer.from('irrelevant to this decoder')],
-      ]),
+      fields: new Map([[0, wrappers.COAP_CONTENT_FORMAT_APPLICATION_CBOR]]),
+      payload: Buffer.from('irrelevant to this decoder'),
     },
     { typeId: 100, fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) },
   ]);
