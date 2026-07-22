@@ -83,7 +83,7 @@ If "calendar" here really means iCalendar (RFC 5545), §4.3's Media
 Payload Record can carry it directly:
 
 ```
-Type 6: [ 0: "text/calendar", 2: h'<raw .ics bytes>' ]   // Media Payload
+[ 6, { 0: "text/calendar" }, h'<raw .ics bytes>' ]   // Media Payload
 ```
 
 Checked directly against the registry: `text/calendar` is **not** in

@@ -31,10 +31,8 @@ test('Media Preview round-trips with a Media Payload subrecord', () => {
     subrecords: [
       {
         typeId: wrappers.MEDIA_PAYLOAD_TYPE,
-        fields: new Map([
-          [0, 'text/plain'],
-          [2, content],
-        ]),
+        fields: new Map([[0, 'text/plain']]),
+        payload: content,
       },
     ],
   });
@@ -50,7 +48,7 @@ test('Media Preview round-trips with a Media Payload subrecord', () => {
   const payload = rec.subrecords[0];
   assert.equal(payload.typeId, wrappers.MEDIA_PAYLOAD_TYPE);
   assert.equal(payload.map.get(0), 'text/plain');
-  assert.ok(payload.map.get(2).equals(content));
+  assert.ok(payload.payload.equals(content));
 });
 
 test('key 1 is multihash-style: 1-byte function code + digest, length inferred from the CBOR byte string itself', () => {
@@ -97,20 +95,20 @@ test('multi-item: two independent Media Preview Records are consecutive top-leve
   const recA = core.encodeRecordBytes({
     typeId: wrappers.MEDIA_PREVIEW_TYPE,
     fields: new Map([[0, 'text/plain'], [3, 'doc.txt']]),
-    subrecords: [{ typeId: wrappers.MEDIA_PAYLOAD_TYPE, fields: new Map([[0, 'text/plain'], [2, Buffer.from('content A')]]) }],
+    subrecords: [{ typeId: wrappers.MEDIA_PAYLOAD_TYPE, fields: new Map([[0, 'text/plain']]), payload: Buffer.from('content A') }],
   });
   const recB = core.encodeRecordBytes({
     typeId: wrappers.MEDIA_PREVIEW_TYPE,
     fields: new Map([[0, 'image/png'], [3, 'photo.png']]),
-    subrecords: [{ typeId: wrappers.MEDIA_PAYLOAD_TYPE, fields: new Map([[0, 'image/png'], [2, Buffer.from('content B')]]) }],
+    subrecords: [{ typeId: wrappers.MEDIA_PAYLOAD_TYPE, fields: new Map([[0, 'image/png']]), payload: Buffer.from('content B') }],
   });
 
   const records = core.decodeSequence(Buffer.concat([recA, recB]));
   assert.equal(records.length, 2);
   assert.equal(records[0].map.get(3), 'doc.txt');
-  assert.equal(records[0].subrecords[0].map.get(2).toString(), 'content A');
+  assert.equal(records[0].subrecords[0].payload.toString(), 'content A');
   assert.equal(records[1].map.get(3), 'photo.png');
-  assert.equal(records[1].subrecords[0].map.get(2).toString(), 'content B');
+  assert.equal(records[1].subrecords[0].payload.toString(), 'content B');
 });
 
 test('Media Preview composes with Compress: Compress outermost, Preview as its subrecord', () => {
@@ -151,7 +149,8 @@ test('Media Preview composes with Split: Split MUST stay outermost, Preview as i
   // here, the Media Payload this whole group's Media Preview identifies.
   const innerRecordBytes = core.encodeRecordBytes({
     typeId: wrappers.MEDIA_PAYLOAD_TYPE,
-    fields: new Map([[0, 'image/png'], [2, Buffer.from('a much larger reassembled image payload')]]),
+    fields: new Map([[0, 'image/png']]),
+    payload: Buffer.from('a much larger reassembled image payload'),
   });
   const fragments = wrappers.splitEncode(innerRecordBytes, { count: 3 });
   for (const frag of fragments) {
@@ -177,7 +176,7 @@ test('Media Preview composes with Split: Split MUST stay outermost, Preview as i
   ]);
   const terminal = wrappers.resolveStack(codes, {}, knownKeysRegistry);
   assert.equal(terminal.typeId, wrappers.MEDIA_PAYLOAD_TYPE);
-  assert.ok(terminal.map.get(2).equals(Buffer.from('a much larger reassembled image payload')));
+  assert.ok(terminal.payload.equals(Buffer.from('a much larger reassembled image payload')));
 });
 
 function compressableFixture() {
