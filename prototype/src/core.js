@@ -19,21 +19,22 @@
 //   Record (see docs/FINDINGS.md for why decentralized Type IDs, Named
 //   Type IDs, and backup typeIDs were all retired).
 // - map? (optional): the field Map, omitted when empty — default {}.
-// - payload? (optional): any well-formed CBOR item (same shape rule as
-//   an ordinary field value, §3.2), carrying this Record's opaque
-//   content (for Wrapper Records), direct application payload (e.g.
-//   Media Payload's content or a simple text record), or a nested
-//   Record (major type 4, recursively this same grammar). Present
-//   whenever anything follows the map -- a conformant encoder emits a
-//   bare CBOR `null` when there is no real payload but subrecords
-//   follow, so a trailing array is never ambiguous between "the payload
-//   is a Record" and "no payload, this is subrecord 0." A map-shaped
-//   payload requires the field Map to also be explicitly present (even
-//   empty), since major type 5 right after typeId is otherwise always
-//   the field Map, never the payload.
+// - payload? (optional): any well-formed CBOR item EXCEPT an array (same
+//   shape rule as an ordinary field value, §3.2, minus major type 4),
+//   carrying this Record's opaque content (for Wrapper Records) or
+//   direct application payload (e.g. Media Payload's content or a
+//   simple text record). Arrays are excluded specifically so a bare
+//   array right after the map/typeId is always unambiguously the start
+//   of subrecords, never a payload -- no marker needed to tell the two
+//   apart (see docs/DESIGN.md; array-shaped payload was tried and
+//   reverted after real adopter feedback showed it had no use nothing
+//   else already provided). A map-shaped payload requires the field Map
+//   to also be explicitly present (even empty), since major type 5
+//   right after typeId is otherwise always the field Map, never the
+//   payload.
 // - subrecord* (zero or more): every remaining array element after the
-//   payload (or after the map if no payload/subrecords marker) is
-//   itself a nested Record, recursively the same shape.
+//   payload (or after the map if no payload is present) is itself a
+//   nested Record, recursively the same shape.
 //
 // No version byte: local forward compatibility is §3.2's even/odd rule.
 // Container-level metadata (a format namespace) lives in a single
@@ -79,14 +80,11 @@ function encodeContainer(records, discriminator) {
  * @param {number|bigint} record.typeId
  * @param {Map<number, any>} [record.fields] - omitted when empty (saves
  *   one byte per record with no fields).
- * @param {*} [record.payload] - any well-formed CBOR value carrying this
- *   Record's opaque content (for Wrapper Records) or direct payload
- *   (e.g. Media Payload's content, simple text). A plain object with a
- *   `typeId` is treated as a nested record spec (this same shape,
- *   recursed into) rather than a literal CBOR map value -- pass a `Map`
- *   instance instead if a literal map-shaped payload value is actually
- *   intended. When omitted but `subrecords` is non-empty, a CBOR `null`
- *   placeholder is emitted automatically (see recordToItems below).
+ * @param {*} [record.payload] - any well-formed CBOR value EXCEPT a bare
+ *   array, carrying this Record's opaque content (for Wrapper Records)
+ *   or direct payload (e.g. Media Payload's content, simple text). To
+ *   nest another Record, use `subrecords` -- payload can never be
+ *   array-shaped (see docs/DESIGN.md for why).
  * @param {Buffer} [record.localNamespace] - if given, this Record's
  *   own namespace, overriding any container-ambient one for this
  *   Record (and, per header.js's cascading resolution, for its own
@@ -99,13 +97,20 @@ function recordToItems({ typeId, fields, payload, localNamespace, subrecords }) 
   if (typeId === undefined) {
     throw new Error('typeId is required');
   }
+  if (Array.isArray(payload)) {
+    throw new Error('payload cannot be array-shaped -- use subrecords to nest a Record instead');
+  }
+  if (isRecordSpec(payload)) {
+    throw new Error(
+      'payload cannot be a record spec ({typeId, fields, ...}) -- use subrecords to nest a Record instead',
+    );
+  }
   const items = [];
   if (localNamespace !== undefined) items.push(localNamespace);
   items.push(typeId);
 
   const hasFields = fields !== undefined && fields.size > 0;
-  const payloadValue = encodePayloadValue(payload);
-  const payloadIsMapShaped = payloadValue !== undefined && isMapItem(payloadValue);
+  const payloadIsMapShaped = payload !== undefined && isMapItem(payload);
 
   if (hasFields) {
     items.push(fields);
@@ -116,36 +121,21 @@ function recordToItems({ typeId, fields, payload, localNamespace, subrecords }) 
     items.push(new Map());
   }
 
-  const hasSubrecords = subrecords !== undefined && subrecords.length > 0;
-  if (payloadValue !== undefined) {
-    items.push(payloadValue);
-  } else if (hasSubrecords) {
-    // Mandatory placeholder: a conformant encoder MUST make the payload
-    // slot explicit whenever anything follows the map, so a trailing
-    // array is never ambiguous between "the payload is a Record" and
-    // "no payload, this is subrecord 0" (§3.1).
-    items.push(null);
-  }
+  if (payload !== undefined) items.push(payload);
 
-  if (hasSubrecords) {
+  if (subrecords !== undefined) {
     for (const sub of subrecords) items.push(recordToItems(sub));
   }
   return items;
 }
 
 /**
- * A record's payload may itself be a nested Record: pass the same
- * {typeId, fields, payload, subrecords} spec used for subrecords and it
- * is recursively encoded the same way, becoming a bare array in the
- * payload slot. Any other value (Buffer, string, Map, scalar, ...) is a
- * literal CBOR payload value, passed through unchanged.
+ * Detects a leftover record-spec object ({typeId, fields, ...}) passed
+ * as payload -- a migration trap from when payload could recursively
+ * encode a nested Record. cbor.encodeCanonical would otherwise happily
+ * encode such an object as a literal CBOR map with string keys like
+ * "typeId", silently producing garbage instead of an error.
  */
-function encodePayloadValue(payload) {
-  if (payload === undefined) return undefined;
-  if (isRecordSpec(payload)) return recordToItems(payload);
-  return payload;
-}
-
 function isRecordSpec(value) {
   return (
     value !== null &&
@@ -233,12 +223,12 @@ function parseRecordList(items) {
  *   map-shaped; normalized to a Map instance. Major type 5 in this
  *   position is unconditionally the field Map, never padding, never
  *   payload -- if no map is found there, defaults to null (empty).
- * - payload? (optional): whatever remains immediately after the map (or
- *   after typeId if no map) is unconditionally this Record's payload,
- *   of any well-formed CBOR shape -- `null` is the "no real payload,
- *   but subrecords follow" placeholder and is normalized back to
- *   `undefined`. An array-shaped payload is itself recursively parsed
- *   as a nested Record.
+ * - payload? (optional): the item immediately after the map (or after
+ *   typeId if no map), if present and not array-shaped, is this
+ *   Record's payload -- any other CBOR shape is fair game. An
+ *   array-shaped item in this position is never payload; it's always
+ *   subrecord 0, unconditionally, with no marker needed to tell the two
+ *   apart (see docs/DESIGN.md).
  * - subrecord*: every remaining array element after payload is a nested
  *   Record.
  */
@@ -266,12 +256,9 @@ function parseRecordArray(arr) {
   }
 
   let payload = undefined;
-  if (typeId !== undefined && i < arr.length) {
-    const candidate = arr[i];
+  if (typeId !== undefined && i < arr.length && !Array.isArray(arr[i])) {
+    payload = arr[i];
     i++;
-    if (candidate !== null) {
-      payload = Array.isArray(candidate) ? parseRecordArray(candidate) : candidate;
-    }
   }
 
   const subrecords = i < arr.length ? parseRecordList(arr.slice(i)) : undefined;

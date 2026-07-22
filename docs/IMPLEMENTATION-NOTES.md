@@ -32,54 +32,6 @@ walking into its contents:
 The rest of this doc is that same pattern applied to something with real
 design decisions attached, not just "one more field."
 
-## Designing a new Record Type: payload-as-record, or a subrecord?
-
-Since §3.1's payload slot can itself be a Record (not just opaque
-bytes/text), a new Record Type whose content is "another Record" has
-two structurally similar options: put that Record directly in the
-payload slot, or attach it as a subrecord (the way §4.5 Media Preview
-attaches its content, typically a §4.3 Media Payload). They cost almost
-the same on the wire — a Record embedded as payload and a Record
-embedded as `subrecords[0]` are the same array-nesting cost — so this
-isn't a byte-budget question, it's about which guarantee you want the
-grammar itself to enforce versus leaving to your Type's own spec prose.
-
-**Use payload-as-record when the content is exactly one Record, always
-present or always absent, never "zero or more."** The grammar itself
-then guarantees "this Type's content lives in exactly one fixed place"
-— a decoder (or a QDEF debugger) can find it by major-type check alone,
-with no Type-specific knowledge and no risk of picking the wrong item
-out of a list.
-
-**Use a subrecord list when the content is optional, repeatable, or
-something a future revision might want to extend without a grammar
-change.** This is why Media Preview's own content stays a subrecord
-rather than moving to payload-as-record: an application might
-reasonably want more than one attached Record later (a thumbnail *and*
-a full-resolution version, say), and an old decoder that doesn't
-recognize the new one just skips it and keeps working, the same
-tolerance any unrecognized subrecord already gets (§3.2). Payload-as-
-record has no equivalent "there might be more than one" story — it's
-exactly one slot.
-
-**The one real cost difference:** a Type that chooses subrecords but
-has no payload of its own pays the mandatory `null` placeholder (§3.1)
-— one byte, on every Record of that Type. Payload-as-record has no
-equivalent cost, since the slot was going into use either way.
-
-**A footgun worth knowing about either way you choose subrecords: the
-`null` placeholder cannot be recovered if an encoder forgets it.** A
-decoder has no way to tell "the encoder meant this array as a
-subrecord but forgot the marker" from "the encoder deliberately put a
-Record in the payload slot" — §3.1 mandates reading it as the latter.
-The result isn't a decode error; it's a silently different, well-formed
-Record than the one the encoder intended (see DESIGN.md's payload
-section, and `prototype/test/payload-any-shape.test.js`'s `GOTCHA` test
-for a worked demonstration). Any encoder implementation for a Type with
-subrecords MUST emit the marker automatically whenever there's no real
-payload — the way `prototype/src/core.js`'s `recordToItems` does —
-rather than leaving each call site to remember it by hand.
-
 ## Worked example: a calendar Record Type with multiple events
 
 Say an application wants to share several calendar events (a title and a

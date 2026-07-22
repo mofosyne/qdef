@@ -2417,6 +2417,13 @@ count — confirms the wire format truly didn't move.
 
 ### 46. The payload slot's mandatory `null` marker is unrecoverable if an encoder forgets it — a silent reinterpretation, not a decode error
 
+**Superseded.** The mechanism this entry warns about — array-shaped
+payload, and the mandatory `null` marker it required — was reverted in
+#48, on direct adopter feedback. A mistake that can no longer be made
+needs no warning label; this entry is kept as the real trail (the
+footgun was genuine at the time, verified concretely, not hypothetical)
+rather than deleted.
+
 Surfaced while auditing the payload-slot generalization (payload MAY
 now be any well-formed CBOR item, including a nested Record, §3.1) for
 implementer-facing clarity, not while writing the mechanism itself. The
@@ -2512,3 +2519,60 @@ Implemented in `prototype/src/commonKeys.js`,
 `prototype/test/common-keys.test.js` (8 new Node tests, 129 total), and
 `rust/qdef-core/src/tests.rs`'s negative-key tests. See DESIGN.md's
 "Common Field Keys" entry and its correction to "NDEF's ID field."
+
+### 48. Array-shaped payload reverted — real adopter feedback caught something design review and testing both missed: the mechanism had a real migration cost and zero usable benefit
+
+`mofosyne/tagdrop` pushed back directly on #46's mechanism after
+checking it against their own four Record Types: two of them
+(`Media Preview → Media Payload`, `Split → Media Preview`) already
+shipped as `[typeId, map, subrecord]`, with nothing between map and
+subrecord — both would need a backward-incompatible re-encode to insert
+the mandatory `null`. That's a real, measured migration cost, raised as
+a direct question, not a complaint: does array-shaped payload buy
+anything a first subrecord doesn't already give you?
+
+Traced against the actual justification given when array-shaped payload
+was built (a debugger telling "opaque bytes" from "nested Record"
+without Type-specific knowledge): it doesn't survive. Knowing an item is
+*structurally* flagged canonical tells a schema-ignorant reader nothing
+about what it *means* — exactly as useless as not knowing what an
+unrecognized map key means, which nothing about the payload/subrecord
+distinction changes. A schema-*aware* reader doesn't need the flag
+either, since it already knows which subrecord Type to look for. Neither
+audience the mechanism was built for could actually use it. Tagdrop's
+own follow-up sharpened this further: under subrecord-only rules, a
+decoder needs no major-type check at all to know a subrecord is a
+nested Record — that's true unconditionally, by grammar. Array-shaped
+payload didn't just fail to deliver its claimed win; it added a check
+the subrecord-only path never needed, making it strictly more complex
+on the implementer side too, not merely a wash.
+
+**Reverted:** payload excludes arrays again, permanently. An array
+immediately after the Map (or typeId) is unconditionally subrecord 0 —
+no marker, no lookahead, no ambiguity to resolve. The mandatory-`null`-
+placeholder rule goes with it, since every other payload shape was
+already unambiguous against subrecords on its own (subrecords are
+exclusively arrays; nothing else was ever confusable with them). This
+makes #46's footgun impossible rather than merely documented — deleted
+the tests demonstrating it (`GOTCHA` in `payload-any-shape.test.js`,
+`gotcha_a_missing_null_marker_...` in `rust/qdef-core/src/tests.rs`)
+along with the mechanism itself, rather than leaving dead-but-passing
+regression coverage for a trap nobody can fall into anymore.
+
+Migration-free for tagdrop and for anything else already built against
+what this format shipped with for most of its life — the reverted
+grammar is a strict subset of the pre-array-shaped-payload rule, so
+nothing that worked before this session's change stopped working after
+reverting it. `core.js`'s `recordToItems` now throws a clear error on
+an array-shaped or leftover-record-spec payload value instead of
+silently mis-encoding it (`cbor.encodeCanonical` was confirmed, by
+direct test, to happily encode a stray `{typeId, fields}` object as a
+literal CBOR map with string keys — exactly the kind of silent-wrong
+output this project treats as worse than a thrown error).
+`rust/qdef-core`'s `payload_as_record` method removed outright as dead
+code. Three `SUBRECORDS_*` fixtures regenerated back to their
+pre-marker byte length. 128 Node tests (down from 129 — tests removed
+without replacement, not just rewritten, since the behavior they
+covered no longer exists), 39 Rust tests, `cargo fmt`/`clippy -D
+warnings` clean. See DESIGN.md's "Array-shaped payload reverted" entry
+for the full reasoning.

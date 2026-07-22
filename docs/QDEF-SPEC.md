@@ -107,9 +107,10 @@ but ordinary CBOR array-skipping, without any Record-grammar knowledge
 at all. An optional byte string namespace may lead the array (§3.1),
 exactly one typeID-bearing item is mandatory, an optional field Map may
 appear (omitted when empty, §3.1), an optional payload (any well-formed
-CBOR item, §3.1) follows the map or typeId, and any remaining elements
-after the payload are subrecords (§3.1). The minimum viable Record is
-just `[typeID]` (typeId alone, no fields, no payload, no subrecords).
+CBOR item except an array, §3.1) follows the map or typeId, and any
+remaining elements after the payload are subrecords (§3.1). The minimum
+viable Record is just `[typeID]` (typeId alone, no fields, no payload,
+no subrecords).
 
 For NFC, the magic prefix is redundant: NDEF's own MIME-type field already
 identifies the payload. An NDEF record carrying QDEF content uses MIME type
@@ -170,15 +171,17 @@ namespace and its single typeID-bearing item. Phase 2 checks the very
 next item: a Map (major type 5) is always the field Map, full stop —
 nothing else in the grammar is ever map-shaped, so there is no padding
 to skip in search of one. Whatever remains after that (or immediately
-after typeId, if no Map) is unconditionally the payload, of any
-well-formed CBOR shape — there is no separate "is this bstr/tstr/array"
-branch, since the payload slot is defined to accept the same shapes a
-field value can (§3.2). Everything after the payload is subrecords
-(§3.1). Because the Record's total span is already known before this
-walk begins, a Record whose own contents fail to parse as valid grammar
-still cannot corrupt discovery of the next sibling Record — only Record
-grammar within the (already-known-well-formed) span is uncertain, never
-where that span ends.
+after typeId, if no Map), if it is not itself an array, is the payload,
+of any other well-formed CBOR shape (§3.2). An array in this position is
+never a payload — it always means "no payload, subrecords begin here" —
+so there is nothing to disambiguate a decoder needs a marker for.
+Everything after the payload (or, if no payload, everything from that
+first array onward) is subrecords (§3.1). Because the Record's total
+span is already known before this walk begins, a Record whose own
+contents fail to parse as valid grammar still cannot corrupt discovery
+of the next sibling Record — only Record grammar within the
+(already-known-well-formed) span is uncertain, never where that span
+ends.
 
 ### 3.1 The Record array: namespace, Type ID, Map, Payload, and subrecords
 
@@ -186,8 +189,8 @@ Every Record is exactly one definite-length CBOR array (major type 4).
 Its elements, in order: an optional namespace, exactly one typeID-
 bearing item, an optional field Map (omitted when empty — saves one
 byte per record with no fields), an optional payload (any well-formed
-CBOR item — present whenever anything follows the Map, §3.1's payload
-paragraph below), and zero or more subrecords.
+CBOR item except an array — §3.1's payload paragraph below), and zero
+or more subrecords.
 
 ```
 [ namespace?, typeId, map?, payload?, subrecord* ]
@@ -205,12 +208,10 @@ flowchart TD
     checkMap -->|"map (mjr 5)"| map["map"]
     checkMap -->|"anything else, or end"| afterMap
 
-    map --> afterMap{"anything remain?"}
-    afterMap -->|"yes"| checkNull{"null?"}
-    afterMap -->|"no"| End["]"]
-    checkNull -->|"yes"| noPayload["no payload<br/>(placeholder consumed)"]
-    checkNull -->|"no"| payload["payload<br/>(any other CBOR shape,<br/>incl. array = nested Record)"]
-    noPayload --> subrecords
+    map --> afterMap{"next item?"}
+    afterMap -->|"array (mjr 4)"| subrecords
+    afterMap -->|"anything else"| payload["payload<br/>(any non-array CBOR shape)"]
+    afterMap -->|"end"| End["]"]
     payload --> subrecords
 
     subrecords{"subrecord*"} -->|"array"| process["process subrecord<br/>(recursive)"]
@@ -225,12 +226,10 @@ item, then (if anything remains) exactly one more:
   no lookahead or padding-skipping — major type 5 here always means
   "field Map," unconditionally.
 - Whatever remains after that (or immediately after typeId, if no map
-  was found) is unconditionally the **payload**, of any well-formed CBOR
-  shape — the same shape rule a field value has (§3.2), including
-  another Record (major type 4, recursively this same grammar). A bare
-  `null` here means "no real payload, but subrecords follow" (see the
-  payload paragraph below for why this placeholder is mandatory in that
-  case). If nothing remains at all, there is no payload.
+  was found): if it is an **array** (major 4), there is no payload and
+  this array is subrecord 0. Otherwise, it is the **payload**, of any
+  other well-formed CBOR shape — the same shape rule a field value has
+  (§3.2), minus arrays. If nothing remains at all, there is no payload.
 - Everything remaining after the payload is **subrecords**.
 
 A Record whose own array header is at least well-formed CBOR is always
@@ -304,46 +303,27 @@ that some CBOR library is present. See FINDINGS.md #14.
 
 **Payload.** Immediately following the optional field Map (or following
 typeId when no Map is present), a Record MAY carry exactly one payload:
-any well-formed CBOR item, the same shape rule an ordinary field value
-has (§3.2) — a byte string, a text string, a scalar, or a nested array,
-map, or tag. A text-string payload is assumed to be plaintext — a
-decoder may infer a media type (e.g. `text/plain`) at its discretion —
-a byte-string payload is opaque, its meaning described by the Record's
-own field Map, and an array-shaped payload is itself a nested Record
-(recursively this same grammar, §3.1), decoded the same way a subrecord
-is. Absent, it costs nothing.
+any well-formed CBOR item EXCEPT an array — a byte string, a text
+string, a scalar, or a nested map or tag, the same shape rule an
+ordinary field value has (§3.2) minus major type 4. A text-string
+payload is assumed to be plaintext — a decoder may infer a media type
+(e.g. `text/plain`) at its discretion — a byte-string payload is opaque,
+its meaning described by the Record's own field Map. Arrays are
+excluded specifically so that an array immediately after the Map (or
+typeId) is always unambiguously the start of subrecords, never a
+payload — no marker or lookahead needed to tell the two apart. Absent,
+it costs nothing.
 
 ```
 [ 8, h'<deflate bytes>' ]             // typeID 8, payload (byte string)
 [ 20, { 0: "image/png" }, 'hello' ]   // typeID 20, map, payload (plain text)
-[ 14, { 0: "image/png" }, [ 6, { 0: "image/png" }, h'<bytes>' ] ]
-                                       // typeID 14, map, payload is itself
-                                       //   a Record (typeID 6)
 ```
 
-The payload slot exists for wrapper records (§4.1), for content that the
-decoder reads and passes through without interpreting, and for a nested
-Record too — the encoder's choice of where to put typed field-like data
-(the field Map vs. the payload slot) is Type-specific guidance, not a
-core-level shape restriction (see DESIGN.md for why the earlier
-byte/text-string-only restriction was dropped).
-
-**Mandatory presence whenever anything follows the Map.** A conformant
-encoder MUST make the payload slot explicit — emitting a bare CBOR
-`null` when there is no real payload but subrecords follow — whenever
-anything follows the Map. This is what lets a decoder tell "the payload
-is a Record" apart from "no payload, this array is subrecord 0" without
-inspecting anything beyond the immediate item's own major type: since
-the payload slot, once non-absent, is never skipped, a trailing array
-directly after the Map (or typeId) is always the payload, never
-subrecord 0. A decoder MUST treat a `null` payload item the same as
-true absence.
-
-```
-[ 14, { 0: "image/png" }, null, [ 6, { 0: "image/png" }, h'<bytes>' ] ]
-                                       // typeID 14, map, no payload
-                                       //   (explicit null), one subrecord
-```
+The payload slot exists for wrapper records (§4.1) and for content that
+the decoder reads and passes through without interpreting. To attach
+another Record, use a subrecord (§3.1's Subrecords paragraph below) —
+payload can never itself be a nested Record (see DESIGN.md for why this
+was tried and reverted).
 
 **A map-shaped payload requires the field Map to also be explicitly
 present** — even empty (`{}`, one byte) — since major type 5
@@ -368,21 +348,19 @@ normalizes indefinite-length strings before application code ever sees
 them). Only a conformant encoder's own output — always definite-length —
 is required to round-trip identically everywhere.
 
-**Subrecords.** Every array element following the payload slot is itself
-a nested Record, recursively the same
+**Subrecords.** Every array element following the payload (or following
+the map when no payload is present, or following typeId when neither map
+nor payload is present) is itself a nested Record, recursively the same
 `[namespace?, typeId, map?, payload?, subrecord*]` grammar defined in
 this section — there is no separate grammar for "a Record when it's
 nested," only this one, reused, and no separate wrapper array needed to
 bound them: the outer Record's own array is already self-bounded, so
-"everything after the payload slot" is unambiguous without an extra
-length prefix. Because the payload slot is mandatory whenever anything
-follows the Map, a Record with subrecords but no real payload of its
-own carries an explicit `null` first:
+"everything after the payload (or after map/no-map when no payload is
+present)" is unambiguous without an extra length prefix.
 
 ```
 [ 20,
   { 0: "image/png", 3: "map.png" },
-  null,
   [ 2, { 0: h'<group_id>', 2: 0, 4: 3 }, h'<fragment>' ]
 ]
 ```
@@ -812,11 +790,8 @@ for that Record Type's own array (§3.1): `[N, { ... }]`, or
 `[namespace, N, { ... }]` when namespace-scoped. The brace-only form is
 used here purely for readability; the wire shape is always the full
 array. When the field Map is empty or absent, `{}` is omitted from
-the shorthand entirely — `Type N: [sub]` means `[N, null, [sub]]` on
-the wire (typeId, the mandatory payload-absence marker, then the
-subrecord — §3.1's payload paragraph), not `[N, [sub]]`: a bare array
-right after typeId with no marker would instead be read as a
-record-shaped *payload*, not a subrecord.
+the shorthand entirely — `Type N: [sub]` means `[N, [sub]]` on the
+wire (typeId with a subrecord and no fields).
 
 **Standard record type IDs:** even numbers `2`–`98` are reserved for
 these standard record types, maintained alongside the QDEF spec itself.
@@ -1256,7 +1231,6 @@ The identified content itself is carried as a subrecord, typically a
 
 ```
 [ 14, { 0: "image/png", 1: h'...', 3: "photo.png" },
-  null,                             // no payload of its own (§3.1)
   [ 6, { 0: "image/png" }, h'<payload bytes>' ] ]
 ```
 
@@ -1303,14 +1277,11 @@ Type 0: {                        // Bundle (standard record type)
 }
 ```
 
-On the wire this is simply `[0, null, [Rec1], [Rec2], ...]` — the empty
-map is omitted, the mandatory `null` marks "no payload of its own"
-(§3.1, since subrecords follow), and the grouped Records sit as
-subrecords:
+On the wire this is simply `[0, [Rec1], [Rec2], ...]` — the empty map is
+omitted, and the grouped Records sit as subrecords:
 
 ```
 [ 0,
-  null,
   [ 100, { 0: "SSID", 2: "pass", 4: 2 } ],
   [ 10, { 0: "https://example.com/open" } ]
 ]
@@ -1335,7 +1306,6 @@ recognize without reading every Record's typeId:
 
 ```
 [ namespace, 0,
-  null,
   [ 1, { 0: "scoped by bundle's namespace" } ],
   [ 3, { 0: "same scope, no per-record namespace paid" } ]
 ]
