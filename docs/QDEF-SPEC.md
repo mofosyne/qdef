@@ -778,27 +778,19 @@ outside the container entirely — tracking a specific piece of content
 across scans, sessions, or systems. A Record MAY carry either, both, or
 neither.
 
-**Coexistence with a Type's own fields is automatic, not a mechanism of
-its own.** CBOR's major-type distinction between non-negative (major 0)
-and negative (major 1) integers already keeps the two key spaces
-disjoint — a Type's own key `0` and the common `ID` key (`-1`) can never
-collide, on the wire or in a decoder's own key-lookup logic, with no
-extra rule required.
+**A Type's own key `0` and the common `ID` key (`-1`) can never
+collide**, on the wire or in a decoder's own key-lookup logic — CBOR's
+major-type distinction between non-negative (major 0) and negative
+(major 1) integers keeps the two key spaces disjoint.
 
 **A Type's own field takes precedence for that Type's own purpose.**
 Open/Hint URI's key `1` label (§4.2) and App Route's key `1` label
-(§4.4) stay exactly as specified — Common Field Key `-7` is additional,
-optional metadata a Record MAY also carry, useful mainly to generic
-tooling that doesn't recognize the Record's Type at all (and so has no
-other way to find a label for it), not a replacement for either Type's
-own field.
+(§4.4) stay exactly as specified; Common Field Key `-7` is additional,
+optional metadata a Record MAY also carry, not a replacement for either
+Type's own field.
 
 **Byte cost is the same as adding any other field** — one map entry, no
-new grammar. Choosing to attach a Common Field Key costs nothing beyond
-what attaching any additional field already costs; it isn't a reason a
-Type that would otherwise stay mapless needs to gain a map (contrast
-with the rejected negative-key-as-payload proposal, which forced every
-Record wanting a payload to gain one).
+new grammar.
 
 Prototyped in `prototype/src/commonKeys.js` and
 `prototype/test/common-keys.test.js`; the criticality-rule reuse cross-
