@@ -1796,8 +1796,11 @@ Recorded as a fourth, narrower-scope option for "sign a tight group of
 subrecords under one parent" specifically, not a replacement for the
 hash-list form's general case, and not yet built.
 
-**Coverage-identification scheme — direction decided, not yet built.**
-Cover by content hash of each covered Record's own canonical bytes,
+**Coverage-identification scheme for the general cross-tree case —
+direction decided, still not built** (the positional strategy below
+shipped first instead, for the narrower same-array case; see "Taken
+up, MVP shipped" further down). Cover by content hash of each covered
+Record's own canonical bytes,
 never by Sequence index: an index breaks the moment anything is
 reordered or an unrelated Record is inserted, while a hash doesn't care
 where a Record sits. This also reuses the canonical-encoding machinery
@@ -1831,13 +1834,38 @@ not a gap to close: deleting a sibling Sign Record downgrades signed to
 unsigned trivially, the same way `mofosyne/tagdrop` already documents
 this as an accepted limitation of its own scheme (§6).
 
-Direction when taken up: specify the sibling form, but only after the
-canonical-encoding question is resolved — a detached signature is
-meaningless without it. The wrapper form can be dropped in at any time
-as a straight parallel to Encrypt if an opaque-payload use case wants
-it. Prototype it the same way as everything else here: sign two sibling
-Records, reorder them, insert an unrelated third Record, and confirm
-verification still finds exactly the right two.
+**Taken up, MVP shipped — §4.7, Type `16`, `prototype/src/signature.js`,
+`prototype/test/signature.test.js`.** The sibling form, using the
+fourth (positional/checkpoint) coverage strategy above rather than the
+hash-list — cheaper, and sufficient to reach NDEF Signature RTD parity
+without building the general cross-tree case first. Ed25519 only
+(COSE Algorithm `-8`), via Node's built-in `crypto` (no new
+dependency); Algorithm is critical (even), unlike Encrypt's odd/
+optional one, since there's no AEAD-tag-style safe fallback for a
+missing/wrong-guessed algorithm.
+
+**Explicitly a scope-narrowed MVP, not a claim the hash-list direction
+was wrong.** This shipped the cheapest coverage strategy that reaches
+NDEF parity, deliberately deferring the general cross-tree case (an
+arbitrary group of Records with no common parent — TagDrop's own real
+shape from earlier in this section) to the hash-list form, still not
+built. Prototyped exactly the way the previous paragraph described
+before it was written: sign Records, reorder them, insert an unrelated
+Record, tamper with a covered Record, confirm verification catches
+each one — plus the positional rule's own edges (two Signature Records
+in one list checkpointing independently of each other, a Signature
+nested inside a Bundle covering only that Bundle's own subrecords, an
+unrecognized critical key in the Signature Record's own map aborting
+via the ordinary criticality rule).
+
+**Not yet checked against a real adopter** the way Common Field Keys
+or Bundle were — built to explore the mechanism's own dynamics
+(coverage rules, canonical-bytes reliance, criticality) ahead of an
+actual signing need surfacing, a deliberate, acknowledged departure
+from this project's usual "wait for real demand" discipline (see
+ROADMAP.md). Key management is out of scope entirely: the Public Key
+travels raw and inline, no registry, no Key ID reference — revisit
+once an actual multi-key or key-rotation need appears.
 
 ## Nesting order enforcement — now answered, not open
 

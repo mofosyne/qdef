@@ -2614,3 +2614,51 @@ this branch). No Rust changes needed — `check_criticality`'s even/odd
 handling is already generic over any negative key, per #47. See
 DESIGN.md's "Common Field Keys" entry for the full reasoning, including
 why the declined proposal is a "not yet" rather than a "no."
+
+### 50. Sign shipped an MVP by deliberately not building the direction already "decided" — the positional strategy turned out to unify two things previously written up as separate
+
+DESIGN.md had "decided" the hash-list sibling form as Sign's direction
+since before this project had a working prototype of any of it — but
+two design passes earlier (this session, same day) had also written up
+a *fourth*, cheaper coverage strategy: positional/checkpoint, scoped to
+whatever array a Signature Record sits in (the top-level Sequence, or
+one parent's own subrecord list), rather than an explicit hash list.
+Building the MVP surfaced that this one rule, applied generically, is
+simultaneously NDEF Signature RTD parity (at the top level) *and* the
+Bundle-scoped case a hash list would otherwise be needed for (nested
+inside a Bundle) — two things the design writeup had discussed as
+distinct precedents collapsed into one mechanism once actually
+implemented, not two.
+
+Shipped as §4.7, Type `16`, `prototype/src/signature.js` and
+`prototype/test/signature.test.js` (9 new Node tests, 139 total).
+Ed25519 only (COSE Algorithm `-8`, Node's built-in `crypto`, no new
+dependency); Algorithm is critical (even) — a deliberate divergence
+from Encrypt's odd/optional Algorithm (§4.1), since a signature
+verifier has no AEAD-tag-style safe fallback for an unrecognized
+algorithm. No Rust changes needed: `rust/qdef-core` has zero Type-
+specific logic for any Record Type (confirmed by grep before starting
+— Split/Compress/Encrypt/Bundle/etc. all live only in the Node
+prototype), so a new Standard Record Type needs no Rust-side work at
+all until something wants Rust-side Type-specific handling.
+
+A real implementation detail almost missed: `core.js`'s decoded-Record
+shape (`map`, recursively decoded `subrecords`) isn't the same shape
+`encodeRecordBytes` expects (`fields`, recursively re-encodable
+`subrecords`) — verifying a signature means reconstructing a covered
+Record's canonical bytes from its *decoded* form, so a small adapter
+(`decodedToEncodable`) converting one shape to the other was needed
+before re-encoding could reproduce byte-identical wire output. Existing
+tests already assumed canonical encoding is deterministic (`group_id`,
+Content Hash) but none of them previously needed to round-trip
+*through* the decoded shape and back — this is the first code path
+that does.
+
+Deliberately out of scope, flagged rather than hidden: the general
+cross-tree hash-list case (DESIGN.md's third coverage strategy, still
+not built) and any key-management mechanism (the Public Key travels
+raw and inline, no registry, no Key ID reference). Also flagged in
+DESIGN.md: this is the first Sign work done without a real adopter's
+shipped need behind it — built to explore the coverage mechanism's own
+dynamics, an acknowledged, deliberate departure from the "wait for real
+demand" discipline every other entry in this file was held to.
