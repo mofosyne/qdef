@@ -48,6 +48,17 @@ trusting a number in this document to stay current.
 Every one of these round-trips in the Node prototype; none is spec-text
 only.
 
+**Signature** (§4.7, Type `16`) is also built and round-trips, but on a
+different footing than the rest of this list: it's an MVP explicitly
+scoped to the positional/checkpoint coverage strategy (NDEF Signature
+RTD parity, plus the Bundle-scoped case for free) rather than the
+general cross-tree hash-list form DESIGN.md still calls "decided, not
+yet built," and — unlike everything above — it wasn't checked against
+a real adopter's shipped need first. Built to explore the coverage
+mechanism's own dynamics ahead of an actual signing request, a
+deliberate, acknowledged departure from the discipline the rest of
+this document holds to (see FINDINGS.md #50).
+
 **Format-wide mechanisms resolved and prototyped:** every Record is now
 exactly one self-delimited CBOR array (§3.1) — `[namespace?, typeId,
 map?, payload?, subrecord*]` — so any decoder can skip a whole Record it
@@ -91,12 +102,14 @@ declaration — a genuine scope boundary, not a bug (FINDINGS.md #13).
 
 ## Deliberately not done yet
 
-- **Sign / detached-authenticity wrapper.** Direction is decided
-  (content-hash-based coverage, sibling not wrapper form) and its
-  prerequisite (canonical encoding) is now resolved, but it's not built.
-  Waiting for a real adopter's actual need rather than building it
-  speculatively — the same discipline that's driven every other decision
-  here.
+- **Sign's general cross-tree coverage (the hash-list form).** Direction
+  is decided (content-hash-based coverage, sibling not wrapper form) and
+  its prerequisite (canonical encoding) is resolved, but it's not built
+  — the positional/checkpoint form shipped instead for the narrower
+  same-array case (§4.7, above). Waiting for a real adopter's actual
+  need for arbitrary cross-tree coverage, the same discipline every
+  other entry here is held to, and the one the positional MVP itself
+  already departed from once.
 - **Registry governance authority.** No body currently allocates
   application Type IDs (`100`+) officially, for either the
   Specification Required (`100`–`32767`) or First Come First Served

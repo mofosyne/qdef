@@ -829,10 +829,12 @@ subsection below:
 | 12   | App Route        | §4.4    | Application dispatch/routing    |
 | 14   | Media Preview    | §4.5    | Content identification + body   |
 |      |                  |         | subrecord                       |
+| 16   | Signature        | §4.7    | Detached authenticity, sibling  |
+|      |                  |         | form, positional coverage       |
 +------+------------------+---------+---------------------------------+
 ```
 
-All eight sit in the `0`–`22` Standards Action tier — this spec document's
+All nine sit in the `0`–`22` Standards Action tier — this spec document's
 own publication is the authoritative declaration for them, independent
 of whether a registry authority exists yet. An adopter's own pick in
 the `100`–`32767` tier is different: provisional until a review
@@ -1327,6 +1329,84 @@ Prototyped in `prototype/test/bundle.test.js`: round-trip with the
 empty map omitted, an unaware decoder skipping the whole Bundle (and
 its subrecords) by Type ID alone, and the namespace-scoping claim above
 verified against `header.js`'s `resolveLookupKeysDeep`.
+
+### 4.7 Signature (optional)
+
+A **Signature** is a sibling Record providing detached authenticity: it
+covers Records around it without wrapping or hiding them, so they stay
+plain and readable to a decoder that doesn't recognize Type 16 at all.
+Coverage is positional, not hash-based — a Signature Record covers
+every Record immediately preceding it **within the same array** (the
+top-level Sequence, or a shared parent's own subrecord list), since the
+start of that array or the previous Signature Record within it,
+whichever is nearer. It never covers a Record at a different nesting
+level, its own parent's map or payload, or anything that follows it:
+
+```
+Type 16: {                        // Signature (standard record type)
+  // prefix typeID: 16
+  // field map:
+  0: -8,                          // CRITICAL: Algorithm — a COSE Algorithm
+                                    //   ID (IANA "COSE Algorithms"
+                                    //   registry, RFC 9053); -8 = EdDSA
+  2: h'<32-byte public key>'      // CRITICAL: Public Key — raw bytes,
+                                    //   length and shape defined by
+                                    //   Algorithm (32 bytes for EdDSA)
+  // payload:
+  h'<signature bytes>'            // signature over the covered Records'
+                                    //   own canonical bytes, concatenated
+                                    //   in wire order (64 bytes for EdDSA)
+}
+```
+
+Unlike Encrypt's Algorithm field (§4.1, key `3`, odd/optional — a
+missing or wrong guess fails safely because AEAD's own authentication
+tag catches it), Signature's Algorithm is **critical (even)**: there is
+no equivalent fallback for verification, so a decoder that doesn't
+understand the stated algorithm MUST abort rather than guess.
+
+**The signed message is the concatenation of the covered Records' own
+canonical bytes (§3.4), in wire order — no coverage list, no extra
+framing.** Because CBOR items are self-delimiting and covered Records
+already sit contiguously in the array, this is a direct byte range on
+the wire, not a reconstruction: a decoder recomputes it by re-encoding
+each covered Record from its parsed form and concatenating the results,
+the same canonical-encoding reliance `group_id` (§4.1) and Content Hash
+(§3.6) already require.
+
+**A decoder that does recognize Type 16 MUST NOT let Algorithm broaden
+which algorithms it's willing to run** — the same allowlist discipline
+as Encrypt's key `3`/`5` (§4.1).
+
+**Cost and scope, by design, not omission.** Zero coverage-
+identification bytes — cheaper than a hash-list sibling form — at the
+cost of the same reordering/insertion fragility any positional scheme
+carries: inserting, removing, or reordering a Record between the
+checkpoint and the Signature Record invalidates it, even if that change
+is otherwise unrelated. Scoping coverage to "same array" also bounds
+that fragility's blast radius to one list (the top-level Sequence, or
+one parent's subrecords) rather than the whole container, and confines
+what a Signature Record can cover to Records sharing one immediate
+context — it cannot reach an arbitrary cross-tree group of Records with
+no common parent. A Signature nested inside a Bundle (§4.6) covers only
+that Bundle's own subrecords.
+
+This is a strippable-but-not-forgeable design: deleting a Signature
+Record downgrades signed content to unsigned trivially, an accepted
+property, not a gap — the same way NFC Forum's own Signature RTD
+(position-since-checkpoint over a flat NDEF message, the same rule
+applied here, generalized to any array) accepts it.
+
+Prototyped in `prototype/test/signature.test.js`: signing and verifying
+top-level Records, a reordered or tampered covered Record failing
+verification, an unrelated inserted Record failing verification, an
+unaware decoder skipping the whole Record by Type ID alone, a Signature
+nested inside a Bundle covering only that Bundle's own subrecords, two
+Signature Records in the same list checkpointing independently of each
+other, and both even/odd criticality and an unsupported Algorithm value
+being reported rather than silently accepted. Ed25519 (COSE Algorithm
+`-8`) is the only algorithm this prototype implements; the Algorithm
+field itself is wire-compatible with adding others later.
 
 ## 5. Adopting QDEF for an existing application-specific format
 
