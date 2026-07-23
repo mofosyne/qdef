@@ -83,9 +83,9 @@ Derivation:  SHA-256(UTF-8("com.example/myapp-paper"))
     Value (hex): h'3cf2360eb5e7d190'
 ```
 
-The 4-byte value `h'3cf2360e'` is your namespace value. It goes in the
-**container discriminator** (spec §3.5) — the mandatory CBOR item
-immediately after the container's magic bytes, not an ordinary Record.
+The 4-byte value `h'3cf2360e'` is your namespace value. It's written as
+the leading byte string of a Record (spec §3.1) — most often the
+container root itself, immediately after the container's magic bytes.
 
 Namespace IDs MUST be at least 4 bytes, because a namespace is the
 *global root of trust* for everything scoped inside it: two unrelated
@@ -121,30 +121,36 @@ Validating: Namespace ID for "com.example/myapp-paper"
 Validation passed.
 ```
 
-### Step 4: Use it as the container discriminator
+### Step 4: Use it as the root namespace
 
 ```
-h'3cf2360e'                          // discriminator: bare namespace,
-                                      //   no hint (cheapest form)
-
-[ 1, {                               // your first Record, namespace-scoped
-  1: "route data here",              // ... your fields ...
-} ]
+h'3cf2360e'                          // root namespace, no hint (cheapest form)
+1, {                                 // typeId + map, namespace-scoped —
+  1: "route data here",              //   this Record IS the root, no
+}                                     //   Bundle indirection needed
 ```
 
-To also carry a recoverable Hint name for the namespace, use the map
-form instead of the bare byte string:
+To also carry a recoverable Hint name for the namespace, add a Bundle
+map (typeId `0`, or simply omitted — Bundle is the default) right after
+the namespace instead of going straight to your first Record:
 
 ```
-{ 1: h'3cf2360e', 3: "com.example/myapp-paper" }   // map form (extensible)
+h'3cf2360e', { 3: "com.example/myapp-paper" }   // namespace + hint, still Bundle
+[ 1, { 1: "route data here" } ]                 // your Record as a subrecord
 ```
 
 **Key points:**
 
-- The discriminator is not a Record — it has no typeID prefix and isn't
-  Map-shaped by itself; it's just whichever single well-formed CBOR item
-  comes right after magic, dispatched by its own CBOR major type
-- A bare byte string discriminator declares a namespace with no hint
+- The namespace is not a separate container-level item — it's the
+  ordinary leading byte string of a Record (root or subrecord alike,
+  spec §3.1), recognized unconditionally, with no typeID-pairing
+  requirement to satisfy
+- A namespace with no hint costs nothing beyond the byte string itself;
+  a Record can sit flat at the root right after it with zero Bundle
+  indirection
+- A recoverable Hint name costs one Bundle map (`{3: "..."}`) — at that
+  point your own Record(s) become the root Bundle's subrecords, since
+  the map slot is taken
 - Once a namespace is declared, odd uint Type IDs become namespace-local
   (compound key `(namespace, TypeID)`) instead of requiring a
   registration of their own — small, sequential values (`1`, `3`, `5`...)

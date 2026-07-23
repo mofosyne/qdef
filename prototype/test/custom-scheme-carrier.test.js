@@ -29,19 +29,17 @@ const PREVIEW_TYPE = 32768;
 const KNOWN_KEYS = new Set([0]);
 
 test('a bare CBOR Sequence carried under a custom URI scheme round-trips with no magic bytes and no discriminator, via the same decodeSequence path NDEF uses', () => {
-  // Built directly, not by stripping magic off encodeContainer's output --
-  // a full container now also carries the mandatory discriminator item
-  // right after magic, which this path deliberately has neither of.
-  const bareSeq = core.encodeRecordBytes({
-    typeId: PREVIEW_TYPE,
-    fields: new Map([[0, 'preview text']]),
-  });
+  // Written flat -- typeId and map as separate top-level Sequence items,
+  // not array-wrapped -- so it becomes the root Record directly, no
+  // Bundle indirection and no magic bytes.
+  const bareSeq = Buffer.concat([
+    cbor.encodeCanonical(PREVIEW_TYPE),
+    cbor.encodeCanonical(new Map([[0, 'preview text']])),
+  ]);
 
   assert.throws(() => core.decodeContainer(bareSeq), /bad magic/);
 
-  const records = core.decodeSequence(bareSeq);
-  const rec = core.applyCriticality(records[0], KNOWN_KEYS);
-  assert.equal(rec.ignored, false);
+  const rec = core.applyCriticality(core.decodeSequence(bareSeq), KNOWN_KEYS);
   assert.equal(rec.typeId, PREVIEW_TYPE);
   assert.equal(rec.map.get(0), 'preview text');
 });

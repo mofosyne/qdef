@@ -8,17 +8,19 @@ found.
 
 ## Layout
 
-- `src/core.js` — the mandatory core: magic framing, the mandatory
-  container discriminator, CBOR-Sequence encode/decode, per-Record
-   prefix typeID recognition (a bare uint, or a namespace-pairing array),
-   the optional payload slot, and the even/odd criticality rule (spec
-   §2–§3). No knowledge of any specific Record Type. Encodes every Record
-   with RFC 8949 §4.2.1 canonical CBOR (spec §3.4), not just whatever the
-   `cbor` package's default encoder happens to produce.
-- `src/header.js` — interprets the container discriminator (spec §3.5):
-  namespace parsing, namespace-Hint hash-derivation verification, and
-  Type ID lookup-key resolution (even = always global, odd = requires a
-  declared namespace, with a per-Record namespace-pairing override).
+- `src/core.js` — the mandatory core: magic framing, the unified root/
+  subrecord Record grammar (the container root is an ordinary Record,
+  parsed end-of-buffer-bounded — no separate discriminator item),
+  per-Record prefix typeID recognition (optional, defaulting to `0`/
+  Bundle when omitted; a bare uint, or a namespace-pairing array), the
+  optional payload slot, and the even/odd criticality rule (spec §2–§3).
+  No knowledge of any specific Record Type. Encodes every Record with
+  RFC 8949 §4.2.1 canonical CBOR (spec §3.4), not just whatever the
+  `cbor` package's default encoder happens to produce.
+- `src/header.js` — interprets a Record's namespace declaration (spec
+  §3.5): namespace parsing, namespace-Hint hash-derivation verification,
+  and Type ID lookup-key resolution (even = always global, odd = requires
+  a declared namespace, with a per-Record namespace-pairing override).
   Record-Type-interpretation-specific handling, never a mandatory-core
   concern — `core.js` needs zero namespace knowledge to do its job.
 - `src/wrappers.js` — the optional standard library's Wrapper Records:
@@ -45,9 +47,9 @@ found.
   even/odd criticality rule.
 - `test/core.test.js` — Record Type ID routing edge cases, the NDEF
   no-magic path, and the streaming-decode claim.
-- `test/header.test.js` — the container discriminator's recognized
-  shapes and graceful degrade, namespace-Hint hash-derivation
-  verification, and namespace-scoped Type ID lookup-key resolution.
+- `test/header.test.js` — root/subrecord namespace recognition and
+  graceful degrade, namespace-Hint hash-derivation verification, and
+  namespace-scoped Type ID lookup-key resolution.
 - `test/record-namespace-pairing.test.js` — the per-Record
   namespace-pairing prefix item (spec §3.1/§3.5): overriding the
   container's ambient namespace for one Record, and the byte-cost

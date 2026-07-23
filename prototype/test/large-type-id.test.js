@@ -46,11 +46,12 @@ test('a small BigInt Type ID also encodes as a native uint, not tag-2', () => {
 
 test('a full container carrying a 64-bit-class private-use Type ID round-trips through decodeContainer', () => {
   const bigTypeId = 2n ** 64n - 1n;
-  const container = core.encodeContainer([
+  const container = core.encodeContainer({ subrecords: [
     { typeId: bigTypeId, fields: new Map([[0, 'private-use content']]) },
-  ]);
+  ] });
 
-  const { records } = core.decodeContainer(container);
+  const root = core.decodeContainer(container);
+  const records = root.subrecords;
   assert.equal(records.length, 1);
   assert.equal(records[0].typeId, bigTypeId);
   assert.equal(records[0].map.get(0), 'private-use content');

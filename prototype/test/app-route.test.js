@@ -10,7 +10,7 @@ const wrappers = require('../src/wrappers');
 // ---------------------------------------------------------------------
 
 test('App Route with a domain and a human-readable label round-trips', () => {
-  const container = core.encodeContainer([
+  const container = core.encodeContainer({ subrecords: [
     {
       typeId: wrappers.APP_ROUTE_TYPE,
       fields: new Map([
@@ -18,9 +18,10 @@ test('App Route with a domain and a human-readable label round-trips', () => {
         [1, 'Open in Example App'],
       ]),
     },
-  ]);
+  ] });
 
-  const { records } = core.decodeContainer(container);
+  const root = core.decodeContainer(container);
+  const records = root.subrecords;
   const rec = core.applyCriticality(records[0], wrappers.APP_ROUTE_KNOWN_KEYS);
 
   assert.equal(rec.aborted, false);
@@ -29,11 +30,12 @@ test('App Route with a domain and a human-readable label round-trips', () => {
 });
 
 test('the label is optional — a domain alone is a complete App Route Record', () => {
-  const container = core.encodeContainer([
+  const container = core.encodeContainer({ subrecords: [
     { typeId: wrappers.APP_ROUTE_TYPE, fields: new Map([[0, 'example.com']]) },
-  ]);
+  ] });
 
-  const { records } = core.decodeContainer(container);
+  const root = core.decodeContainer(container);
+  const records = root.subrecords;
   const rec = core.applyCriticality(records[0], wrappers.APP_ROUTE_KNOWN_KEYS);
 
   assert.equal(rec.aborted, false);
@@ -42,17 +44,18 @@ test('the label is optional — a domain alone is a complete App Route Record', 
 });
 
 test('App Route is not positionally special — routes the same whether first or last in the Sequence', () => {
-  const routeFirst = core.encodeContainer([
+  const routeFirst = core.encodeContainer({ subrecords: [
     { typeId: wrappers.APP_ROUTE_TYPE, fields: new Map([[0, 'example.com']]) },
     { typeId: 100, fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) },
-  ]);
-  const routeLast = core.encodeContainer([
+  ] });
+  const routeLast = core.encodeContainer({ subrecords: [
     { typeId: 100, fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) },
     { typeId: wrappers.APP_ROUTE_TYPE, fields: new Map([[0, 'example.com']]) },
-  ]);
+  ] });
 
   for (const container of [routeFirst, routeLast]) {
-    const { records } = core.decodeContainer(container);
+    const root = core.decodeContainer(container);
+  const records = root.subrecords;
     const route = records.find((r) => r.typeId === wrappers.APP_ROUTE_TYPE);
     const checked = core.applyCriticality(route, wrappers.APP_ROUTE_KNOWN_KEYS);
     assert.equal(checked.aborted, false);
@@ -61,15 +64,16 @@ test('App Route is not positionally special — routes the same whether first or
 });
 
 test('an application with no interest in App Route skips the whole Record cleanly by Type ID alone', () => {
-  const container = core.encodeContainer([
+  const container = core.encodeContainer({ subrecords: [
     { typeId: wrappers.APP_ROUTE_TYPE, fields: new Map([[0, 'example.com']]) },
     { typeId: 100, fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) },
-  ]);
+  ] });
 
-  const { records } = core.decodeContainer(container);
+  const root = core.decodeContainer(container);
+  const records = root.subrecords;
   const KNOWN_TYPES = new Map([[100, new Set([0, 1, 2, 4])]]);
   const handled = records
-    .filter((r) => !r.ignored && KNOWN_TYPES.has(r.typeId))
+    .filter((r) => KNOWN_TYPES.has(r.typeId))
     .map((r) => core.applyCriticality(r, KNOWN_TYPES.get(r.typeId)));
 
   assert.equal(records.length, 2);
@@ -78,7 +82,7 @@ test('an application with no interest in App Route skips the whole Record cleanl
 });
 
 test('App Route decentralized form (private-use uint + Hint name) round-trips', () => {
-  const container = core.encodeContainer([
+  const container = core.encodeContainer({ subrecords: [
     {
       typeId: wrappers.APP_ROUTE_TYPE,
       fields: new Map([
@@ -86,9 +90,10 @@ test('App Route decentralized form (private-use uint + Hint name) round-trips', 
         [1, 'com.example/tagdrop-paper'],
       ]),
     },
-  ]);
+  ] });
 
-  const { records } = core.decodeContainer(container);
+  const root = core.decodeContainer(container);
+  const records = root.subrecords;
   const rec = core.applyCriticality(records[0], wrappers.APP_ROUTE_KNOWN_KEYS);
 
   assert.equal(rec.aborted, false);
@@ -97,14 +102,15 @@ test('App Route decentralized form (private-use uint + Hint name) round-trips', 
 });
 
 test('a scanner that only understands the domain form still skips a decentralized-form Record cleanly by Type ID alone', () => {
-  const container = core.encodeContainer([
+  const container = core.encodeContainer({ subrecords: [
     {
       typeId: wrappers.APP_ROUTE_TYPE,
       fields: new Map([[0, 12271745624591856273n], [1, 'com.example/tagdrop-paper']]),
     },
-  ]);
+  ] });
 
-  const { records } = core.decodeContainer(container);
+  const root = core.decodeContainer(container);
+  const records = root.subrecords;
   const rec = core.applyCriticality(records[0], wrappers.APP_ROUTE_KNOWN_KEYS);
 
   assert.equal(rec.aborted, false);

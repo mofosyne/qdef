@@ -17,14 +17,15 @@ const wrappers = require('../src/wrappers');
 // ---------------------------------------------------------------------
 
 test('a bare URI + label (no language, no action) round-trips -- the pre-existing minimal shape is unaffected', () => {
-  const container = core.encodeContainer([
+  const container = core.encodeContainer({ subrecords: [
     {
       typeId: wrappers.OPEN_HINT_URI_TYPE,
       fields: new Map([[0, 'https://example.com/open-this'], [1, 'Open in MyApp']]),
     },
-  ]);
+  ] });
 
-  const { records } = core.decodeContainer(container);
+  const root = core.decodeContainer(container);
+  const records = root.subrecords;
   const rec = core.applyCriticality(records[0], wrappers.OPEN_HINT_URI_KNOWN_KEYS);
 
   assert.equal(rec.aborted, false);
@@ -35,7 +36,7 @@ test('a bare URI + label (no language, no action) round-trips -- the pre-existin
 });
 
 test('language (key 3) and action (key 5) round-trip -- the Smart Poster equivalent shape', () => {
-  const container = core.encodeContainer([
+  const container = core.encodeContainer({ subrecords: [
     {
       typeId: wrappers.OPEN_HINT_URI_TYPE,
       fields: new Map([
@@ -45,9 +46,10 @@ test('language (key 3) and action (key 5) round-trip -- the Smart Poster equival
         [5, 0], // 0 = perform the action
       ]),
     },
-  ]);
+  ] });
 
-  const { records } = core.decodeContainer(container);
+  const root = core.decodeContainer(container);
+  const records = root.subrecords;
   const rec = core.applyCriticality(records[0], wrappers.OPEN_HINT_URI_KNOWN_KEYS);
 
   assert.equal(rec.aborted, false);
@@ -56,7 +58,7 @@ test('language (key 3) and action (key 5) round-trip -- the Smart Poster equival
 });
 
 test('a decoder unaware of language/action still gets a complete, working URI and label -- the graceful-degrade guarantee both new keys were designed to preserve', () => {
-  const container = core.encodeContainer([
+  const container = core.encodeContainer({ subrecords: [
     {
       typeId: wrappers.OPEN_HINT_URI_TYPE,
       fields: new Map([
@@ -66,9 +68,10 @@ test('a decoder unaware of language/action still gets a complete, working URI an
         [5, 2], // 2 = open for editing
       ]),
     },
-  ]);
+  ] });
 
-  const { records } = core.decodeContainer(container);
+  const root = core.decodeContainer(container);
+  const records = root.subrecords;
   // An older decoder that only ever knew about keys 0/1 -- both odd
   // (optional) keys are silently ignored, never aborting the Record.
   const rec = core.applyCriticality(records[0], new Set([0, 1]));
@@ -80,7 +83,7 @@ test('a decoder unaware of language/action still gets a complete, working URI an
 });
 
 test('multiple languages/URIs need no new mechanism -- repeated Open/Hint URI siblings, one per variant, reproduce Smart Poster multi-title and Multiple URI RTD behavior', () => {
-  const container = core.encodeContainer([
+  const container = core.encodeContainer({ subrecords: [
     {
       typeId: wrappers.OPEN_HINT_URI_TYPE,
       fields: new Map([[0, 'https://example.com/open-this'], [1, 'Open in MyApp'], [3, 'en']]),
@@ -89,9 +92,10 @@ test('multiple languages/URIs need no new mechanism -- repeated Open/Hint URI si
       typeId: wrappers.OPEN_HINT_URI_TYPE,
       fields: new Map([[0, 'https://example.com/open-this'], [1, 'Ouvrir dans MyApp'], [3, 'fr']]),
     },
-  ]);
+  ] });
 
-  const { records } = core.decodeContainer(container);
+  const root = core.decodeContainer(container);
+  const records = root.subrecords;
   const hints = records
     .filter((r) => r.typeId === wrappers.OPEN_HINT_URI_TYPE)
     .map((r) => core.applyCriticality(r, wrappers.OPEN_HINT_URI_KNOWN_KEYS));

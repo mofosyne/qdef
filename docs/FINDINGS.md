@@ -2705,3 +2705,80 @@ effect on scope: unchanged. The MVP was already documented as not
 reaching TagDrop's case; this is the real-adopter check that confirms
 it precisely, and sharpens what "the general form" actually needs to
 be before it's worth building.
+
+### 52. The mandatory container discriminator (#entry above, DESIGN.md "Container discriminator redesign") was itself superseded — root unification collapsed it into the ordinary Record grammar, at zero wire-cost regression
+
+Presented with a third-party bot's proposal (`PROPOSAL-implicit-
+bundle.md`, not committed to this repo) to fold the discriminator and
+the top-level Sequence into "one CBOR item after magic," review found
+its own cost table undercounted the common case: it kept the old
+namespace/typeId pairing requirement, so the ordinary multi-record,
+no-namespace case cost *more* than the mandatory discriminator it
+claimed to improve on, once compared honestly against the actual
+CBOR-Sequence baseline rather than a same-shape comparison that
+assumed a Bundle wrapper on both sides.
+
+The user's own reworking, built from concepts raised earlier in this
+session's Signature design discussion, resolved the regression with
+two grammar changes made together, not separately: (1) typeId becomes
+optional everywhere, root and subrecord alike, defaulting to `0`
+(Bundle) when absent; (2) namespace recognition drops the "must be
+immediately followed by a valid typeId" pairing requirement — a
+leading byte string is unconditionally read as namespace. Neither
+change alone works: typeId-optional without dropping the pairing rule
+leaves "namespace present, typeId absent" inexpressible — the exact
+gap a first pass at this redesign hit by mistake before the pairing
+rule was dropped too. Once both are true, the container root stops
+needing a separate discriminator item at all — it's parsed as an
+ordinary Record (§3.1), just end-of-buffer-bounded instead of
+array-length-bounded, the same grammar `parse_record_items` in
+`rust/qdef-core` already used for every subrecord.
+
+Byte-counted against the mandatory-discriminator baseline it
+supersedes: every scenario checked is break-even or better, not a
+mixed bag — a single primary Record now costs 2 bytes less (no
+discriminator item, no array-header, written flat at the root with
+zero Bundle indirection); N co-equal top-level Records cost 1 byte
+less; namespace+hint drops 1 byte (namespace is no longer double-
+wrapped inside the discriminator's own map); a bare namespace with no
+content is unchanged. This is a genuine improvement over the
+discriminator design's own accepted trade-off (DESIGN.md: "gives up
+zero cost when unused... every container now pays at least 1 byte") —
+that permanent tax turned out to be avoidable, not fundamental, once
+the real source of the ambiguity (typeId being mandatory, forcing a
+separate item to exist at all) was fixed instead of worked around.
+
+One real, accepted cost remains: a Record whose payload happens to be
+byte-string-shaped, with no namespace intended and typeId omitted,
+now needs an explicit typeId (even `0`) ahead of it, or the payload
+gets misread as a namespace. Every other shape (uint typeId, map,
+array subrecord) stays unambiguous by major type alone.
+
+A deliberate philosophy choice surfaced explicitly during review, not
+an implementation default arrived at by accident: typeId's optionality
+applies uniformly, so a subrecord whose encoder simply forgot to write
+one now silently becomes a Bundle rather than surfacing as a distinct
+"ignored, unroutable" state that existed before this entry. Stated
+directly: parsers should be as forgiving as possible, encoders are
+responsible for their own output — extending a trade this project had
+already made for indefinite-length decoder tolerance (§3.1) and
+any-CBOR-shape field values (#16), to one more place. `ignored` is
+removed from the decoder's output shape entirely, in both
+implementations, since there is no longer a state it would describe.
+
+Implemented across both language surfaces with zero Type-specific
+code in either: `prototype/src/core.js` (`encodeContainer`/
+`decodeContainer` build and parse one root Record; `decodeRecordBytes`
+needed an explicit unwrap of its own array-wrapping that a first pass
+missed, since `encodeRecordBytes` — used for Wrapper payloads and
+subrecords — always produces one self-delimited array rather than a
+flat Sequence, and skipping the unwrap silently defaulted every such
+record's typeId to `0`), `prototype/src/header.js` (`parseDiscriminator`
+and `HEADER_NAMESPACE_KEY` deleted outright), `prototype/src/wrappers.js`,
+and `rust/qdef-core` (`Container::root()`, `record_from_sequence`, the
+shared `parse_record_items` — confirmed, again, that the crate carries
+no per-Type logic anywhere, only generic grammar). 137 Node tests and
+39 Rust tests updated and passing, `cargo fmt`/`clippy -D warnings`
+clean. See DESIGN.md's "Root unification" section (supersedes
+"Container discriminator redesign") for the full byte-cost table and
+worked wire examples.

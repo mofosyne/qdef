@@ -16,67 +16,74 @@ function rustBytes(name, buf) {
   const hex = Array.from(buf).map((b) => `0x${b.toString(16).padStart(2, '0')}`);
   const lines = [];
   for (let i = 0; i < hex.length; i += 16) lines.push('    ' + hex.slice(i, i + 16).join(', ') + ',');
-  return `pub const ${name}: &[u8] = &[\n${lines.join('\n')}\n];`;
+  // #[rustfmt::skip] keeps this item byte-identical to this script's own
+  // output no matter how short its array is -- `cargo fmt` would otherwise
+  // collapse a short array onto one line in a way this generator doesn't,
+  // and CI's fixtures-in-sync check diffs raw generator output against
+  // what's committed, not against rustfmt's opinion of it.
+  return `#[rustfmt::skip]\npub const ${name}: &[u8] = &[\n${lines.join('\n')}\n];`;
 }
 
-// --- Basic round-trip: a valid Wi-Fi record in a container ---
+// --- Basic round-trip: a single Wi-Fi record, written flat at the ---
+// root -- no Bundle indirection needed for a single primary Record
+// (§2/§3.1; see docs/DESIGN.md).
 
-const wifiContainer = core.encodeContainer([
-  {
-    typeId: rt.WIFI_TYPE,
-    fields: new Map([
-      [0, 'My Coffee Shop'],
-      [2, 'guest123'],
-      [4, 2],
-      [1, true],
-    ]),
-  },
-]);
+const wifiContainer = core.encodeContainer({
+  typeId: rt.WIFI_TYPE,
+  fields: new Map([
+    [0, 'My Coffee Shop'],
+    [2, 'guest123'],
+    [4, 2],
+    [1, true],
+  ]),
+});
 
 // --- Even/odd criticality: unknown even key aborts the record ---
 
-const wifiUnknownEvenKeyContainer = core.encodeContainer([
-  {
-    typeId: rt.WIFI_TYPE,
-    fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2], [6, 'unknown critical field']]),
-  },
-]);
+const wifiUnknownEvenKeyContainer = core.encodeContainer({
+  typeId: rt.WIFI_TYPE,
+  fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2], [6, 'unknown critical field']]),
+});
 
 // --- Even/odd criticality: unknown odd key is silently ignored ---
 
-const wifiUnknownOddKeyContainer = core.encodeContainer([
-  {
-    typeId: rt.WIFI_TYPE,
-    fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2], [7, 'unknown optional field']]),
-  },
-]);
-
-// --- Record with no typeID prefix: ignored (not routed) ---
-// Manually constructed (not via encodeContainer) to keep the mandatory
-// discriminator explicit here: uint 0 (no namespace), then a Record
-// array whose own first (and only) element is a bare map, with nothing
-// namespace/typeId-shaped before it.
-
-const noTypeidDiscBytes = cbor.encodeCanonical(0);
-const noTypeidBytes = cbor.encodeCanonical([new Map([[0, 'SSID']])]);
-const noTypeidContainer = Buffer.concat([core.MAGIC, noTypeidDiscBytes, noTypeidBytes]);
-
-// --- Bare NDEF/own-URI-scheme sequence: no magic, no discriminator ---
-// Built directly via encodeRecordBytes (bypassing encodeContainer entirely),
-// since that carrier already supplies its own dispatch/isolation and never
-// carries a magic or a discriminator item (§ own-URI-scheme carriers).
-
-const bareSequenceNoDiscriminator = core.encodeRecordBytes({
+const wifiUnknownOddKeyContainer = core.encodeContainer({
   typeId: rt.WIFI_TYPE,
-  fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2], [1, true]]),
+  fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2], [7, 'unknown optional field']]),
 });
 
-// --- Two records in one sequence: first aborts (unknown even key), second is fine ---
+// --- Record with no typeID prefix: defaults to typeId 0 (Bundle) ---
+// A forgiving-parser choice, not an error case (§3.1; see docs/DESIGN.md)
+// -- typeId is optional everywhere now, root or not. A bare map with no
+// leading typeId or namespace becomes a Bundle-shaped root carrying that
+// map as its own field Map.
 
-const twoRecordContainer = core.encodeContainer([
-  { typeId: rt.WIFI_TYPE, fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2], [6, 'unknown critical']]) },
-  { typeId: rt.TAGDROP_REGISTRATION_TYPE, fields: new Map([[0, Buffer.from('sibling record')]]) },
-]);
+const defaultTypeidZeroContainer = core.encodeContainer({
+  fields: new Map([[0, 'SSID']]),
+});
+
+// --- Bare NDEF/own-URI-scheme sequence: no magic, structurally ---
+// identical to the magic path past the magic check -- one Record,
+// end-of-buffer-bounded. Written flat (typeId and map as separate items,
+// not array-wrapped) so it becomes the root Record directly.
+
+const bareSequenceNoMagic = core
+  .encodeContainer({
+    typeId: rt.WIFI_TYPE,
+    fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2], [1, true]]),
+  })
+  .subarray(core.MAGIC.length);
+
+// --- Two records in one sequence: no namespace, so typeId defaults to ---
+// 0 (Bundle) at the root and both become its subrecords -- first aborts
+// (unknown even key), second is fine.
+
+const twoRecordContainer = core.encodeContainer({
+  subrecords: [
+    { typeId: rt.WIFI_TYPE, fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2], [6, 'unknown critical']]) },
+    { typeId: rt.TAGDROP_REGISTRATION_TYPE, fields: new Map([[0, Buffer.from('sibling record')]]) },
+  ],
+});
 
 // --- §3.2's field-value-shape rule was dropped: a bare CBOR array ---
 // (major type 4) as a field value, previously disallowed outright, is now
@@ -85,12 +92,10 @@ const twoRecordContainer = core.encodeContainer([
 // odd/optional, but that no longer matters for shape purposes -- there
 // is no shape restriction left to apply to any key, even or odd.
 
-const arrayValueContainer = core.encodeContainer([
-  {
-    typeId: rt.WIFI_TYPE,
-    fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2], [9, [1, 2, 3]]]),
-  },
-]);
+const arrayValueContainer = core.encodeContainer({
+  typeId: rt.WIFI_TYPE,
+  fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2], [9, [1, 2, 3]]]),
+});
 
 // --- Structured content as an opaque byte string: still a legal, ---
 // useful pattern (not the *only* legal one anymore) -- pre-encode as CBOR
@@ -99,34 +104,30 @@ const arrayValueContainer = core.encodeContainer([
 // and only decoded by a Record-Type-specific handler that wants it.
 
 const nestedAuthMethods = cbor.encode(['WPA2', 'WPA3']);
-const byteStringWrappedValueContainer = core.encodeContainer([
-  {
-    typeId: rt.WIFI_TYPE,
-    fields: new Map([
-      [0, 'SSID'],
-      [2, 'pass'],
-      [4, 2],
-      [9, nestedAuthMethods], // odd/optional key, opaque nested CBOR payload
-    ]),
-  },
-]);
+const byteStringWrappedValueContainer = core.encodeContainer({
+  typeId: rt.WIFI_TYPE,
+  fields: new Map([
+    [0, 'SSID'],
+    [2, 'pass'],
+    [4, 2],
+    [9, nestedAuthMethods], // odd/optional key, opaque nested CBOR payload
+  ]),
+});
 
 // --- CBOR tag 24 ("encoded CBOR data item", RFC 8949 §3.4.5.1) wrapping ---
 // a definite-length byte string directly: still a legal field value,
 // exactly as before -- unaffected by the shape rule's removal, since it
 // was already legal under the old rule too.
 
-const tag24WrappedValueContainer = core.encodeContainer([
-  {
-    typeId: rt.WIFI_TYPE,
-    fields: new Map([
-      [0, 'SSID'],
-      [2, 'pass'],
-      [4, 2],
-      [9, new cbor.Tagged(24, nestedAuthMethods)],
-    ]),
-  },
-]);
+const tag24WrappedValueContainer = core.encodeContainer({
+  typeId: rt.WIFI_TYPE,
+  fields: new Map([
+    [0, 'SSID'],
+    [2, 'pass'],
+    [4, 2],
+    [9, new cbor.Tagged(24, nestedAuthMethods)],
+  ]),
+});
 
 // --- A tag directly wrapping another tag: previously disallowed under ---
 // the old field-value-shape rule (shape checked once, inline, never
@@ -136,34 +137,30 @@ const tag24WrappedValueContainer = core.encodeContainer([
 // depth is bounded by this decoder's own MAX_DEPTH, not rejected outright
 // at any depth.
 
-const nestedTag24Container = core.encodeContainer([
-  {
-    typeId: rt.WIFI_TYPE,
-    fields: new Map([
-      [0, 'SSID'],
-      [2, 'pass'],
-      [4, 2],
-      [9, new cbor.Tagged(24, new cbor.Tagged(24, nestedAuthMethods))],
-    ]),
-  },
-]);
+const nestedTag24Container = core.encodeContainer({
+  typeId: rt.WIFI_TYPE,
+  fields: new Map([
+    [0, 'SSID'],
+    [2, 'pass'],
+    [4, 2],
+    [9, new cbor.Tagged(24, new cbor.Tagged(24, nestedAuthMethods))],
+  ]),
+});
 
 // --- Any tag number is allowed, not just 24 -- unaffected by the shape ---
 // rule's removal, this was already true before it (FINDINGS.md #16). Tag
 // 0 ("standard date/time string") wrapping a definite-length text string
 // is a real, IANA-registered tag.
 
-const otherTagWrappedValueContainer = core.encodeContainer([
-  {
-    typeId: rt.WIFI_TYPE,
-    fields: new Map([
-      [0, 'SSID'],
-      [2, 'pass'],
-      [4, 2],
-      [9, new cbor.Tagged(0, '2026-07-10T12:00:00Z')],
-    ]),
-  },
-]);
+const otherTagWrappedValueContainer = core.encodeContainer({
+  typeId: rt.WIFI_TYPE,
+  fields: new Map([
+    [0, 'SSID'],
+    [2, 'pass'],
+    [4, 2],
+    [9, new cbor.Tagged(0, '2026-07-10T12:00:00Z')],
+  ]),
+});
 
 // --- A real tag whose own definition requires array content: previously ---
 // disallowed under the old field-value-shape rule (a tag had to wrap a
@@ -172,17 +169,15 @@ const otherTagWrappedValueContainer = core.encodeContainer([
 // array [exponent, mantissa] by definition; here [-2, 27315] means
 // 273.15.
 
-const structuredTagWrappedValueContainer = core.encodeContainer([
-  {
-    typeId: rt.WIFI_TYPE,
-    fields: new Map([
-      [0, 'SSID'],
-      [2, 'pass'],
-      [4, 2],
-      [9, new cbor.Tagged(4, [-2, 27315])],
-    ]),
-  },
-]);
+const structuredTagWrappedValueContainer = core.encodeContainer({
+  typeId: rt.WIFI_TYPE,
+  fields: new Map([
+    [0, 'SSID'],
+    [2, 'pass'],
+    [4, 2],
+    [9, new cbor.Tagged(4, [-2, 27315])],
+  ]),
+});
 
 // --- A 64-bit-class private-use Type ID (§3.1, §9's 0x10000+ tier) ---
 // needs BigInt in JS, since it exceeds Number.MAX_SAFE_INTEGER.
@@ -190,90 +185,78 @@ const structuredTagWrappedValueContainer = core.encodeContainer([
 // CBOR uints, not tag-2 bignums. This fixture proves the Rust decoder
 // handles the full uint64 range correctly. See docs/FINDINGS.md #14.
 
-const largeTypeIdContainer = core.encodeContainer([
-  { typeId: 2n ** 64n - 1n, fields: new Map([[0, 'private-use content']]) },
-]);
+const largeTypeIdContainer = core.encodeContainer({
+  typeId: 2n ** 64n - 1n,
+  fields: new Map([[0, 'private-use content']]),
+});
 
-// --- Container discriminator (§3.5) ---
-// The mandatory core needs zero special knowledge of what the
-// discriminator means -- it only knows how to split exactly one CBOR
-// item off the front (`Container::discriminator()`), never how to
-// interpret it. This fixture proves the records that follow are routed
-// by the exact same generic Rust decoder either way: a decentralized
-// (byte-string) namespace discriminator, followed by a plain Wi-Fi
-// record.
+// --- Root namespace, plus content (§3.1/§3.5) ---
+// There is no separate "container discriminator" concept anymore -- a
+// namespace is just the root Record's own namespace-pairing prefix, the
+// identical mechanism any subrecord already has (see docs/DESIGN.md).
+// The mandatory core needs zero special knowledge of what it means -- it
+// only recognizes "a byte string at this position," never learns it's
+// "a namespace." This fixture pairs a root-level decentralized
+// (byte-string) namespace with one Wi-Fi content subrecord.
 
-const header = require('../src/header');
-const headerContainer = core.encodeContainer(
-  [{ typeId: rt.WIFI_TYPE, fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) }],
-  Buffer.from('a9d6e1f30b7c4482', 'hex'),
-);
+const rootNamespaceContainer = core.encodeContainer({
+  localNamespace: Buffer.from('a9d6e1f30b7c4482', 'hex'),
+  subrecords: [{ typeId: rt.WIFI_TYPE, fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) }],
+});
 
-// --- A byte string with nothing valid typeId-shaped following it: not ---
-// recognized as a namespace, and there is no other legal bare typeId
-// shape a byte string could be -- this Record loses its only typeID and
-// ends up unroutable (ignored). Built directly (encodeRecordBytes has no
-// way to omit typeId) to keep the fixture's intent explicit: a bare byte
-// string immediately followed by a map, nothing else.
+// --- A byte string is unconditionally read as namespace, even with ---
+// nothing valid-typeId-shaped following it -- the old "must be
+// immediately followed by a valid typeId" pairing requirement was
+// dropped (see docs/DESIGN.md). Built directly (encodeContainer's own
+// typeId-omission already produces this, since a bstr is always checked
+// first): a bare byte string, immediately followed by a map, with no
+// explicit typeId at all -- typeId defaults to 0 (Bundle).
 
-const byteStringTypeIdBytes = cbor.encodeCanonical([
-  Buffer.from('A7F90B3C', 'hex'),
-  new Map([[0, 'decentralized payload']]),
-]);
-const byteStringTypeIdContainer = Buffer.concat([
-  core.MAGIC,
-  cbor.encodeCanonical(0),
-  byteStringTypeIdBytes,
-]);
+const bstrAlwaysNamespaceContainer = core.encodeContainer({
+  localNamespace: Buffer.from('a7f90b3c', 'hex'),
+  fields: new Map([[0, 'decentralized payload']]),
+});
 
 // --- A second typeID-shaped item after the primary: not accumulated ---
 // There is no backup-typeID mechanism anymore (docs/FINDINGS.md) -- at
 // most one typeID-bearing item per Record. A second uint immediately
 // following the primary, with no map before it, is read as this
 // Record's own payload (§3.1's payload slot now accepts any CBOR
-// shape) -- not accumulated as a "backup" typeID.
+// shape) -- not accumulated as a "backup" typeID. Written flat (not
+// array-wrapped) so it becomes the root Record directly.
 
-const secondTypeIdNotAccumulatedBytes = cbor.encodeCanonical([
-  rt.WIFI_TYPE,
-  900, // would have been a backup, once -- now just this Record's payload
-]);
 const secondTypeIdNotAccumulatedContainer = Buffer.concat([
   core.MAGIC,
-  cbor.encodeCanonical(0),
-  secondTypeIdNotAccumulatedBytes,
+  cbor.encodeCanonical(rt.WIFI_TYPE),
+  cbor.encodeCanonical(900), // would have been a backup, once -- now just this Record's payload
 ]);
 
 // --- Namespace prefix (§3.1) ---
-// A Record's own array MAY lead with a byte string namespace immediately
-// followed by its typeId, independent of the container discriminator's
-// ambient one. Purely structural for the mandatory core: it only needs
-// to recognize "byte string, then a valid typeId" at the front of the
-// array, never learn what a namespace means. This fixture pairs a
-// decentralized (byte-string) namespace with a scoped (odd) typeId.
+// A Record's own array MAY lead with a byte string namespace, recognized
+// unconditionally, independent of whatever ambient namespace it
+// inherited. Purely structural for the mandatory core: it only needs to
+// recognize "byte string at this position," never learn what a
+// namespace means. This fixture pairs a decentralized (byte-string)
+// namespace with a scoped (odd) typeId, written flat at the root.
 
-const namespacePairingContainer = core.encodeContainer([
-  {
-    typeId: 1,
-    fields: new Map([[0, 'payload']]),
-    localNamespace: Buffer.from('cdcdcdcd', 'hex'),
-  },
-]);
+const namespacePairingContainer = core.encodeContainer({
+  typeId: 1,
+  fields: new Map([[0, 'payload']]),
+  localNamespace: Buffer.from('cdcdcdcd', 'hex'),
+});
 
 // --- A uint where a namespace was intended: read directly as this ---
 // Record's own typeID instead. Namespace recognition requires the
-// array's first element to be a byte string; a uint there is
-// unconditionally valid typeID shape on its own, so there is no
-// "malformed namespace" state left over -- it's simply this Record's
-// typeID (100), and the originally-intended typeID (1) becomes a
-// skipped stray item.
+// current position to hold a byte string; a uint there is unconditionally
+// valid typeID shape on its own, so it's simply this Record's typeID
+// (100), and the originally-intended typeID (1) becomes a skipped stray
+// item.
 
-const uintNamespaceSlotUnrecognizedContainer = core.encodeContainer([
-  {
-    typeId: 1,
-    fields: new Map([[0, 'payload']]),
-    localNamespace: 100,
-  },
-]);
+const uintNamespaceSlotUnrecognizedContainer = core.encodeContainer({
+  typeId: 1,
+  fields: new Map([[0, 'payload']]),
+  localNamespace: 100,
+});
 
 // --- Namespace prefix with a scoped typeId, a map, AND a real payload ---
 // value -- proves Rust's decoder actually extracts a *present* payload's
@@ -281,23 +264,19 @@ const uintNamespaceSlotUnrecognizedContainer = core.encodeContainer([
 // override and an ordinary field map. Every other Rust payload test
 // before this one only ever asserted absence.
 
-const namespacePairingWithPayloadContainer = core.encodeContainer([
-  {
-    typeId: 1,
-    fields: new Map([[0, 'field, not payload']]),
-    payload: Buffer.from('real payload bytes'),
-    localNamespace: Buffer.from('cdcdcdcd', 'hex'),
-  },
-]);
+const namespacePairingWithPayloadContainer = core.encodeContainer({
+  typeId: 1,
+  fields: new Map([[0, 'field, not payload']]),
+  payload: Buffer.from('real payload bytes'),
+  localNamespace: Buffer.from('cdcdcdcd', 'hex'),
+});
 
 // --- Record with map only, no payload ---
 
-const plainMapOnlyContainer = core.encodeContainer([
-  {
-    typeId: rt.WIFI_TYPE,
-    fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]),
-  },
-]);
+const plainMapOnlyContainer = core.encodeContainer({
+  typeId: rt.WIFI_TYPE,
+  fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]),
+});
 
 // --- Payload with no map at all (the shipped Wrapper Type shape, e.g. ---
 // Compress: `[8, h'<deflate bytes>']`, no map because there's nothing
@@ -305,12 +284,10 @@ const plainMapOnlyContainer = core.encodeContainer([
 // after typeId as payload, not as a stray forward-compat item, when no
 // map precedes it.
 
-const payloadOnlyNoMapContainer = core.encodeContainer([
-  {
-    typeId: 8,
-    payload: Buffer.from('deflate-style opaque bytes'),
-  },
-]);
+const payloadOnlyNoMapContainer = core.encodeContainer({
+  typeId: 8,
+  payload: Buffer.from('deflate-style opaque bytes'),
+});
 
 // --- Map, payload, AND subrecords all present on the same Record -- the ---
 // full grammar in one shot (§3.1's actual shipped Wrapper-Record-plus-
@@ -318,14 +295,12 @@ const payloadOnlyNoMapContainer = core.encodeContainer([
 // Media Preview identification riding along), not each piece tested in
 // isolation.
 
-const mapPayloadAndSubrecordsContainer = core.encodeContainer([
-  {
-    typeId: 8,
-    fields: new Map([[9, 'not the compress key -- just an ordinary field']]),
-    payload: Buffer.from('deflate-style opaque bytes'),
-    subrecords: [{ typeId: 14, fields: new Map([[0, 'image/png']]) }],
-  },
-]);
+const mapPayloadAndSubrecordsContainer = core.encodeContainer({
+  typeId: 8,
+  fields: new Map([[9, 'not the compress key -- just an ordinary field']]),
+  payload: Buffer.from('deflate-style opaque bytes'),
+  subrecords: [{ typeId: 14, fields: new Map([[0, 'image/png']]) }],
+});
 
 // --- Subrecords (§3.1's generalized `ID[]{}` shape) ---
 // Every Record is now exactly one self-delimited CBOR array; everything
@@ -335,46 +310,45 @@ const mapPayloadAndSubrecordsContainer = core.encodeContainer([
 // problem without relying on Record position. See docs/DESIGN.md and
 // docs/FINDINGS.md.
 
-const subrecordsContainer = core.encodeContainer([
-  {
-    typeId: 20,
-    fields: new Map([[0, 'image/png']]),
-    subrecords: [{ typeId: 2, fields: new Map([[0, Buffer.from('fragment')]]) }],
-  },
-]);
+const subrecordsContainer = core.encodeContainer({
+  typeId: 20,
+  fields: new Map([[0, 'image/png']]),
+  subrecords: [{ typeId: 2, fields: new Map([[0, Buffer.from('fragment')]]) }],
+});
 
 // --- Subrecords: a subrecord may itself carry a namespace and its own ---
 // further subrecords -- the same grammar, applied recursively, not a
 // reduced one.
 
-const subrecordsWithNamespaceContainer = core.encodeContainer([
-  {
-    typeId: 21,
-    fields: new Map(),
-    subrecords: [
-      {
-        typeId: 1,
-        localNamespace: Buffer.from('cdcdcdcd', 'hex'),
-        fields: new Map([[0, 'payload']]),
-        subrecords: [{ typeId: 22, fields: new Map([[0, 'leaf']]) }],
-      },
-    ],
-  },
-]);
+const subrecordsWithNamespaceContainer = core.encodeContainer({
+  typeId: 21,
+  fields: new Map(),
+  subrecords: [
+    {
+      typeId: 1,
+      localNamespace: Buffer.from('cdcdcdcd', 'hex'),
+      fields: new Map([[0, 'payload']]),
+      subrecords: [{ typeId: 22, fields: new Map([[0, 'leaf']]) }],
+    },
+  ],
+});
 
 // --- Subrecords: every Record is self-bounded by its own array, so a ---
 // Record with subrecords followed by a plain sibling Record never bleed
 // into each other -- no position-dependent boundary logic is needed
-// anywhere anymore.
+// anywhere anymore. No namespace at the root, so typeId defaults to 0
+// (Bundle) and both become its subrecords.
 
-const subrecordsSiblingContainer = core.encodeContainer([
-  {
-    typeId: 23,
-    fields: new Map([[0, 'A']]),
-    subrecords: [{ typeId: 2, fields: new Map([[0, 1]]) }],
-  },
-  { typeId: 1, localNamespace: Buffer.from('cdcdcdcd', 'hex'), fields: new Map([[0, 'B']]) },
-]);
+const subrecordsSiblingContainer = core.encodeContainer({
+  subrecords: [
+    {
+      typeId: 23,
+      fields: new Map([[0, 'A']]),
+      subrecords: [{ typeId: 2, fields: new Map([[0, 1]]) }],
+    },
+    { typeId: 1, localNamespace: Buffer.from('cdcdcdcd', 'hex'), fields: new Map([[0, 'B']]) },
+  ],
+});
 
 // --- Map-shaped payload, no other fields: the encoder auto-inserts an ---
 // empty field Map ahead of it, since major type 5 right after typeId is
@@ -382,9 +356,10 @@ const subrecordsSiblingContainer = core.encodeContainer([
 // carve-out). Payload can never be array-shaped -- see docs/DESIGN.md
 // for why that was tried and reverted.
 
-const mapShapedPayloadNoFieldsContainer = core.encodeContainer([
-  { typeId: 20, payload: new Map([[1, 'arbitrary map-shaped payload value']]) },
-]);
+const mapShapedPayloadNoFieldsContainer = core.encodeContainer({
+  typeId: 20,
+  payload: new Map([[1, 'arbitrary map-shaped payload value']]),
+});
 
 // --- Output ---
 
@@ -405,9 +380,9 @@ console.log(rustBytes('WIFI_UNKNOWN_EVEN_KEY_CONTAINER', wifiUnknownEvenKeyConta
 console.log();
 console.log(rustBytes('WIFI_UNKNOWN_ODD_KEY_CONTAINER', wifiUnknownOddKeyContainer));
 console.log();
-console.log(rustBytes('NO_TYPEID_CONTAINER', noTypeidContainer));
+console.log(rustBytes('DEFAULT_TYPEID_ZERO_CONTAINER', defaultTypeidZeroContainer));
 console.log();
-console.log(rustBytes('BARE_SEQUENCE_NO_DISCRIMINATOR', bareSequenceNoDiscriminator));
+console.log(rustBytes('BARE_SEQUENCE_NO_MAGIC', bareSequenceNoMagic));
 console.log();
 console.log(rustBytes('TWO_RECORD_CONTAINER', twoRecordContainer));
 console.log();
@@ -427,9 +402,9 @@ console.log(rustBytes('NESTED_AUTH_METHODS_CBOR', nestedAuthMethods));
 console.log();
 console.log(rustBytes('LARGE_TYPE_ID_CONTAINER', largeTypeIdContainer));
 console.log();
-console.log(rustBytes('HEADER_CONTAINER', headerContainer));
+console.log(rustBytes('ROOT_NAMESPACE_CONTAINER', rootNamespaceContainer));
 console.log();
-console.log(rustBytes('BYTE_STRING_TYPE_ID_UNRECOGNIZED_CONTAINER', byteStringTypeIdContainer));
+console.log(rustBytes('BSTR_ALWAYS_NAMESPACE_CONTAINER', bstrAlwaysNamespaceContainer));
 console.log();
 console.log(rustBytes('SECOND_TYPE_ID_NOT_ACCUMULATED_CONTAINER', secondTypeIdNotAccumulatedContainer));
 console.log();

@@ -265,7 +265,7 @@ function decodeAndCheck(bytes, knownKeysRegistry) {
  *
  * Per spec §3.5: each physical code is its own independent container, with
  * no cross-code state -- so a namespace declared for the group MUST repeat,
- * identically, in every code's discriminator, not just one. Every code's
+ * identically, in every code's root Record, not just one. Every code's
  * declared namespace (if any) must agree, and that namespace applies to
  * the terminal Record this whole stack resolves to -- including one only
  * reachable after full Split reassembly, which is exactly the case a lone
@@ -279,11 +279,11 @@ function decodeAndCheck(bytes, knownKeysRegistry) {
 function resolveStack(codesBytesList, ctx, knownKeysRegistry) {
   const pendingSplitFragments = [];
   let terminal = null;
-  let groupHeader; // {namespace, hint} agreed across every code that declares one
+  let groupHeader; // {namespace} agreed across every code that declares one
 
   for (const codeBytes of codesBytesList) {
-    const { discriminator, records } = core.decodeContainer(codeBytes);
-    const codeHeader = header.parseDiscriminator(discriminator);
+    const record = core.decodeContainer(codeBytes);
+    const codeHeader = record.localNamespace !== undefined ? { namespace: record.localNamespace } : undefined;
     if (codeHeader) {
       if (groupHeader === undefined) {
         groupHeader = codeHeader;
@@ -292,8 +292,6 @@ function resolveStack(codesBytesList, ctx, knownKeysRegistry) {
       }
     }
 
-    const record = records[0];
-    if (!record) throw new Error('code has no routable Record');
     const knownKeys = knownKeysRegistry.get(record.typeId) ?? new Set();
     let rec = core.applyCriticality(record, knownKeys);
     if (rec.aborted) throw new Error(`record type ${rec.typeId} aborted: ${rec.abortReason}`);
@@ -326,7 +324,7 @@ function resolveStack(codesBytesList, ctx, knownKeysRegistry) {
   // §3.5 already defines, just reached via a resolved Wrapper stack instead
   // of a plain sibling Record. If the terminal Record itself declared a
   // namespace-pairing prefix item (§3.1), that local override takes
-  // priority over the group's ambient discriminator-declared namespace.
+  // priority over the group's ambient root-declared namespace.
   const key = header.resolveLookupKeyForRecord(terminal, groupHeader);
   terminal.namespace = key.scope === 'namespace' ? key.namespace : undefined;
 

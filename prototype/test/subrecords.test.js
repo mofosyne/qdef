@@ -28,7 +28,6 @@ test('a subrecord round-trips inside its parent, dispatched by its own typeID', 
   });
   const rec = core.decodeRecordBytes(bytes);
 
-  assert.equal(rec.ignored, false);
   assert.equal(rec.typeId, 14);
   assert.equal(rec.map.get(0), 'image/png');
   assert.equal(rec.map.get(3), 'map.png');
@@ -101,7 +100,7 @@ test('every Record is self-bounded by its own array -- two top-level Records, on
     subrecords: [{ typeId: 2, fields: new Map([[0, 1]]) }],
   });
   const plain = core.encodeRecordBytes({ typeId: 1, fields: new Map([[0, 'B']]) });
-  const records = core.decodeSequence(Buffer.concat([withSub, plain]));
+  const records = core.decodeSequence(Buffer.concat([withSub, plain])).subrecords;
 
   assert.equal(records.length, 2);
   assert.equal(records[0].typeId, 20);
@@ -111,23 +110,26 @@ test('every Record is self-bounded by its own array -- two top-level Records, on
   assert.equal(records[1].map.get(0), 'B');
 });
 
-test('a malformed subrecord does not corrupt its parent or any sibling top-level Record -- each Record\'s own array boundary is generic and independent of its contents', () => {
-  // A subrecord slot holding well-formed CBOR that isn't valid Record
-  // grammar (no typeID at all: a bare map as the malformed subrecord's
-  // own first and only element) still has a well-defined byte boundary
-  // -- the outer walker never needs to understand it to skip past it.
-  const parentWithMalformedSub = cbor.encodeCanonical([
+test('a subrecord with no typeId of its own defaults to Bundle (0), and never corrupts its parent or any sibling top-level Record -- each Record\'s own array boundary is generic and independent of its contents', () => {
+  // A subrecord slot holding an array with no typeId at all (a bare map
+  // as its own first and only element) still has a well-defined byte
+  // boundary -- the outer walker never needs to understand it to skip
+  // past it. It's no longer "malformed": typeId defaults to 0 and the
+  // map becomes that (Bundle-shaped) Record's own field map -- the
+  // forgiving-parser choice (see docs/DESIGN.md).
+  const parentWithDefaultingSub = cbor.encodeCanonical([
     20,
     new Map([[0, 'parent payload']]),
-    [new Map([[0, 'no typeid here']])], // malformed subrecord: an array with no typeId
+    [new Map([[0, 'no typeid here']])], // subrecord with no typeId: defaults to 0
   ]);
   const sibling = core.encodeRecordBytes({ typeId: 1, fields: new Map([[0, 'sibling payload']]) });
 
-  const records = core.decodeSequence(Buffer.concat([parentWithMalformedSub, sibling]));
+  const records = core.decodeSequence(Buffer.concat([parentWithDefaultingSub, sibling])).subrecords;
   assert.equal(records.length, 2);
   assert.equal(records[0].typeId, 20);
   assert.equal(records[0].subrecords.length, 1);
-  assert.equal(records[0].subrecords[0].ignored, true);
+  assert.equal(records[0].subrecords[0].typeId, 0);
+  assert.equal(records[0].subrecords[0].map.get(0), 'no typeid here');
   assert.equal(records[1].typeId, 1);
   assert.equal(records[1].map.get(0), 'sibling payload');
 });

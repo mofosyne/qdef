@@ -75,7 +75,7 @@ test('COMMON_KEY_ID round-trips as an NDEF-ID-equivalent correlation token betwe
     fields: new Map([[0, 'text/plain'], [commonKeys.COMMON_KEY_ID, sharedId]]),
   });
 
-  const [a, b] = core.decodeSequence(Buffer.concat([recA, recB]));
+  const [a, b] = core.decodeSequence(Buffer.concat([recA, recB])).subrecords;
   assert.ok(a.map.get(commonKeys.COMMON_KEY_ID).equals(sharedId));
   assert.ok(b.map.get(commonKeys.COMMON_KEY_ID).equals(sharedId));
 });

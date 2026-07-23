@@ -21,8 +21,9 @@ test('a Signature Record verifies the exact preceding top-level Records it was b
   ];
   const signatureRecord = sig.signatureEncode(covered, privateKey);
 
-  const container = core.encodeContainer([...covered, signatureRecord]);
-  const { records } = core.decodeContainer(container);
+  const container = core.encodeContainer({ subrecords: [...covered, signatureRecord] });
+  const root = core.decodeContainer(container);
+  const records = root.subrecords;
 
   const results = sig.verifySignaturesInList(records);
   assert.equal(results.length, 1);
@@ -36,8 +37,9 @@ test('reordering a covered Record after signing breaks verification -- positiona
   const b = { typeId: 10, fields: new Map([[0, 'https://example.com/open']]) };
   const signatureRecord = sig.signatureEncode([a, b], privateKey);
 
-  const container = core.encodeContainer([b, a, signatureRecord]); // swapped
-  const { records } = core.decodeContainer(container);
+  const container = core.encodeContainer({ subrecords: [b, a, signatureRecord] }); // swapped
+  const root = core.decodeContainer(container);
+  const records = root.subrecords;
 
   const results = sig.verifySignaturesInList(records);
   assert.equal(results[0].valid, false);
@@ -50,8 +52,9 @@ test('inserting an unrelated Record between signing and verification breaks it t
   const signatureRecord = sig.signatureEncode([a, b], privateKey);
   const unrelated = { typeId: 10, fields: new Map([[0, 'https://example.com/unrelated']]) };
 
-  const container = core.encodeContainer([a, unrelated, b, signatureRecord]);
-  const { records } = core.decodeContainer(container);
+  const container = core.encodeContainer({ subrecords: [a, unrelated, b, signatureRecord] });
+  const root = core.decodeContainer(container);
+  const records = root.subrecords;
 
   const results = sig.verifySignaturesInList(records);
   assert.equal(results[0].valid, false);
@@ -64,8 +67,9 @@ test('tampering with a covered Record\'s own field after signing breaks verifica
   const signatureRecord = sig.signatureEncode([a], privateKey);
 
   const tampered = { typeId: rt.WIFI_TYPE, fields: new Map([[0, 'SSID-tampered'], [2, 'pass'], [4, 2]]) };
-  const container = core.encodeContainer([tampered, signatureRecord]);
-  const { records } = core.decodeContainer(container);
+  const container = core.encodeContainer({ subrecords: [tampered, signatureRecord] });
+  const root = core.decodeContainer(container);
+  const records = root.subrecords;
 
   const results = sig.verifySignaturesInList(records);
   assert.equal(results[0].valid, false);
@@ -76,12 +80,13 @@ test('a decoder with no interest in Signature skips the whole Record cleanly by 
   const a = { typeId: 10, fields: new Map([[0, 'https://example.com/open']]) };
   const signatureRecord = sig.signatureEncode([a], privateKey);
 
-  const container = core.encodeContainer([a, signatureRecord]);
-  const { records } = core.decodeContainer(container);
+  const container = core.encodeContainer({ subrecords: [a, signatureRecord] });
+  const root = core.decodeContainer(container);
+  const records = root.subrecords;
 
   const KNOWN_TYPES = new Map([[10, new Set([0, 1, 3, 5])]]); // no entry for Type 16
   const handled = records
-    .filter((r) => !r.ignored && KNOWN_TYPES.has(r.typeId))
+    .filter((r) => KNOWN_TYPES.has(r.typeId))
     .map((r) => core.applyCriticality(r, KNOWN_TYPES.get(r.typeId)));
 
   assert.equal(records.length, 2);
@@ -96,14 +101,15 @@ test('a Signature nested as a subrecord covers only its own parent\'s preceding 
   const bundleSignature = sig.signatureEncode([inBundle, alsoInBundle], privateKey);
 
   const outsideBundle = { typeId: 10, fields: new Map([[0, 'https://example.com/outside']]) };
-  const container = core.encodeContainer([
+  const container = core.encodeContainer({ subrecords: [
     {
       typeId: rt.BUNDLE_TYPE,
       subrecords: [inBundle, alsoInBundle, bundleSignature],
     },
     outsideBundle,
-  ]);
-  const { records } = core.decodeContainer(container);
+  ] });
+  const root = core.decodeContainer(container);
+  const records = root.subrecords;
 
   const allResults = sig.verifyAllSignatures(records);
   assert.equal(allResults.length, 1); // only the Bundle's own subrecord list has a Signature
@@ -118,8 +124,9 @@ test('two Signature Records in the same list checkpoint independently -- the sec
   const b = { typeId: 10, fields: new Map([[0, 'https://example.com/open']]) };
   const sigB = sig.signatureEncode([b], privateKey);
 
-  const container = core.encodeContainer([a, sigA, b, sigB]);
-  const { records } = core.decodeContainer(container);
+  const container = core.encodeContainer({ subrecords: [a, sigA, b, sigB] });
+  const root = core.decodeContainer(container);
+  const records = root.subrecords;
 
   const results = sig.verifySignaturesInList(records);
   assert.equal(results.length, 2);
@@ -142,8 +149,9 @@ test('an unsupported Algorithm value is reported, not silently treated as valid'
     payload: Buffer.alloc(64),
   };
 
-  const container = core.encodeContainer([a, forgedAlgSignature]);
-  const { records } = core.decodeContainer(container);
+  const container = core.encodeContainer({ subrecords: [a, forgedAlgSignature] });
+  const root = core.decodeContainer(container);
+  const records = root.subrecords;
 
   const results = sig.verifySignaturesInList(records);
   assert.equal(results[0].valid, false);
@@ -164,8 +172,9 @@ test('an unrecognized EVEN key in a Signature Record\'s own map aborts it via th
     payload: Buffer.alloc(64),
   };
 
-  const container = core.encodeContainer([a, signatureWithUnknownCriticalField]);
-  const { records } = core.decodeContainer(container);
+  const container = core.encodeContainer({ subrecords: [a, signatureWithUnknownCriticalField] });
+  const root = core.decodeContainer(container);
+  const records = root.subrecords;
 
   const results = sig.verifySignaturesInList(records);
   assert.equal(results[0].valid, false);

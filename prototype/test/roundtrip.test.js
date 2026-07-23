@@ -12,28 +12,26 @@ const rt = require('../src/recordTypes');
 // 1. Plain Record round trip: Type 100, Wi-Fi Provisioning (§5)
 // ---------------------------------------------------------------------
 test('Type 100 (Wi-Fi) record round-trips through a full container', () => {
-  const container = core.encodeContainer([
-    {
-      typeId: rt.WIFI_TYPE,
-      fields: new Map([
-        [0, 'My Coffee Shop'],
-        [2, 'guest123'],
-        [4, 2],
-        [1, true],
-      ]),
-    },
-  ]);
+  // A single primary Record, written flat at the root -- no Bundle
+  // indirection needed (see docs/DESIGN.md).
+  const container = core.encodeContainer({
+    typeId: rt.WIFI_TYPE,
+    fields: new Map([
+      [0, 'My Coffee Shop'],
+      [2, 'guest123'],
+      [4, 2],
+      [1, true],
+    ]),
+  });
 
   assert.equal(container.subarray(0, 4).toString('latin1'), 'QDEF');
-  // No version byte: the CBOR Sequence starts immediately after magic.
-  // First item is the typeID (uint 100 = major type 0, 0x18 0x64).
+  // No version byte, no discriminator: the root Record's own items
+  // start immediately after magic. First item is the typeID (uint 100
+  // = major type 0, 0x18 0x64).
   assert.equal(container[4] >> 5, 0); // CBOR major type 0 = uint
 
-  const { records } = core.decodeContainer(container);
-  assert.equal(records.length, 1);
-  const rec = core.applyCriticality(records[0], rt.WIFI_KNOWN_KEYS);
+  const rec = core.applyCriticality(core.decodeContainer(container), rt.WIFI_KNOWN_KEYS);
 
-  assert.equal(rec.ignored, false);
   assert.equal(rec.typeId, 100);
   assert.equal(rec.map.get(0), 'My Coffee Shop');
   assert.equal(rec.map.get(2), 'guest123');
@@ -52,17 +50,17 @@ test('Type 900 (TagDrop registration) round-trips an opaque nested CBOR Sequence
     cbor.encode(Buffer.from('hello from tagdrop sector bytes')),
   ]);
 
-  const container = core.encodeContainer([
+  const container = core.encodeContainer({ subrecords: [
     {
       typeId: rt.TAGDROP_REGISTRATION_TYPE,
       fields: new Map([[0, fakeTagDropSeq]]),
     },
-  ]);
+  ] });
 
-  const { records } = core.decodeContainer(container);
+  const root = core.decodeContainer(container);
+  const records = root.subrecords;
   const rec = core.applyCriticality(records[0], rt.TAGDROP_REGISTRATION_KNOWN_KEYS);
 
-  assert.equal(rec.ignored, false);
   assert.equal(rec.typeId, 900);
   const roundTrippedSeq = rec.map.get(0);
   assert.ok(Buffer.isBuffer(roundTrippedSeq));
@@ -93,15 +91,15 @@ function buildPgpBackupCodes(secretKeyBytes, aesKey) {
 
   // One physical QR/NFC code per fragment.
   return fragmentRecords.map((fragRec) =>
-    core.encodeContainer([fragRec])
+    core.encodeContainer({ subrecords: [fragRec] })
   );
 }
 
 function decodePgpBackupFromCodes(codes, aesKey) {
   const fragmentRecords = codes.map((codeBytes) => {
-    const { records } = core.decodeContainer(codeBytes);
+    const root = core.decodeContainer(codeBytes);
+  const records = root.subrecords;
     const rec = core.applyCriticality(records[0], wrappers.SPLIT_KNOWN_KEYS);
-    assert.equal(rec.ignored, false, rec.abortReason);
     return rec;
   });
 
@@ -158,7 +156,7 @@ test('PGP backup worked example: 2 dropped fragments is unrecoverable (single XO
 // 4. Even/odd key criticality round trip (§3.2)
 // ---------------------------------------------------------------------
 test('unrecognized EVEN key aborts the record', () => {
-  const container = core.encodeContainer([
+  const container = core.encodeContainer({ subrecords: [
     {
       typeId: rt.WIFI_TYPE,
       fields: new Map([
@@ -168,9 +166,10 @@ test('unrecognized EVEN key aborts the record', () => {
         [6, 'a future critical field this parser predates'],
       ]),
     },
-  ]);
+  ] });
 
-  const { records } = core.decodeContainer(container);
+  const root = core.decodeContainer(container);
+  const records = root.subrecords;
   const rec = core.applyCriticality(records[0], rt.WIFI_KNOWN_KEYS);
 
   assert.equal(rec.aborted, true);
@@ -178,7 +177,7 @@ test('unrecognized EVEN key aborts the record', () => {
 });
 
 test('unrecognized ODD key is silently ignored, rest of record still processes', () => {
-  const container = core.encodeContainer([
+  const container = core.encodeContainer({ subrecords: [
     {
       typeId: rt.WIFI_TYPE,
       fields: new Map([
@@ -188,9 +187,10 @@ test('unrecognized ODD key is silently ignored, rest of record still processes',
         [7, 'a future optional field this parser predates'],
       ]),
     },
-  ]);
+  ] });
 
-  const { records } = core.decodeContainer(container);
+  const root = core.decodeContainer(container);
+  const records = root.subrecords;
   const rec = core.applyCriticality(records[0], rt.WIFI_KNOWN_KEYS);
 
   assert.equal(rec.aborted, false);
@@ -200,7 +200,7 @@ test('unrecognized ODD key is silently ignored, rest of record still processes',
 });
 
 test('one aborted record does not affect sibling records in the same Sequence', () => {
-  const container = core.encodeContainer([
+  const container = core.encodeContainer({ subrecords: [
     {
       typeId: rt.WIFI_TYPE,
       fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2], [6, 'unknown critical']]),
@@ -209,9 +209,10 @@ test('one aborted record does not affect sibling records in the same Sequence', 
       typeId: rt.TAGDROP_REGISTRATION_TYPE,
       fields: new Map([[0, Buffer.from('unaffected sibling record')]]),
     },
-  ]);
+  ] });
 
-  const { records } = core.decodeContainer(container);
+  const root = core.decodeContainer(container);
+  const records = root.subrecords;
   assert.equal(records.length, 2);
   const wifiRec = core.applyCriticality(records[0], rt.WIFI_KNOWN_KEYS);
   const tagdropRec = core.applyCriticality(records[1], rt.TAGDROP_REGISTRATION_KNOWN_KEYS);

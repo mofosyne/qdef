@@ -34,7 +34,7 @@ test('canonical order (Split outermost -> Encrypt -> plain) resolves via the gen
   const enc = wrappers.encryptEncode(innerRecordBytes, aesKey);
   const encryptRecordBytes = core.encodeRecordBytes(enc);
   const fragmentRecords = wrappers.splitEncode(encryptRecordBytes, { count: 3, parityScheme: wrappers.PARITY_SCHEME_XOR });
-  const codes = fragmentRecords.map((f) => core.encodeContainer([f]));
+  const codes = fragmentRecords.map((f) => core.encodeContainer(f));
 
   const terminal = wrappers.resolveStack(codes, { aesKey }, KNOWN_KEYS_REGISTRY);
   assert.equal(terminal.typeId, rt.PGP_BACKUP_TYPE);
@@ -53,7 +53,7 @@ test('FINDING: a reversed, non-conformant order (Encrypt-per-code outermost, Spl
   const codes = fragmentRecords.map((fragRec) => {
     const fragRecordBytes = core.encodeRecordBytes(fragRec);
     const enc = wrappers.encryptEncode(fragRecordBytes, aesKey);
-    return core.encodeContainer([enc]);
+    return core.encodeContainer(enc);
   });
 
   const terminal = wrappers.resolveStack(codes, { aesKey }, KNOWN_KEYS_REGISTRY);
