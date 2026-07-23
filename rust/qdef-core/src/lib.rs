@@ -1,23 +1,26 @@
-//! QDEF mandatory core: magic framing, CBOR-Sequence-of-Records walking,
-//! typeID-prefix routing (§3.1), the even/odd criticality rule
-//! (docs/QDEF-SPEC.md §2–§3.3). No knowledge of any specific Record
-//! Type, no compression, no reassembly — those live in a separate
-//! standard-record-type layer, not here, by design.
+//! QDEF mandatory core: magic framing, typeID-prefix routing (§3.1), the
+//! even/odd criticality rule (docs/QDEF-SPEC.md §2–§3.3). No knowledge
+//! of any specific Record Type, no compression, no reassembly — those
+//! live in a separate standard-record-type layer, not here, by design.
 //!
-//! Every Record is exactly one definite-length CBOR array, self-bounded
-//! by its own array header — a decoder never needs Record-grammar
-//! knowledge to skip past a Record it doesn't care about, only to skip
-//! one generic CBOR array (see docs/DESIGN.md for why this replaced the
-//! earlier flat, unwrapped Record shape). Its elements, in order:
-//! `[namespace?, typeId, map?, payload?, subrecord*]`
-//! - namespace (optional): a byte string, present only when the array's
-//!   first element is a byte string immediately followed by a valid
-//!   typeId. Scopes this Record's own typeId, overriding any container-
-//!   level ambient namespace for this one Record only (§3.5).
-//! - typeId (mandatory): a bare uint. No other shape is recognized and
-//!   there is no backup-typeId accumulation — at most one typeId per
-//!   Record (see docs/FINDINGS.md for why decentralized Type IDs, Named
-//!   Type IDs, and backup typeIDs were all retired).
+//! There is exactly one grammar, applied identically everywhere -- the
+//! container root, an NDEF/own-URI-scheme body, and every subrecord all
+//! parse the same way, the only difference being what bounds the item
+//! list (end-of-buffer for the first two, an explicit array for the
+//! last). No separate "container discriminator" concept exists (see
+//! docs/DESIGN.md and docs/FINDINGS.md for why: it collapsed into this
+//! same grammar once typeId became optional):
+//! `[namespace?, typeId?, map?, payload?, subrecord*]`
+//! - namespace (optional): a byte string. Recognized whenever the
+//!   current position holds one, unconditionally -- there is no
+//!   requirement that a valid typeId immediately follow it (dropped
+//!   deliberately; see docs/DESIGN.md). Scopes this Record's own
+//!   typeId, overriding any inherited ambient namespace for this one
+//!   Record (and, by cascade, its own subrecords) only.
+//! - typeId (optional): a bare uint. Defaults to 0 (Bundle) when no
+//!   uint is found at this position -- a forgiving-parser choice, not
+//!   an error case (see docs/DESIGN.md). No other shape is recognized
+//!   and there is no backup-typeId accumulation.
 //! - map (optional): the field Map, omitted when empty (§3.1). Major
 //!   type 5 immediately after typeId (or namespace/typeId) is always the
 //!   field Map -- never padding, never payload.
@@ -31,10 +34,11 @@
 //!   real adopter feedback -- see docs/DESIGN.md). A map-shaped payload
 //!   requires the field Map to also be present (even empty), since major
 //!   type 5 right after typeId is otherwise always the field Map.
-//! - subrecord* (zero or more): every remaining array element after the
-//!   payload is itself a nested Record, recursively the same shape. No
-//!   separate wrapper array is needed: the outer Record's own array is
-//!   already self-bounded.
+//! - subrecord* (zero or more): every remaining item after the payload
+//!   is itself a nested Record, recursively the same shape, always
+//!   array-wrapped -- a subrecord's own boundary must be self-delimited
+//!   since it sits inside a larger item list, unlike the outermost list
+//!   itself.
 //!
 //! A malformed *inner* Record (one whose own array contents don't parse
 //! as valid Record grammar) never corrupts a sibling Record's
@@ -44,15 +48,14 @@
 //! can always advance to the next sibling regardless of whether this one
 //! Record's own interpretation succeeds.
 //!
-//! No version byte: the container is magic, a mandatory discriminator
-//! item, then a CBOR Sequence of Records. Container-level metadata (a
-//! format namespace) lives in that discriminator, always the first CBOR
-//! item after magic (see header.js in the Node prototype for its
-//! shapes and what each one means) — the mandatory core here only knows
-//! how to split it off the front, via `cbor::skip_any_item`, never how
-//! to interpret it. That interpretation is Record-Type-interpretation-
-//! specific handling, entirely outside this crate's scope, same as
-//! every other optional mechanism.
+//! No version byte: the container is magic followed directly by the
+//! root Record's own items -- no discriminator, no CBOR Sequence of
+//! independent top-level Records. The root is otherwise an ordinary
+//! Record: it MAY carry a real typeId of its own (a single primary
+//! Record, e.g. a Media Payload, needs no Bundle indirection at all),
+//! or omit typeId to default to Bundle (0) when the container holds
+//! several co-equal top-level Records, which then live in its
+//! subrecords.
 //!
 //! `no_std`, zero heap allocation, zero dependencies. §3.2's field-value-
 //! shape rule was dropped (a field value may now be any well-formed CBOR
@@ -87,12 +90,13 @@ enum ControlFlow {
     Stop,
 }
 
-/// A parsed QDEF container: valid magic, its mandatory discriminator
-/// item (raw, uninterpreted — see the crate-level doc comment), and the
-/// CBOR Sequence of Records that follows it.
+/// A parsed QDEF container: valid magic followed by the root Record's
+/// own items, end-of-buffer-bounded (see `parse_record_items`). No
+/// discriminator to skip or interpret -- the root's own namespace/map
+/// fields (if any) carry exactly the job a separate discriminator item
+/// used to (see the crate-level doc comment).
 pub struct Container<'a> {
-    discriminator: &'a [u8],
-    seq: &'a [u8],
+    root: Record<'a>,
 }
 
 impl<'a> Container<'a> {
@@ -103,38 +107,26 @@ impl<'a> Container<'a> {
         if buf[0..4] != MAGIC {
             return Err(Error::BadMagic);
         }
-        let rest = &buf[4..];
-        let disc_len = cbor::skip_any_item(rest).map_err(Error::Cbor)?;
-        Ok(Container {
-            discriminator: &rest[..disc_len],
-            seq: &rest[disc_len..],
-        })
+        let root = parse_record_items(&buf[4..], 0)?;
+        Ok(Container { root })
     }
 
-    /// The raw, uninterpreted bytes of the mandatory discriminator item.
-    /// This crate never inspects its shape or meaning — that's an
-    /// optional, Record-Type-interpretation-layer concern (see
-    /// header.js in the Node prototype for the equivalent).
-    pub fn discriminator(&self) -> &'a [u8] {
-        self.discriminator
-    }
-
-    pub fn records(&self) -> Records<'a> {
-        Records {
-            remaining: self.seq,
-            done: false,
-        }
+    /// The container's root Record -- an ordinary Record like any
+    /// other, which MAY carry a real typeId of its own (a single
+    /// primary Record needs no Bundle indirection) or default to
+    /// typeId 0 (Bundle) when the container holds several co-equal
+    /// top-level Records, which then live in `root().subrecords()`.
+    pub fn root(&self) -> &Record<'a> {
+        &self.root
     }
 }
 
 /// The NDEF path (§2): a bare CBOR Sequence with no magic prefix,
-/// because NDEF's own MIME type (`application/vnd.qdef`) already identifies
-/// the payload. Routes through the identical Record-parsing logic.
-pub fn records_from_sequence(seq: &[u8]) -> Records<'_> {
-    Records {
-        remaining: seq,
-        done: false,
-    }
+/// because NDEF's own MIME type (`application/vnd.qdef`) already
+/// identifies the payload. Structurally identical to `Container::parse`
+/// past the magic check: one Record, end-of-buffer-bounded.
+pub fn record_from_sequence(seq: &[u8]) -> Result<Record<'_>, Error> {
+    parse_record_items(seq, 0)
 }
 
 pub struct Records<'a> {
@@ -200,13 +192,15 @@ impl<'a> Iterator for Records<'a> {
 /// for a Record-Type-specific handler (e.g. `check_criticality`,
 /// `find_value`) to inspect further.
 pub struct Record<'a> {
-    /// This Record's typeID, if it had one. `None` iff `ignored`.
-    type_id: Option<cbor::Key<'a>>,
+    /// This Record's typeID. Always present -- defaults to `Key::Uint(0)`
+    /// (Bundle) when no uint was found at the typeId position (§3.1's
+    /// forgiving-parser choice; see docs/DESIGN.md). There is no
+    /// "ignored, unroutable" state anymore.
+    type_id: cbor::Key<'a>,
     /// The namespace from this Record's own namespace-pairing prefix
-    /// item, if it had one — raw, uninterpreted (same treatment as
-    /// `Container::discriminator()`). `None` means this Record declared
-    /// no override; interpretation-layer code falls back to whatever
-    /// ambient namespace the container discriminator declared.
+    /// item, if it had one — raw, uninterpreted. `None` means this
+    /// Record declared no override; interpretation-layer code falls
+    /// back to whatever ambient namespace it inherited.
     local_namespace: Option<cbor::Key<'a>>,
     /// The raw encoded bytes of this Record's payload item (§3.1), if
     /// present -- of whatever CBOR shape it turned out to be (byte/text
@@ -217,24 +211,21 @@ pub struct Record<'a> {
     /// payload — its subrecords, if any. `None` means no elements
     /// followed the payload (or the map when no payload present).
     sub_bytes: Option<&'a [u8]>,
-    /// True if no typeID was found — the record is unroutable and
-    /// should be ignored by dispatch logic.
-    pub ignored: bool,
     /// The field map bytes (from the map delimiter to the end of the
     /// map). Empty slice if no map was found.
     pub map_bytes: &'a [u8],
 }
 
 impl<'a> Record<'a> {
-    /// This Record's typeID, if any.
-    pub fn type_id(&self) -> Option<cbor::Key<'a>> {
+    /// This Record's typeID -- always present, defaulting to `Key::Uint(0)`.
+    pub fn type_id(&self) -> cbor::Key<'a> {
         self.type_id
     }
 
     /// The raw namespace value from this Record's own namespace-pairing
     /// prefix item, if any. This crate never interprets it (doesn't
     /// know it means "namespace," doesn't check even/odd, doesn't
-    /// compare it against a container's ambient discriminator) — that's
+    /// compare it against any ambient one it might override) — that's
     /// entirely a Record-Type-interpretation-layer concern (see
     /// header.js's `resolveLookupKeyForRecord` in the Node prototype).
     pub fn local_namespace(&self) -> Option<cbor::Key<'a>> {
@@ -269,52 +260,65 @@ impl<'a> Record<'a> {
 /// array (`buf` is exactly one Record's worth of bytes -- its own array
 /// header plus every one of its declared elements, no more, no less;
 /// see `Records::next`, which determines this bound generically via
-/// `cbor::skip_any_item` before calling this function):
-///   `[namespace?, typeId, map?, payload?, subrecord*]`
+/// `cbor::skip_any_item` before calling this function). Reads past the
+/// array's own header, then hands the rest to `parse_record_items`,
+/// which walks the shared grammar identically whether the item list
+/// came from an explicit array or an end-of-buffer-bounded body.
+fn parse_record_array(buf: &[u8]) -> Result<Record<'_>, Error> {
+    let head = cbor::read_head(buf).map_err(Error::Cbor)?;
+    parse_record_items(buf, head.head_len)
+}
+
+/// Parses one Record from a flat, already-bounded run of CBOR items:
+/// `buf[start..]` is exactly that run, with `buf.len()` as its end --
+/// either a subrecord's own array elements (start = the array's own
+/// header length, see `parse_record_array`), or an entire end-of-buffer-
+/// bounded body (the container root, an NDEF/own-URI body). No
+/// structural difference between these contexts: this one function
+/// serves both.
 ///
-/// - namespace: recognized only when the array's first element is a
-///   byte string AND the element immediately after it is a valid
-///   typeId -- otherwise this Record has no typeId at all (`ignored`),
-///   the same "malformed prefix means unroutable, not a crash"
-///   tolerance as before.
-/// - typeId: a bare uint (major type 0). No other shape is recognized.
-/// - map: the element immediately following typeId, if map-shaped.
+///   `[namespace?, typeId?, map?, payload?, subrecord*]`
+///
+/// - namespace: recognized whenever the current item is a byte string,
+///   unconditionally -- no longer requires a following valid typeId
+///   (dropped; see docs/DESIGN.md).
+/// - typeId: a bare uint (major type 0) if present at this position;
+///   absent, defaults to `Key::Uint(0)` (Bundle). No other shape is
+///   recognized as a typeId.
+/// - map: the item immediately following typeId, if map-shaped.
 ///   Optional -- absent when empty (§3.1). Major type 5 in this position
 ///   is unconditionally the field Map, never padding, never payload.
 /// - payload: whatever remains immediately after the map (or typeId if
 ///   no map), if present and not array-shaped, of any well-formed,
 ///   definite-length CBOR shape. An array in this position is never
 ///   payload -- it's always subrecord 0.
-/// - subrecords: everything remaining after the payload to the end of
-///   this Record's own (already exactly bounded) array.
-fn parse_record_array(buf: &[u8]) -> Result<Record<'_>, Error> {
-    let head = cbor::read_head(buf).map_err(Error::Cbor)?;
-    let mut remaining_items = head.arg;
-    let mut pos = head.head_len;
+/// - subrecords: everything remaining after the payload to `buf.len()`.
+fn parse_record_items(buf: &[u8], start: usize) -> Result<Record<'_>, Error> {
+    let mut pos = start;
 
-    let mut type_id: Option<cbor::Key<'_>> = None;
+    let mut type_id = cbor::Key::Uint(0); // defaults to Bundle
     let mut local_namespace: Option<cbor::Key<'_>> = None;
     let mut payload: Option<&[u8]> = None;
 
-    // [namespace?] typeId
-    if remaining_items > 0 {
+    // namespace: a byte string at this position is always the
+    // namespace, unconditionally -- no lookahead pairing required.
+    if pos < buf.len() {
         let item_head = cbor::read_head(&buf[pos..]).map_err(Error::Cbor)?;
-        if item_head.major == 2 && remaining_items > 1 {
+        if item_head.major == 2 {
             let (ns_key, ns_len) = cbor::read_key(&buf[pos..]).map_err(Error::Cbor)?;
-            let next_pos = pos + ns_len;
-            let next_head = cbor::read_head(&buf[next_pos..]).map_err(Error::Cbor)?;
-            if next_head.major == 0 {
-                let (id_key, id_len) = cbor::read_key(&buf[next_pos..]).map_err(Error::Cbor)?;
-                local_namespace = Some(ns_key);
-                type_id = Some(id_key);
-                pos = next_pos + id_len;
-                remaining_items -= 2;
-            }
-        } else if item_head.major == 0 {
+            local_namespace = Some(ns_key);
+            pos += ns_len;
+        }
+    }
+
+    // typeId: a uint at this position, if present; absent, stays the
+    // Key::Uint(0) default.
+    if pos < buf.len() {
+        let item_head = cbor::read_head(&buf[pos..]).map_err(Error::Cbor)?;
+        if item_head.major == 0 {
             let (id_key, id_len) = cbor::read_key(&buf[pos..]).map_err(Error::Cbor)?;
-            type_id = Some(id_key);
+            type_id = id_key;
             pos += id_len;
-            remaining_items -= 1;
         }
     }
 
@@ -323,7 +327,7 @@ fn parse_record_array(buf: &[u8]) -> Result<Record<'_>, Error> {
     // (§3.1's map-shape carve-out: a map-shaped payload requires this
     // slot to be explicitly, even emptily, present).
     let mut map_bytes: &[u8] = &[];
-    if remaining_items > 0 {
+    if pos < buf.len() {
         let item_head = cbor::read_head(&buf[pos..]).map_err(Error::Cbor)?;
         if item_head.major == 5 {
             let item_len = cbor::skip_any_item(&buf[pos..]).map_err(Error::Cbor)?;
@@ -346,8 +350,8 @@ fn parse_record_array(buf: &[u8]) -> Result<Record<'_>, Error> {
     // recognized either (matches the pre-existing bstr/tstr decoder-
     // tolerance divergence, docs/QDEF-SPEC.md §3.1) -- it falls through
     // to subrecord-scanning instead, skipped again there as a non-array
-    // item. Only recognized for routed records (type_id.is_some()).
-    if type_id.is_some() && pos < buf.len() {
+    // item.
+    if pos < buf.len() {
         let item_head = cbor::read_head(&buf[pos..]).map_err(Error::Cbor)?;
         if !item_head.is_indefinite() && item_head.major != 4 {
             let item_len = cbor::skip_any_item(&buf[pos..]).map_err(Error::Cbor)?;
@@ -356,22 +360,18 @@ fn parse_record_array(buf: &[u8]) -> Result<Record<'_>, Error> {
         }
     }
 
-    // Everything remaining to the end of this Record's own (already
-    // exactly bounded) array is subrecords.
+    // Everything remaining to buf.len() is subrecords.
     let sub_bytes: Option<&[u8]> = if pos < buf.len() {
         Some(&buf[pos..])
     } else {
         None
     };
 
-    let ignored = type_id.is_none();
-
     Ok(Record {
         type_id,
         local_namespace,
         payload,
         sub_bytes,
-        ignored,
         map_bytes,
     })
 }

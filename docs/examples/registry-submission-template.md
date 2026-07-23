@@ -11,9 +11,9 @@ in the Validation section.
 
 Pick **one** of the two ID patterns below, depending on whether your
 Record Type ID is common-vocabulary global (an even uint, spec §3.1) or
-namespace-scoped (a small odd uint, requiring a declared namespace in
-the container discriminator, spec §3.5). Don't fill in both unless
-you're genuinely registering two different things.
+namespace-scoped (a small odd uint, requiring a declared namespace on
+the root Record or an enclosing Record, spec §3.5). Don't fill in both
+unless you're genuinely registering two different things.
 
 **Option A — common-vocabulary global Type ID** (even uint `100`–`32767`,
 no namespace needed; no hash-derivation involved, just a number):
@@ -30,8 +30,8 @@ Reference:                   <link to spec/README defining this Type>
 ```
 
 **Option B — namespace-scoped Type ID** (small odd uint, cheaper on the
-wire once you have more than one Record Type; requires the container
-discriminator to declare the namespace, spec §3.5):
+wire once you have more than one Record Type; requires the root Record
+(or an enclosing Record) to declare the namespace, spec §3.5):
 
 ```
 Namespace ID:                h'c103df40'
@@ -106,13 +106,12 @@ typeID is never a map key:
       19 0fa0                     # unsigned(4000)
 ```
 
-If this Type ID is namespace-scoped (an odd uint), show the container
-discriminator (spec §3.5) that declares the namespace it's scoped under
-too:
+If this Type ID is namespace-scoped (an odd uint), show the namespace
+declaration (spec §3.5) it's scoped under too — the ordinary leading
+byte string of the root Record, or of an enclosing Record:
 
 ```
-44 c103df40                      # bytes(4) — discriminator: namespace
-                                  #   h'c103df40', bare form
+44 c103df40                      # bytes(4) — root namespace: h'c103df40'
 82                                # array(2) — this Record's own array
    01                             # unsigned(1) — typeID: 1 (namespace-scoped)
    a2                             # map(2) — the Record's field Map

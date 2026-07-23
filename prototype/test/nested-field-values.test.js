@@ -29,7 +29,6 @@ test('a field value can be a bare nested array -- previously disallowed, no indi
   });
   const rec = core.decodeRecordBytes(bytes);
 
-  assert.equal(rec.ignored, false);
   assert.deepEqual(rec.map.get(0), ['a', 'b', 'c']);
 });
 
@@ -40,7 +39,6 @@ test('a field value can be a bare nested map', () => {
   });
   const rec = core.decodeRecordBytes(bytes);
 
-  assert.equal(rec.ignored, false);
   // Only the top-level Record map is normalized to a Map instance
   // (core.js's own delimiter); a nested map value round-trips however
   // the `cbor` library represents a decoded map -- a plain object here,
@@ -56,7 +54,6 @@ test('a field value can nest several levels deep -- no depth restriction at the 
   });
   const rec = core.decodeRecordBytes(bytes);
 
-  assert.equal(rec.ignored, false);
   assert.deepEqual(rec.map.get(0), deep);
 });
 

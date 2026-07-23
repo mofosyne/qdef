@@ -72,55 +72,57 @@ lean on instead.
 
 8-bit byte mode only — never alphanumeric; text-safety is explicitly not a
 goal. A 4-byte magic header (4 bytes total, no version byte) for instant
-optical-stream validation, followed by a **mandatory container
-discriminator** (§3.5 — always exactly one CBOR item, always present),
-followed by a CBOR Sequence (RFC 8742) of Records — a sequence rather
-than a wrapping CBOR array, so a constrained parser can process each
-Record as it streams in without buffering the whole payload first
-(validated in the prototype against a real incremental CBOR decoder fed
-arbitrary byte chunks).
+optical-stream validation, followed directly by the **root Record's own
+items** — no separate discriminator, no wrapping CBOR array. The root is
+an ordinary Record (§3.1), parsed end-of-buffer-bounded rather than by an
+explicit array length: its own `namespace?`/`typeId?`/`map?`/`payload?`
+items stream directly off the CBOR Sequence (RFC 8742) that follows
+magic, and everything after them is its subrecords, each one an
+ordinary, self-delimited Record array in its own right.
 
 ```
-+----------------------+------------------------+----------------------------------+
-|   Magic (4 bytes)     | Discriminator (1 item) |     CBOR Sequence of Records     |
-+----------------------+------------------------+----------------------------------+
-| 0x51 0x44 0x45 0x46   |  uint, bstr, array,    |  Record, Record, Record, ...     |
-|       "QDEF"          |  or map (§3.5)         |                                  |
-+----------------------+------------------------+----------------------------------+
++----------------------+----------------------------------------------+
+|   Magic (4 bytes)     |     Root Record's own items (§3.1)            |
++----------------------+----------------------------------------------+
+| 0x51 0x44 0x45 0x46   |  namespace?, typeId?, map?, payload?, sub*   |
+|       "QDEF"          |  (end-of-buffer-bounded, not array-wrapped)  |
++----------------------+----------------------------------------------+
 ```
 
-Every Record is itself exactly one definite-length CBOR array — a
-minimal Record is `[typeID]` alone (the field Map and Payload are
-both optional, omitted when absent — see §3.1):
+typeId is optional, defaulting to `0` (Bundle) when no uint is found at
+that position — a forgiving-parser choice, not an error case (§3.1).
+This means the root can take either shape, and an encoder picks whichever
+matches what the container actually holds:
 
-```
-+--------------------------------------+
-|  Record array: [ typeID, Map? ]      |
-+--------------------------------------+
-|  [ 100, { 0: "SSID", 2: 2 } ]       |
-+--------------------------------------+
-```
+- **A single primary Record** (e.g. one Wi-Fi credential, one Media
+  Payload) — write its own `typeId`/`map`/`payload` directly as the
+  root's items. No Bundle indirection, no wrapping array:
+  ```
+  QDEF 100 {0: "SSID", 2: "pass"}     -- one Record, typeId 100, at the root
+  ```
+- **Several co-equal top-level Records** (none subordinate to any
+  other) — omit the root's typeId, letting it default to `0`, and give
+  each one as an explicit, self-delimited Record array; they become the
+  root's subrecords:
+  ```
+  QDEF [100, {...}] [10, {...}]        -- two Records, subrecords of the
+                                        --   implicit root Bundle
+  ```
 
-A Record's own array header (its CBOR element count) is what bounds it —
-a decoder can always skip an entire Record generically, using nothing
-but ordinary CBOR array-skipping, without any Record-grammar knowledge
-at all. An optional byte string namespace may lead the array (§3.1),
-exactly one typeID-bearing item is mandatory, an optional field Map may
-appear (omitted when empty, §3.1), an optional payload (any well-formed
-CBOR item except an array, §3.1) follows the map or typeId, and any
-remaining elements after the payload are subrecords (§3.1). The minimum
-viable Record is just `[typeID]` (typeId alone, no fields, no payload,
-no subrecords).
+A subrecord's own array header (its CBOR element count) is what bounds
+it — a decoder can always skip a whole subrecord generically, using
+nothing but ordinary CBOR array-skipping, without any Record-grammar
+knowledge at all.
 
 For NFC, the magic prefix is redundant: NDEF's own MIME-type field already
 identifies the payload. An NDEF record carrying QDEF content uses MIME type
-`application/vnd.qdef` with just the CBOR Sequence of Records as the
-payload — no magic bytes, no discriminator item.
+`application/vnd.qdef` with just the root Record's own items as the
+payload (the same end-of-buffer-bounded body, no magic bytes).
 
 **The same applies to an application carrying QDEF content under its own
 URI scheme** (§1's "When QDEF earns its place"): the scheme prefix
-(`myapp:...`) already identifies the payload, so the remainder is a bare
-CBOR Sequence of Records with no magic and no discriminator, decoded via
+(`myapp:...`) already identifies the payload, so the remainder is the
+same bare, end-of-buffer-bounded root body with no magic, decoded via
 the same `decodeSequence` path. See DESIGN.md for why this also affects
 even-Type-ID collision safety on that carrier (§3.5).
 
@@ -185,33 +187,44 @@ ends.
 
 ### 3.1 The Record array: namespace, Type ID, Map, Payload, and subrecords
 
-Every Record is exactly one definite-length CBOR array (major type 4).
-Its elements, in order: an optional namespace, exactly one typeID-
-bearing item, an optional field Map (omitted when empty — saves one
-byte per record with no fields), an optional payload (any well-formed
-CBOR item except an array — §3.1's payload paragraph below), and zero
-or more subrecords.
+Every Record is exactly one item list, in order: an optional namespace,
+an optional typeID-bearing item, an optional field Map (omitted when
+empty — saves one byte per record with no fields), an optional payload
+(any well-formed CBOR item except an array — §3.1's payload paragraph
+below), and zero or more subrecords. A **subrecord** is this same list
+wrapped in an explicit, definite-length CBOR array (major type 4) —
+self-bounded, so a decoder can always skip one generically. The
+**root** (§2) is this same list *without* the array wrapper, bounded by
+the end of the buffer instead: there is no separate grammar for "a
+Record at the container root" — this one, reused, either bounded by an
+explicit array or by running out of bytes.
 
 ```
-[ namespace?, typeId, map?, payload?, subrecord* ]
+namespace?, typeId?, map?, payload?, subrecord*
 ```
 
 The record's five slots, laid out as a flowchart:
 
 ```mermaid
 flowchart TD
-    Start["["] --> ns{"namespace?"}
-    ns -->|"bstr, if followed by typeId"| typeId["typeId (uint)"]
-    ns -->|"no namespace"| typeId
+    Start(("start")) --> ns{"next item?"}
+    ns -->|"bstr"| typeId["namespace = bstr"]
+    ns -->|"anything else, or end"| typeIdCheck
 
-    typeId --> checkMap{"next item?"}
+    typeId --> typeIdCheck{"next item?"}
+    typeIdCheck -->|"uint"| typeIdFound["typeId = uint"]
+    typeIdCheck -->|"anything else, or end"| default["typeId = 0 (Bundle)"]
+
+    typeIdFound --> checkMap{"next item?"}
+    default --> checkMap
+
     checkMap -->|"map (mjr 5)"| map["map"]
     checkMap -->|"anything else, or end"| afterMap
 
     map --> afterMap{"next item?"}
     afterMap -->|"array (mjr 4)"| subrecords
     afterMap -->|"anything else"| payload["payload<br/>(any non-array CBOR shape)"]
-    afterMap -->|"end"| End["]"]
+    afterMap -->|"end"| End(("end"))
     payload --> subrecords
 
     subrecords{"subrecord*"} -->|"array"| process["process subrecord<br/>(recursive)"]
@@ -219,8 +232,18 @@ flowchart TD
     subrecords -->|"end"| End
 ```
 
-Phase-2 semantics: after the typeId, the decoder checks exactly one
-item, then (if anything remains) exactly one more:
+Semantics: the decoder checks, in order, at most one item for namespace,
+at most one item for typeId, then (if anything remains) exactly one
+more:
+- If the current item is a **byte string** (major 2): consume it as the
+  **namespace**, unconditionally — there is no requirement that a valid
+  typeId immediately follow it (deliberately dropped; see DESIGN.md).
+- If the current item (after any namespace) is a **uint** (major 0):
+  consume it as the **typeId**. If it is not a uint — including if
+  nothing remains at all — the typeId defaults to `0` (Bundle): a
+  forgiving-parser choice, not an error case (see DESIGN.md). There is
+  no other state; a decoder never needs to reject a Record for "having
+  no typeId."
 - If the next item is a **map** (major 5): consume it as the field Map.
   Nothing else in the grammar is ever map-shaped, so this check needs
   no lookahead or padding-skipping — major type 5 here always means
@@ -232,22 +255,22 @@ item, then (if anything remains) exactly one more:
   (§3.2), minus arrays. If nothing remains at all, there is no payload.
 - Everything remaining after the payload is **subrecords**.
 
-A Record whose own array header is at least well-formed CBOR is always
-generically isolable — any decoder can skip a whole Record it doesn't care about
-using nothing but ordinary CBOR array-skipping, with no Record-grammar
-knowledge at all. There is no backup-typeID mechanism and no
-decentralized (byte string) or Named (text string) Type ID form. See
-DESIGN.md and FINDINGS.md for why these were retired, and for why every
-Record became array-wrapped.
+A subrecord whose own array header is at least well-formed CBOR is
+always generically isolable — any decoder can skip a whole subrecord it
+doesn't care about using nothing but ordinary CBOR array-skipping, with
+no Record-grammar knowledge at all. There is no backup-typeID mechanism
+and no decentralized (byte string) or Named (text string) Type ID form.
+See DESIGN.md and FINDINGS.md for why these were retired, why every
+subrecord became array-wrapped, and why the container-level
+discriminator collapsed into this same grammar once typeId became
+optional.
 
-**Namespace.** The array's first element is a namespace (a byte string,
-the only valid Namespace ID shape, §3.5) if and only if it is a byte
-string immediately followed by a valid typeId; a decoder MUST NOT
-commit to treating the first element as a namespace unless the second
-element also validates as a typeId. When present, it scopes this
-Record's own typeId, overriding the container's ambient namespace
-(§3.5) for this one Record only — a purely local override; every other
-Record is unaffected.
+**Namespace.** The current item is a namespace (a byte string, the only
+valid Namespace ID shape) whenever it's present, full stop — no
+lookahead pairing required. When present, it scopes this Record's own
+typeId, overriding whatever ambient namespace this Record inherited
+(§3.5) for this one Record (and, by cascade, its own subrecords) only —
+a purely local override; every sibling Record is unaffected.
 
 ```
 [ h'a9d6e1f30b7c4482', 1, { ... } ]    // this Record's own namespace,
@@ -259,16 +282,26 @@ always globally interpreted regardless of any declared namespace
 (§3.5), unconditionally. A namespace only affects an odd (scoped)
 typeId.
 
-A namespace is paid fresh on every Record that carries one — unlike the
-container discriminator, there is no amortization. A Record happy with
-the container's ambient namespace should omit it. See DESIGN.md's
-"Multiple namespaces per container" for the byte-cost comparison.
+A namespace is paid fresh on every Record that carries one, root or
+not — a subrecord happy with whatever ambient namespace it inherited
+should omit it. See DESIGN.md's "Multiple namespaces per container" for
+the byte-cost comparison.
 
-**Type ID.** Exactly one typeID-bearing item is mandatory: a bare uint
-(major type 0). No other major type is valid there — a byte string,
-text string, or array in this position is not recognized as a typeId at
-all, and the Record has no typeID (§3.2's well-formed-but-unroutable
-case, MUST be marked as ignored).
+**A namespace-shaped item with no real namespace intended needs an
+explicit typeId ahead of it.** Because a byte string is unconditionally
+read as namespace, a Record whose payload happens to be byte-string-
+shaped, with no namespace and no explicit typeId, would otherwise have
+that payload misread as a namespace. Write the typeId explicitly (even
+`0`) to keep the byte string in the payload position instead of the
+namespace position — the one real cost of dropping the pairing
+requirement (see DESIGN.md).
+
+**Type ID.** A typeID-bearing item is optional: a bare uint (major type
+0), consumed whenever the current position holds one. No other major
+type is valid there — a byte string, text string, or array in this
+position is never recognized as a typeId. Absent, the typeId defaults
+to `0` (Bundle) — see DESIGN.md for why this forgiving-parser choice
+was made instead of treating a missing typeId as an error.
 
 The typeID's parity determines its classification:
 
@@ -351,12 +384,11 @@ is required to round-trip identically everywhere.
 **Subrecords.** Every array element following the payload (or following
 the map when no payload is present, or following typeId when neither map
 nor payload is present) is itself a nested Record, recursively the same
-`[namespace?, typeId, map?, payload?, subrecord*]` grammar defined in
-this section — there is no separate grammar for "a Record when it's
-nested," only this one, reused, and no separate wrapper array needed to
-bound them: the outer Record's own array is already self-bounded, so
-"everything after the payload (or after map/no-map when no payload is
-present)" is unambiguous without an extra length prefix.
+`namespace?, typeId?, map?, payload?, subrecord*` grammar defined in
+this section, wrapped in its own explicit, self-delimited array — there
+is no separate grammar for "a Record when it's nested," only this one,
+reused, bounded either way (an explicit array for a subrecord, the end
+of the buffer for the root, §2).
 
 ```
 [ 20,
@@ -369,10 +401,15 @@ Each subrecord dispatches independently by its own typeID, exactly like
 a top-level sibling Record — never by position or array index.
 
 **Implementer caution for subrecords.** A subrecord's own contents
-failing to parse as valid Record grammar MUST NOT prevent a decoder
-from continuing to the next sibling — of the parent Record or of the
-subrecord itself — since each Record's total byte span is already known
-before its contents are interpreted (see §3's parser description).
+failing to decode cleanly (a CBOR-level malformation, e.g. a truncated
+string or a mismatched indefinite-string chunk type) MUST NOT prevent a
+decoder from continuing to the next sibling — of the parent Record or
+of the subrecord itself — since each Record's total byte span is
+already known, via generic array-skipping, before its contents are
+interpreted (see §3's parser description). There is no longer a
+"doesn't parse as valid Record grammar" failure mode to guard against
+separately: typeId/namespace/map/payload are all optional or
+defaulting, so any well-formed array parses as *some* valid Record.
 
 ### 3.2 The Extensibility Rule (Even/Odd Keys)
 
@@ -450,12 +487,13 @@ QDEF is designed so a minimal, generic parser is genuinely minimal — no
 implementer has to bring a compression library or sector-reassembly logic
 just to support the *container*:
 
-- **Core QDEF parser (mandatory, all implementers):** verify magic, skip
-  the discriminator as one opaque CBOR item (§3.5 — never interpreting
-  its shape), walk the CBOR Sequence, read each Record's prefix typeIDs
-  to route or skip it, apply the even/odd rule (§3.2) to unrecognized
-  keys. That's the entire surface area — no compression, no multi-code
-  state, no knowledge of any specific Record Type's fields.
+- **Core QDEF parser (mandatory, all implementers):** verify magic, parse
+  the root Record's own items (§3.1/§2 — end-of-buffer-bounded, no
+  separate discriminator to skip or interpret), read its typeID (and
+  its subrecords' typeIDs, recursively) to route or skip, apply the
+  even/odd rule (§3.2) to unrecognized keys. That's the entire surface
+  area — no compression, no multi-code state, no knowledge of any
+  specific Record Type's fields.
 - **Record-Type-specific handling (optional, per Record Type an implementer
   chooses to support):** everything else — including whether a given
   Record Type's payload happens to be compressed, or happens to require
@@ -464,17 +502,15 @@ just to support the *container*:
   never has to read, understand, or link against whatever some other
   registered Record Type does internally.
 
-A conformant core parser never needs *true* recursion: a Record is
-always exactly one array, `[namespace? → typeID → Map? → Payload? →
-subrecord*]`, and skipping any well-formed CBOR item at any
-depth — an unrecognized field, a whole unrecognized Record, or a whole
-Record's worth of subrecords — uses a bounded explicit stack instead of
-the call stack. A Record's own total byte span is always determined
-this same generic way, before any attempt to interpret its contents, so
-routing or skipping a Record never depends on whether that Record's own
-grammar happens to be valid. Validated in
-[`rust/qdef-core`](../rust/qdef-core); see FINDINGS.md for the
-mechanism (`skip_any_item`).
+A conformant core parser never needs *true* recursion: every subrecord
+is exactly one array, `namespace? → typeID? → Map? → Payload? →
+subrecord*`, and skipping any well-formed CBOR item at any
+depth — an unrecognized field, a whole unrecognized subrecord, or a whole
+subrecord's worth of its own subrecords — uses a bounded explicit stack
+instead of the call stack. A subrecord's own total byte span is always
+determined this same generic way, before any attempt to interpret its
+contents. Validated in [`rust/qdef-core`](../rust/qdef-core); see
+FINDINGS.md for the mechanism (`skip_any_item`).
 
 ### 3.4 Canonical Encoding
 
@@ -499,60 +535,43 @@ default to shortest-form arguments and definite-length items. The one
 requirement needing explicit encoder discipline is map key ordering —
 cheap, since Record Maps are small by construction.
 
-### 3.5 The Container Discriminator
+### 3.5 Namespace Declaration and Scoping
 
-Immediately after the magic (§2), every QDEF container carries exactly
-one mandatory CBOR item — the **discriminator** — before the CBOR
-Sequence of Records begins: a format namespace identifier, the same job
-RIFF's form-type (`WAVE`/`AVI `) does after RIFF's own magic. It is not
-itself typeID-prefixed or Map-shaped; its own CBOR major type dispatches
-which shape below it is. The mandatory core (§3.3) only skips it as one
-opaque CBOR item; interpreting it is Record-Type-interpretation-specific
-handling, prototyped in `prototype/src/header.js`, not part of the
-minimal Rust core (`rust/qdef-core`). See DESIGN.md for why the
-discriminator is mandatory rather than an optional leading Record.
-
-**Three recognized shapes**, dispatched by the discriminator's own CBOR
-major type. A namespace ID is always a byte string — there is no uint
-(Allocated) namespace tier. See DESIGN.md for why.
+There is no separate container-level discriminator item anymore — a
+namespace is declared exactly the same way for the container root as
+for any subrecord: the ordinary namespace-pairing prefix (§3.1), a byte
+string recognized unconditionally at the front of a Record's own item
+list. The root's own namespace (if any) cascades to its subrecords the
+same way any Record's does, doing the job a separate discriminator item
+used to (see DESIGN.md and FINDINGS.md for why the two collapsed into
+one mechanism once typeId became optional). A namespace ID is always a
+byte string — there is no uint (Allocated) namespace tier. See
+DESIGN.md for why.
 
 ```
-+-----------------------------------+------------------------------------------------------------+
-| Discriminator shape                | Meaning                                                     |
-+-----------------------------------+------------------------------------------------------------+
-| uint 0                             | No namespace declared (cheapest legal container: 1 byte)   |
-| byte string                        | Decentralized Namespace ID (self-certifying, no registry)  |
-| map                                | Full extensible form: {1: namespace, 3: hint, 5: backup,   |
-|                                     | ...} — the ONLY way to carry a hint or a backup namespace   |
-| anything else (unrecognized,       | Degrades to "no namespace" — same graceful degrade as      |
-| including any array and any        | uint 0                                                      |
-| nonzero uint)                      |                                                              |
-+-----------------------------------+------------------------------------------------------------+
+QDEF <no namespace>[100, {...}]              // no namespace: typeId 100 at the root directly
+
+QDEF h'a9d6e1f30b7c4482' [100, {...}]        // root namespace, no content of its own --
+                                              //   typeId defaults to 0 (Bundle), the Record
+                                              //   is its one subrecord
+
+QDEF h'a9d6e1f30b7c4482' {3: "com.example/tagdrop-paper"} [100, {...}]
+                                              // root namespace + hint (Bundle's own map,
+                                              //   §4.6) + one content subrecord
 ```
 
-```
-0                                      // cheapest legal container: no namespace declared
-
-h'a9d6e1f30b7c4482'                    // bare namespace, no hint
-
-{                                       // full extensible form -- needed for a
-                                        //   hint, a backup namespace, or both
-  1: h'a9d6e1f30b7c4482',              // namespace: a byte string, always
-  3: "com.example/tagdrop-paper",      // OPTIONAL: recoverable Hint name,
-                                        //   hash-derivation pattern below
-  5: h'a7f90b3c'                       // OPTIONAL: a second, differently-
-                                        //   sized namespace, for a length-
-                                        //   promotion transition in
-                                        //   progress
-}
-```
-
-A decoder MUST recognize all three shapes, and MUST treat any array, any
-nonzero uint, or any other CBOR shape not listed above as unrecognized,
-degrading gracefully to "no namespace" — never a hard failure.
+A recoverable **hint** name for a namespace, and a second, differently-
+sized **backup namespace** for a length-promotion transition, are
+ordinary keys (`3` and `5` respectively) in whatever Record's field Map
+carries the namespace — Bundle's, §4.6, when the root itself defaults
+to Bundle because it has no primary content of its own. Both are
+odd/optional: a decoder that doesn't recognize them ignores them, never
+aborts. There is no dedicated shape or slot for either beyond this —
+the same even/odd extensibility (§3.2) every Record's own field Map
+already relies on.
 
 **A hint on a namespace ID is always self-certifying, since a namespace
-ID is always a byte string.** Key `3`'s Hint name plays the
+ID is always a byte string.** The Hint name plays the
 self-certifying strengthening role the hash-derivation algorithm below
 describes: anyone examining a QDEF container found in the wild, with no
 registry or external lookup, can both read the namespace's name off the
@@ -593,10 +612,11 @@ unqualified name produces a certain, not probabilistic, collision.
 Prototyped in `prototype/src/header.js`'s `verifyNamespaceHint`. See
 FINDINGS.md #21 for a real verification bug this pinned algorithm fixed.
 
-**No dedicated version field.** The map form is the fully extensible
-escape hatch — a future incompatible addition is a new even/critical
-key in it, using the same even/odd extensibility (§3.2) every Record's
-own field Map already relies on.
+**No dedicated version field.** Whatever Record's map carries a
+namespace's hint/backup keys is already fully extensible — a future
+incompatible addition is a new even/critical key in it, using the same
+even/odd extensibility (§3.2) every Record's own field Map already
+relies on.
 
 **What a declared namespace changes.** Even uint Type IDs always stay
 globally interpreted regardless of any declared namespace — standard
@@ -604,12 +624,13 @@ record type mechanisms (§4) and registered content types keep working
 unconditionally inside any namespaced container.
 
 **Odd uint Type IDs become namespace-scoped once a namespace is
-declared.** When the discriminator declares namespace `N`, a Record's
-odd Type ID `T` is looked up as the compound key `(N, T)`, not the bare
-value `T` — the same pattern as a Bluetooth short UUID paired with its
-Base UUID. `N` is normally the container's ambient namespace, but a
-Record MAY instead lead its own array with a different namespace
-inline (§3.1), overriding `N` for that one Record only.
+declared.** When a namespace-pairing prefix declares namespace `N` —
+whether on the root or on some ancestor Record whose scope this Record
+inherited — a Record's odd Type ID `T` is looked up as the compound key
+`(N, T)`, not the bare value `T` — the same pattern as a Bluetooth
+short UUID paired with its Base UUID. A Record MAY instead lead its own
+array with a different namespace inline (§3.1), overriding whatever it
+inherited for that one Record only.
 
 **Odd uint Type ID with no declared namespace MUST cause the Record to
 abort** — there is no collision-safety source without one.
@@ -635,9 +656,9 @@ ID** — whether the scoped Type ID belongs to a plain sibling Record or
 is only reachable after a Wrapper stack (§4.1) resolves. Each physical
 code is parsed independently, from a blank slate, with no cross-code
 state; a decoder holding only one code has no way to learn a namespace
-declared on another. Split's XOR parity does not protect the
-discriminator itself (only fragment bytes), so a namespace declared on
-a single code is a genuine single point of failure the Split-protected
+declared on another. Split's XOR parity does not protect a code's root
+namespace itself (only fragment bytes), so a namespace declared on a
+single code is a genuine single point of failure the Split-protected
 content does not otherwise share.
 
 **Fully additive, no migration forced.** An app with an existing even
@@ -667,8 +688,9 @@ Type ID already in use.
 
 Prototyped end to end in `prototype/src/header.js`,
 `prototype/src/wrappers.js`'s `resolveStack`, and cross-validated
-against `rust/qdef-core` (needs no discriminator-shape-specific code at
-all). See `prototype/test/header.test.js` and
+against `rust/qdef-core` (needs no namespace-specific code at all — the
+positional prefix is already part of the one generic Record grammar).
+See `prototype/test/header.test.js` and
 `prototype/test/multi-code-namespace.test.js`.
 
 ### 3.6 Common Field Keys
@@ -1279,20 +1301,35 @@ Prototyped in `prototype/test/media-preview.test.js`.
 
 A **Bundle** is a structural Record — not a wrapper, not application
 data — for grouping related Records together as subrecords without
-implying any transformation of their contents. A Bundle's own field Map
-is always empty (or absent via §3.1's optional `{}`); its meaning is
-entirely in its subrecords:
+implying any transformation of their contents. It's also, now, what the
+container root implicitly is whenever typeId is omitted there (§2/§3.1)
+— Bundle is the standard record type that meaning is defined against,
+not a container-only special case. A Bundle's own field Map carries
+only namespace metadata (below), never application content; its
+meaning is otherwise entirely in its subrecords:
 
 ```
 Type 0: {                        // Bundle (standard record type)
   // prefix typeID: 0
-  // field map: (always empty)
+  // field map:
+  3: "com.example/tagdrop",      // OPTIONAL: recoverable Hint name for
+                                  //   this Bundle's own namespace-pairing
+                                  //   prefix (§3.5), if any
+  5: h'a7f90b3c'                 // OPTIONAL: a second, differently-sized
+                                  //   namespace, for a length-promotion
+                                  //   transition in progress
   // subrecords: the bundled Records
 }
 ```
 
-On the wire this is simply `[0, [Rec1], [Rec2], ...]` — the empty map is
-omitted, and the grouped Records sit as subrecords:
+Both keys are odd/optional and meaningless without a namespace actually
+declared via Bundle's own positional prefix (§3.1/§3.5) — they are
+namespace metadata, not namespace itself, which is never a map key.
+Defined for Type 0 only; other Record Types may reuse keys `3`/`5` for
+their own unrelated purposes, same as any other per-Type field
+numbering. On the wire, a namespace-free, hint-free, backup-free Bundle
+is simply `[0, [Rec1], [Rec2], ...]` — the empty map is omitted, and the
+grouped Records sit as subrecords:
 
 ```
 [ 0,
@@ -1308,27 +1345,35 @@ Type is skipped this way, regardless of typeID parity — this isn't an
 even/odd effect (§3.2's even/odd rule governs unrecognized *map keys*
 within a Record Type a decoder already recognizes, a distinct axis, see
 §3.2). A decoder that does recognize Type 0 reads its subrecords
-independently, exactly like top-level sibling Records in the Sequence.
+independently, exactly like any other Record's.
 
-**A Bundle is never needed for ordinary grouping.** The container's CBOR
-Sequence and any Record's own subrecord slots already group Records
-structurally. A Bundle exists for the specific case where an application
-wants to treat a set of Records as a single unit — for example, to scope
-a namespace override (§3.1) across multiple Records without repeating it
-on each one, or to give an explicit boundary a generic tool can
-recognize without reading every Record's typeId:
+**An explicit, nested Bundle is never needed for ordinary top-level
+grouping.** The container root already defaults to Bundle (typeId `0`)
+for free when it has no primary content of its own (§2), and any
+Record's own subrecord slots already group Records structurally beyond
+that. An explicit Bundle *subrecord* exists for the narrower case where
+an application wants to treat a nested set of Records as a single unit
+one level down — for example, to scope a namespace override (§3.1)
+across several subrecords without repeating it on each one, or to give
+an explicit boundary a generic tool can recognize without reading every
+Record's typeId:
 
 ```
-[ namespace, 0,
-  [ 1, { 0: "scoped by bundle's namespace" } ],
-  [ 3, { 0: "same scope, no per-record namespace paid" } ]
+[ 0,
+  [ namespace, 0,
+    [ 1, { 0: "scoped by nested bundle's namespace" } ],
+    [ 3, { 0: "same scope, no per-record namespace paid" } ]
+  ],
+  [ 10, { 0: "outside the nested bundle, unaffected" } ]
 ]
 ```
 
 Prototyped in `prototype/test/bundle.test.js`: round-trip with the
 empty map omitted, an unaware decoder skipping the whole Bundle (and
-its subrecords) by Type ID alone, and the namespace-scoping claim above
-verified against `header.js`'s `resolveLookupKeysDeep`.
+its subrecords) by Type ID alone, the namespace-scoping claim above
+verified against `header.js`'s `resolveLookupKeysDeep`, and the hint/
+backup keys degrading gracefully for a decoder that doesn't recognize
+them.
 
 ### 4.7 Signature (optional)
 

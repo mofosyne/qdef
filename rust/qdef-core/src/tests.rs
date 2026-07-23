@@ -12,12 +12,8 @@ const WIFI_KNOWN_KEYS: &[i64] = &[0, 1, 2, 4];
 #[test]
 fn wifi_record_routes_and_fields_extract() {
     let container = Container::parse(WIFI_CONTAINER).expect("valid container");
-
-    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
-    assert_eq!(records.len(), 1);
-    let rec = &records[0];
-    assert_eq!(rec.type_id(), Some(Key::Uint(100)));
-    assert!(!rec.ignored);
+    let rec = container.root();
+    assert_eq!(rec.type_id(), Key::Uint(100));
 
     let outcome = check_criticality(rec.map_bytes, WIFI_KNOWN_KEYS, |_| {
         panic!("no odd keys here")
@@ -34,18 +30,13 @@ fn wifi_record_routes_and_fields_extract() {
 #[test]
 fn a_64_bit_class_private_use_type_id_decodes_correctly() {
     let container = Container::parse(LARGE_TYPE_ID_CONTAINER).expect("valid container");
-    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].type_id(), Some(Key::Uint(u64::MAX)));
-    assert!(!records[0].ignored);
+    assert_eq!(container.root().type_id(), Key::Uint(u64::MAX));
 }
 
 #[test]
 fn unrecognized_even_key_aborts_the_record() {
     let container = Container::parse(WIFI_UNKNOWN_EVEN_KEY_CONTAINER).unwrap();
-    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
-    let rec = &records[0];
-    assert!(!rec.ignored);
+    let rec = container.root();
 
     let outcome = check_criticality(rec.map_bytes, WIFI_KNOWN_KEYS, |_| {
         panic!("must not reach an odd key")
@@ -57,8 +48,7 @@ fn unrecognized_even_key_aborts_the_record() {
 #[test]
 fn unrecognized_odd_key_is_silently_ignored() {
     let container = Container::parse(WIFI_UNKNOWN_ODD_KEY_CONTAINER).unwrap();
-    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
-    let rec = &records[0];
+    let rec = container.root();
 
     let mut ignored = Vec::new();
     let outcome = check_criticality(rec.map_bytes, WIFI_KNOWN_KEYS, |k| ignored.push(k)).unwrap();
@@ -70,44 +60,51 @@ fn unrecognized_odd_key_is_silently_ignored() {
 }
 
 #[test]
-fn a_record_with_no_typeid_is_ignored() {
-    let container = Container::parse(NO_TYPEID_CONTAINER).unwrap();
-    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
-    let rec = &records[0];
-    assert!(rec.ignored);
-    assert_eq!(rec.type_id(), None);
+fn a_record_with_no_typeid_defaults_to_bundle_zero() {
+    // Forgiving-parser choice (§3.1; see docs/DESIGN.md): there is no
+    // "ignored, unroutable" state anymore -- typeId always resolves,
+    // defaulting to 0 (Bundle) when no uint is found at that position.
+    let container = Container::parse(DEFAULT_TYPEID_ZERO_CONTAINER).unwrap();
+    let rec = container.root();
+    assert_eq!(rec.type_id(), Key::Uint(0));
+    let ssid = find_value(rec.map_bytes, 0).unwrap().unwrap();
+    assert_eq!(read_definite_string(ssid).unwrap(), b"SSID");
 }
 
 #[test]
 fn one_aborted_record_does_not_affect_its_sibling() {
     let container = Container::parse(TWO_RECORD_CONTAINER).unwrap();
-    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
-    assert_eq!(records.len(), 2);
+    // No namespace at the root -- typeId defaults to 0 (Bundle) and both
+    // records become its subrecords.
+    assert_eq!(container.root().type_id(), Key::Uint(0));
+    let subs: Vec<_> = container
+        .root()
+        .subrecords()
+        .expect("two subrecords")
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(subs.len(), 2);
 
-    let first = check_criticality(records[0].map_bytes, WIFI_KNOWN_KEYS, |_| {}).unwrap();
+    let first = check_criticality(subs[0].map_bytes, WIFI_KNOWN_KEYS, |_| {}).unwrap();
     assert_eq!(first, CriticalityOutcome::Aborted(6));
 
-    assert_eq!(records[1].type_id(), Some(Key::Uint(900)));
-    assert!(!records[1].ignored);
-    let payload = find_value(records[1].map_bytes, 0).unwrap().unwrap();
+    assert_eq!(subs[1].type_id(), Key::Uint(900));
+    let payload = find_value(subs[1].map_bytes, 0).unwrap().unwrap();
     assert_eq!(read_definite_string(payload).unwrap(), b"sibling record");
 }
 
 #[test]
 fn ndef_path_bare_sequence_with_no_magic_still_routes() {
-    // Own-URI-scheme carriers never carry magic or a discriminator -- built
-    // directly via encodeRecordBytes, not by stripping magic off a full
-    // container (which would now leave the discriminator item behind).
-    let bare_seq = BARE_SEQUENCE_NO_DISCRIMINATOR;
+    // Own-URI-scheme carriers never carry magic -- structurally identical
+    // to the magic path past the magic check.
+    let bare_seq = BARE_SEQUENCE_NO_MAGIC;
     assert!(
         Container::parse(bare_seq).is_err(),
         "must not look like a valid magic-prefixed container"
     );
 
-    let records: Vec<_> = records_from_sequence(bare_seq)
-        .collect::<Result<_, _>>()
-        .unwrap();
-    assert_eq!(records[0].type_id(), Some(Key::Uint(100)));
+    let rec = record_from_sequence(bare_seq).unwrap();
+    assert_eq!(rec.type_id(), Key::Uint(100));
 }
 
 #[test]
@@ -132,9 +129,7 @@ fn bad_magic_is_rejected() {
 #[test]
 fn a_bare_array_field_value_is_legal_now_previously_disallowed_outright() {
     let container = Container::parse(ARRAY_VALUE_CONTAINER).unwrap();
-    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
-    let rec = &records[0];
-    assert!(!rec.ignored);
+    let rec = container.root();
 
     let outcome = check_criticality(rec.map_bytes, WIFI_KNOWN_KEYS, |k| assert_eq!(k, 9)).unwrap();
     assert_eq!(outcome, CriticalityOutcome::Ok);
@@ -152,9 +147,7 @@ fn a_bare_array_field_value_is_legal_now_previously_disallowed_outright() {
 #[test]
 fn structured_content_is_carried_as_an_opaque_byte_string_and_skips_at_zero_cost() {
     let container = Container::parse(BYTE_STRING_WRAPPED_VALUE_CONTAINER).unwrap();
-    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
-    let rec = &records[0];
-    assert!(!rec.ignored);
+    let rec = container.root();
 
     let outcome = check_criticality(rec.map_bytes, WIFI_KNOWN_KEYS, |k| assert_eq!(k, 9)).unwrap();
     assert_eq!(outcome, CriticalityOutcome::Ok);
@@ -167,9 +160,7 @@ fn structured_content_is_carried_as_an_opaque_byte_string_and_skips_at_zero_cost
 #[test]
 fn tag_24_wrapping_a_definite_length_string_directly_is_a_legal_field_value() {
     let container = Container::parse(TAG24_WRAPPED_VALUE_CONTAINER).unwrap();
-    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
-    let rec = &records[0];
-    assert!(!rec.ignored);
+    let rec = container.root();
 
     let outcome = check_criticality(rec.map_bytes, WIFI_KNOWN_KEYS, |k| assert_eq!(k, 9)).unwrap();
     assert_eq!(outcome, CriticalityOutcome::Ok);
@@ -183,9 +174,7 @@ fn tag_24_wrapping_a_definite_length_string_directly_is_a_legal_field_value() {
 #[test]
 fn a_tag_directly_wrapping_another_tag_is_legal_now_previously_disallowed() {
     let container = Container::parse(NESTED_TAG24_CONTAINER).unwrap();
-    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
-    let rec = &records[0];
-    assert!(!rec.ignored);
+    let rec = container.root();
 
     let outcome = check_criticality(rec.map_bytes, WIFI_KNOWN_KEYS, |k| assert_eq!(k, 9)).unwrap();
     assert_eq!(outcome, CriticalityOutcome::Ok);
@@ -200,9 +189,7 @@ fn a_tag_directly_wrapping_another_tag_is_legal_now_previously_disallowed() {
 #[test]
 fn any_tag_number_is_allowed_when_its_content_is_a_definite_length_string() {
     let container = Container::parse(OTHER_TAG_WRAPPED_VALUE_CONTAINER).unwrap();
-    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
-    let rec = &records[0];
-    assert!(!rec.ignored);
+    let rec = container.root();
 
     let outcome = check_criticality(rec.map_bytes, WIFI_KNOWN_KEYS, |k| assert_eq!(k, 9)).unwrap();
     assert_eq!(outcome, CriticalityOutcome::Ok);
@@ -217,9 +204,7 @@ fn any_tag_number_is_allowed_when_its_content_is_a_definite_length_string() {
 fn a_tag_wrapping_array_content_is_legal_now_previously_rejected_regardless_of_the_real_tag_definition(
 ) {
     let container = Container::parse(STRUCTURED_TAG_WRAPPED_VALUE_CONTAINER).unwrap();
-    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
-    let rec = &records[0];
-    assert!(!rec.ignored);
+    let rec = container.root();
 
     let outcome = check_criticality(rec.map_bytes, WIFI_KNOWN_KEYS, |k| assert_eq!(k, 9)).unwrap();
     assert_eq!(outcome, CriticalityOutcome::Ok);
@@ -233,29 +218,33 @@ fn a_tag_wrapping_array_content_is_legal_now_previously_rejected_regardless_of_t
 }
 
 #[test]
-fn container_discriminator_needs_no_interpretation_from_this_crate() {
-    let container = Container::parse(HEADER_CONTAINER).expect("valid container");
+fn root_namespace_needs_no_interpretation_from_this_crate() {
+    let container = Container::parse(ROOT_NAMESPACE_CONTAINER).expect("valid container");
+    let root = container.root();
 
-    // This crate exposes the discriminator's raw bytes (including its own
-    // CBOR head byte) and nothing more -- no namespace/hint parsing lives
-    // here, that's an optional, Record-Type-interpretation-layer concern
-    // (header.js in the Node prototype). Just confirm it's exactly the
-    // 8-byte decentralized namespace value the fixture encodes (0x48 =
-    // major type 2, length 8), split off correctly.
-    assert_eq!(
-        container.discriminator(),
-        &[0x48, 0xa9, 0xd6, 0xe1, 0xf3, 0x0b, 0x7c, 0x44, 0x82]
-    );
+    // This crate exposes the root's own namespace-pairing prefix raw and
+    // uninterpreted -- no namespace/hint parsing lives here, that's an
+    // optional, Record-Type-interpretation-layer concern. There is no
+    // separate "discriminator" item to skip anymore: this is just the
+    // root Record's own namespace field.
+    match root.local_namespace() {
+        Some(Key::ByteString(bytes)) => {
+            assert_eq!(bytes, &[0xa9, 0xd6, 0xe1, 0xf3, 0x0b, 0x7c, 0x44, 0x82])
+        }
+        other => panic!("expected ByteString local_namespace, got {:?}", other),
+    }
+    assert_eq!(root.type_id(), Key::Uint(0)); // no explicit typeId -> defaults to Bundle
 
-    // And the Records iterator starts from the *real* first Record,
-    // completely unaffected by whatever the discriminator's own shape
-    // was -- the same generic decoder, no discriminator-specific code
-    // path in how Records themselves get routed and walked.
-    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].type_id(), Some(Key::Uint(100)));
-    assert!(!records[0].ignored);
-    let ssid = find_value(records[0].map_bytes, 0).unwrap().unwrap();
+    // And its one subrecord routes completely unaffected -- the same
+    // generic decoder, no discriminator-specific code path anywhere.
+    let subs: Vec<_> = root
+        .subrecords()
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(subs.len(), 1);
+    assert_eq!(subs[0].type_id(), Key::Uint(100));
+    let ssid = find_value(subs[0].map_bytes, 0).unwrap().unwrap();
     assert_eq!(read_definite_string(ssid).unwrap(), b"SSID");
 }
 
@@ -268,14 +257,23 @@ fn container_discriminator_needs_no_interpretation_from_this_crate() {
 // ---------------------------------------------------------------------
 
 #[test]
-fn a_byte_string_typeid_is_no_longer_recognized_the_record_is_unroutable() {
-    let container =
-        Container::parse(BYTE_STRING_TYPE_ID_UNRECOGNIZED_CONTAINER).expect("valid container");
-    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
-    assert_eq!(records.len(), 1);
-    let rec = &records[0];
-    assert!(rec.ignored);
-    assert_eq!(rec.type_id(), None);
+fn a_byte_string_is_unconditionally_read_as_namespace_even_with_nothing_typeid_shaped_following() {
+    // Dropped requirement (see docs/DESIGN.md): namespace recognition no
+    // longer requires a valid typeId to immediately follow it. A byte
+    // string at this position is always the namespace; typeId then
+    // independently defaults to 0 (Bundle) since none was found.
+    let container = Container::parse(BSTR_ALWAYS_NAMESPACE_CONTAINER).expect("valid container");
+    let root = container.root();
+    match root.local_namespace() {
+        Some(Key::ByteString(bytes)) => assert_eq!(bytes, &[0xa7, 0xf9, 0x0b, 0x3c]),
+        other => panic!("expected ByteString local_namespace, got {:?}", other),
+    }
+    assert_eq!(root.type_id(), Key::Uint(0));
+    let field = find_value(root.map_bytes, 0).unwrap().unwrap();
+    assert_eq!(
+        read_definite_string(field).unwrap(),
+        b"decentralized payload"
+    );
 }
 
 #[test]
@@ -287,11 +285,8 @@ fn a_second_typeid_shaped_item_is_not_accumulated_as_a_backup_it_is_silently_ski
     // item.
     let container =
         Container::parse(SECOND_TYPE_ID_NOT_ACCUMULATED_CONTAINER).expect("valid container");
-    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
-    assert_eq!(records.len(), 1);
-    let rec = &records[0];
-    assert!(!rec.ignored);
-    assert_eq!(rec.type_id(), Some(Key::Uint(100)));
+    let rec = container.root();
+    assert_eq!(rec.type_id(), Key::Uint(100));
     assert_eq!(rec.map_bytes, &[] as &[u8]);
     assert_eq!(read_uint(rec.payload().unwrap()).unwrap(), 900);
 }
@@ -299,19 +294,16 @@ fn a_second_typeid_shaped_item_is_not_accumulated_as_a_backup_it_is_silently_ski
 #[test]
 fn namespace_prefix_yields_the_typeid_and_the_raw_namespace() {
     let container = Container::parse(NAMESPACE_PAIRING_CONTAINER).expect("valid container");
-    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
-    assert_eq!(records.len(), 1);
-    let rec = &records[0];
-    assert!(!rec.ignored);
+    let rec = container.root();
 
     // The namespace's own typeId becomes the routing typeId, exactly as
     // if it had been a bare prefix item -- routing doesn't care which
     // form produced it.
-    assert_eq!(rec.type_id(), Some(Key::Uint(1)));
+    assert_eq!(rec.type_id(), Key::Uint(1));
 
     // The leading byte string is exposed raw, uninterpreted -- this
-    // crate doesn't know it's "a namespace," just that a byte string
-    // immediately followed by a valid typeId is this shape.
+    // crate doesn't know it's "a namespace," just that a byte string at
+    // this position is this shape.
     match rec.local_namespace() {
         Some(Key::ByteString(bytes)) => assert_eq!(bytes, &[0xcd, 0xcd, 0xcd, 0xcd]),
         other => panic!("expected ByteString local_namespace, got {:?}", other),
@@ -320,25 +312,22 @@ fn namespace_prefix_yields_the_typeid_and_the_raw_namespace() {
 
 #[test]
 fn a_uint_where_a_namespace_was_intended_is_read_directly_as_the_typeid_instead() {
-    // Namespace recognition requires the array's first element to be a
+    // Namespace recognition requires the current position to hold a
     // byte string; a uint there is unconditionally valid typeID shape on
     // its own, so there is no "malformed namespace" state left over --
     // it's simply this Record's typeID (100), and the originally-
     // intended typeID (1) becomes a skipped stray item.
     let container =
         Container::parse(UINT_NAMESPACE_SLOT_UNRECOGNIZED_CONTAINER).expect("valid container");
-    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
-    let rec = &records[0];
-    assert!(!rec.ignored);
-    assert_eq!(rec.type_id(), Some(Key::Uint(100)));
+    let rec = container.root();
+    assert_eq!(rec.type_id(), Key::Uint(100));
     assert_eq!(rec.local_namespace(), None);
 }
 
 #[test]
 fn a_record_with_no_pairing_item_has_no_local_namespace() {
     let container = Container::parse(WIFI_CONTAINER).expect("valid container");
-    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
-    assert_eq!(records[0].local_namespace(), None);
+    assert_eq!(container.root().local_namespace(), None);
 }
 
 #[test]
@@ -349,9 +338,8 @@ fn namespace_pairing_stacks_with_a_map_and_a_real_present_payload() {
     // override and an ordinary field map on the same Record.
     let container =
         Container::parse(NAMESPACE_PAIRING_WITH_PAYLOAD_CONTAINER).expect("valid container");
-    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
-    let rec = &records[0];
-    assert_eq!(rec.type_id(), Some(Key::Uint(1)));
+    let rec = container.root();
+    assert_eq!(rec.type_id(), Key::Uint(1));
     assert!(rec.local_namespace().is_some());
 
     let field = find_value(rec.map_bytes, 0).unwrap().unwrap();
@@ -368,28 +356,24 @@ fn namespace_pairing_stacks_with_a_map_and_a_real_present_payload() {
 // Payload slot (§3.1): any well-formed CBOR item following the field
 // map -- the same shape rule field values already have (§3.2),
 // including another Record. `payload()` exposes the raw encoded item
-// bytes, uninterpreted; `read_definite_string`/`read_uint`/
-// `payload_as_record` peel off a specific expected shape. The NDEF-ID-
-// equivalent that previously occupied this position was removed; the
-// slot now carries opaque or plaintext content for wrapper records and
-// media.
+// bytes, uninterpreted; `read_definite_string`/`read_uint` peel off a
+// specific expected shape. The NDEF-ID-equivalent that previously
+// occupied this position was removed; the slot now carries opaque or
+// plaintext content for wrapper records and media.
 // ---------------------------------------------------------------------
 
 #[test]
 fn a_record_with_a_plain_map_and_no_payload_has_payload_absent() {
     let container = Container::parse(PLAIN_MAP_ONLY_CONTAINER).expect("valid container");
-    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
-    let rec = &records[0];
-    assert!(!rec.ignored);
-    assert_eq!(rec.type_id(), Some(Key::Uint(100)));
+    let rec = container.root();
+    assert_eq!(rec.type_id(), Key::Uint(100));
     assert_eq!(rec.payload(), None);
 }
 
 #[test]
 fn a_record_with_no_payload_has_it_absent_zero_cost_when_unused() {
     let container = Container::parse(WIFI_CONTAINER).expect("valid container");
-    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
-    assert_eq!(records[0].payload(), None);
+    assert_eq!(container.root().payload(), None);
 }
 
 #[test]
@@ -399,10 +383,8 @@ fn a_present_payload_with_no_map_at_all_is_recognized_directly_after_typeid() {
     // item right after typeId is read as payload, not skipped as an
     // unrecognized forward-compat item, when no map precedes it.
     let container = Container::parse(PAYLOAD_ONLY_NO_MAP_CONTAINER).expect("valid container");
-    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
-    let rec = &records[0];
-    assert!(!rec.ignored);
-    assert_eq!(rec.type_id(), Some(Key::Uint(8)));
+    let rec = container.root();
+    assert_eq!(rec.type_id(), Key::Uint(8));
     assert_eq!(rec.map_bytes, &[] as &[u8]);
     assert_eq!(
         read_definite_string(rec.payload().unwrap()).unwrap(),
@@ -418,10 +400,8 @@ fn map_payload_and_subrecords_all_present_on_the_same_record_the_full_grammar_at
     // the shipped Wrapper-plus-Media-Preview-subrecord pattern (§4.5).
     let container =
         Container::parse(MAP_PAYLOAD_AND_SUBRECORDS_CONTAINER).expect("valid container");
-    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
-    let rec = &records[0];
-    assert!(!rec.ignored);
-    assert_eq!(rec.type_id(), Some(Key::Uint(8)));
+    let rec = container.root();
+    assert_eq!(rec.type_id(), Key::Uint(8));
 
     let field = find_value(rec.map_bytes, 9).unwrap().unwrap();
     assert_eq!(
@@ -435,7 +415,7 @@ fn map_payload_and_subrecords_all_present_on_the_same_record_the_full_grammar_at
 
     let subrecords: Vec<_> = rec.subrecords().unwrap().collect::<Result<_, _>>().unwrap();
     assert_eq!(subrecords.len(), 1);
-    assert_eq!(subrecords[0].type_id(), Some(Key::Uint(14)));
+    assert_eq!(subrecords[0].type_id(), Key::Uint(14));
     let media_type = find_value(subrecords[0].map_bytes, 0).unwrap().unwrap();
     assert_eq!(read_definite_string(media_type).unwrap(), b"image/png");
 }
@@ -454,11 +434,11 @@ fn an_indefinite_length_payload_is_not_recognized_here_documented_node_divergenc
     // conformant encoder's own (always definite-length) output is
     // required to round-trip identically everywhere.
     //
-    // array(2) [ typeID uint(20), indefinite-length byte string "hello" ]
-    const BYTES: &[u8] = &[0x82, 0x14, 0x5f, 0x45, 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0xff];
-    let mut records = records_from_sequence(BYTES);
-    let rec = records.next().unwrap().unwrap();
-    assert_eq!(rec.type_id(), Some(Key::Uint(20)));
+    // typeID uint(20), indefinite-length byte string "hello" -- written
+    // flat (not array-wrapped), so it's the root Record directly.
+    const BYTES: &[u8] = &[0x14, 0x5f, 0x45, 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0xff];
+    let rec = record_from_sequence(BYTES).unwrap();
+    assert_eq!(rec.type_id(), Key::Uint(20));
     assert_eq!(rec.payload(), None);
 }
 
@@ -470,39 +450,43 @@ fn an_indefinite_length_payload_is_not_recognized_here_documented_node_divergenc
 // committed fixture set. See docs/FINDINGS.md.
 // ---------------------------------------------------------------------
 
-/// `[typeId(100), { 0: "SSID", -1: "wifi-record-1" }]`
+/// `typeId(100), { 0: "SSID", -1: "wifi-record-1" }` -- written flat
+/// (not array-wrapped), so it's the root Record directly.
 const RECORD_WITH_NEG_KEY: &[u8] = &[
-    0x82, 0x18, 0x64, 0xa2, 0x00, 0x64, 0x53, 0x53, 0x49, 0x44, 0x20, 0x6d, 0x77, 0x69, 0x66, 0x69,
-    0x2d, 0x72, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x2d, 0x31,
+    0x18, 0x64, 0xa2, 0x00, 0x64, 0x53, 0x53, 0x49, 0x44, 0x20, 0x6d, 0x77, 0x69, 0x66, 0x69, 0x2d,
+    0x72, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x2d, 0x31,
 ];
 
-/// RECORD_WITH_NEG_KEY immediately followed by a second, ordinary Record
-/// (`[typeId(200), { 0: "second" }]`) -- proves the Sequence survives
-/// past the negative-keyed Record, not just that Record in isolation.
+/// RECORD_WITH_NEG_KEY immediately followed by a second, ordinary,
+/// array-wrapped Record (`[typeId(200), { 0: "second" }]`) -- since the
+/// root already consumed its own typeId/map from the first two flat
+/// items, this second (array-shaped) item becomes the root's subrecord,
+/// proving the Sequence survives past the negative-keyed Record's own
+/// fields, not just that Record in isolation.
 const TWO_RECORD_SEQ_WITH_NEG_KEY: &[u8] = &[
-    0x82, 0x18, 0x64, 0xa2, 0x00, 0x64, 0x53, 0x53, 0x49, 0x44, 0x20, 0x6d, 0x77, 0x69, 0x66, 0x69,
-    0x2d, 0x72, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x2d, 0x31, 0x82, 0x18, 0xc8, 0xa1, 0x00, 0x66, 0x73,
-    0x65, 0x63, 0x6f, 0x6e, 0x64,
+    0x18, 0x64, 0xa2, 0x00, 0x64, 0x53, 0x53, 0x49, 0x44, 0x20, 0x6d, 0x77, 0x69, 0x66, 0x69, 0x2d,
+    0x72, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x2d, 0x31, 0x82, 0x18, 0xc8, 0xa1, 0x00, 0x66, 0x73, 0x65,
+    0x63, 0x6f, 0x6e, 0x64,
 ];
 
 #[test]
 fn a_negative_map_key_no_longer_hard_errors_the_whole_record() {
-    let records: Vec<_> = records_from_sequence(RECORD_WITH_NEG_KEY)
-        .collect::<Result<_, _>>()
-        .unwrap();
-    assert_eq!(records.len(), 1);
-    assert!(!records[0].ignored);
-    assert_eq!(records[0].type_id(), Some(Key::Uint(100)));
+    let rec = record_from_sequence(RECORD_WITH_NEG_KEY).unwrap();
+    assert_eq!(rec.type_id(), Key::Uint(100));
 }
 
 #[test]
-fn a_negative_map_key_no_longer_kills_decoding_of_sibling_records_in_the_same_sequence() {
-    let records: Vec<_> = records_from_sequence(TWO_RECORD_SEQ_WITH_NEG_KEY)
+fn a_negative_map_key_no_longer_kills_decoding_of_a_trailing_subrecord() {
+    let rec = record_from_sequence(TWO_RECORD_SEQ_WITH_NEG_KEY)
+        .expect("the record parses; a negint key must not abort it");
+    assert_eq!(rec.type_id(), Key::Uint(100));
+    let subs: Vec<_> = rec
+        .subrecords()
+        .expect("one subrecord")
         .collect::<Result<_, _>>()
-        .expect("both records parse; a negint key must not abort the Sequence");
-    assert_eq!(records.len(), 2);
-    assert_eq!(records[0].type_id(), Some(Key::Uint(100)));
-    assert_eq!(records[1].type_id(), Some(Key::Uint(200)));
+        .expect("subrecord parses too");
+    assert_eq!(subs.len(), 1);
+    assert_eq!(subs[0].type_id(), Key::Uint(200));
 }
 
 #[test]
@@ -510,12 +494,9 @@ fn check_criticality_treats_an_unrecognized_odd_negative_key_the_same_as_an_odd_
     // -1 is odd (§3.6's Common Field Key tier reuses the same even/odd
     // rule §3.2 already gives positive keys) -- unrecognized, it's
     // silently ignored, not skipped without a trace and not aborted.
-    let records: Vec<_> = records_from_sequence(RECORD_WITH_NEG_KEY)
-        .collect::<Result<_, _>>()
-        .unwrap();
+    let rec = record_from_sequence(RECORD_WITH_NEG_KEY).unwrap();
     let mut ignored = Vec::new();
-    let outcome =
-        check_criticality(records[0].map_bytes, WIFI_KNOWN_KEYS, |k| ignored.push(k)).unwrap();
+    let outcome = check_criticality(rec.map_bytes, WIFI_KNOWN_KEYS, |k| ignored.push(k)).unwrap();
     assert_eq!(outcome, CriticalityOutcome::Ok);
     assert_eq!(ignored, vec![-1]);
 }
@@ -523,22 +504,23 @@ fn check_criticality_treats_an_unrecognized_odd_negative_key_the_same_as_an_odd_
 /// Four fixtures pinning the raw-CBOR-argument-to-actual-value parity
 /// table directly: `Key::NegInt` carries the *raw argument* (RFC 8949
 /// §3.1: actual value is `-1 - arg`), which has the *inverse* parity of
-/// the argument itself. Each is `[typeId(100), { 0: "SSID", <key>: "a" }]`
-/// with `<key>` encoded at CBOR argument 0/1/2/3 respectively (heads
-/// 0x20/0x21/0x22/0x23) -- bytes generated from the Node prototype via
-/// an inline script, not `gen-rust-fixtures.js` (same EXPERIMENTAL
-/// status as `RECORD_WITH_NEG_KEY` above).
+/// the argument itself. Each is `typeId(100), { 0: "SSID", <key>: "a" }`
+/// (written flat, not array-wrapped) with `<key>` encoded at CBOR
+/// argument 0/1/2/3 respectively (heads 0x20/0x21/0x22/0x23) -- bytes
+/// generated from the Node prototype via an inline script, not
+/// `gen-rust-fixtures.js` (same EXPERIMENTAL status as
+/// `RECORD_WITH_NEG_KEY` above).
 const RECORD_WITH_NEG_KEY_ARG0_VALUE_NEG1_ODD: &[u8] = &[
-    0x82, 0x18, 0x64, 0xa2, 0x00, 0x64, 0x53, 0x53, 0x49, 0x44, 0x20, 0x61, 0x61,
+    0x18, 0x64, 0xa2, 0x00, 0x64, 0x53, 0x53, 0x49, 0x44, 0x20, 0x61, 0x61,
 ];
 const RECORD_WITH_NEG_KEY_ARG1_VALUE_NEG2_EVEN: &[u8] = &[
-    0x82, 0x18, 0x64, 0xa2, 0x00, 0x64, 0x53, 0x53, 0x49, 0x44, 0x21, 0x61, 0x61,
+    0x18, 0x64, 0xa2, 0x00, 0x64, 0x53, 0x53, 0x49, 0x44, 0x21, 0x61, 0x61,
 ];
 const RECORD_WITH_NEG_KEY_ARG2_VALUE_NEG3_ODD: &[u8] = &[
-    0x82, 0x18, 0x64, 0xa2, 0x00, 0x64, 0x53, 0x53, 0x49, 0x44, 0x22, 0x61, 0x61,
+    0x18, 0x64, 0xa2, 0x00, 0x64, 0x53, 0x53, 0x49, 0x44, 0x22, 0x61, 0x61,
 ];
 const RECORD_WITH_NEG_KEY_ARG3_VALUE_NEG4_EVEN: &[u8] = &[
-    0x82, 0x18, 0x64, 0xa2, 0x00, 0x64, 0x53, 0x53, 0x49, 0x44, 0x23, 0x61, 0x61,
+    0x18, 0x64, 0xa2, 0x00, 0x64, 0x53, 0x53, 0x49, 0x44, 0x23, 0x61, 0x61,
 ];
 
 #[test]
@@ -551,12 +533,10 @@ fn negint_arg_to_value_parity_table_is_computed_correctly_not_just_the_raw_args_
         (RECORD_WITH_NEG_KEY_ARG3_VALUE_NEG4_EVEN, -4, true),
     ];
     for &(bytes, value, is_even) in cases {
-        let records: Vec<_> = records_from_sequence(bytes)
-            .collect::<Result<_, _>>()
-            .unwrap();
+        let rec = record_from_sequence(bytes).unwrap();
         let mut ignored = Vec::new();
         let outcome =
-            check_criticality(records[0].map_bytes, WIFI_KNOWN_KEYS, |k| ignored.push(k)).unwrap();
+            check_criticality(rec.map_bytes, WIFI_KNOWN_KEYS, |k| ignored.push(k)).unwrap();
         if is_even {
             assert_eq!(
                 outcome,
@@ -582,24 +562,23 @@ fn negint_arg_to_value_parity_table_is_computed_correctly_not_just_the_raw_args_
 // for gen-rust-fixtures.js to cross-validate against here).
 // ---------------------------------------------------------------------
 
-/// `[typeId(100), { 0: (indefinite text string) "SSID" chunked as "SS"+"ID" }]`
-/// 0x7f = indefinite-length text string start; 0x62 "SS"; 0x62 "ID"; 0xff = break.
+/// `typeId(100), { 0: (indefinite text string) "SSID" chunked as "SS"+"ID" }`
+/// written flat, not array-wrapped. 0x7f = indefinite-length text string
+/// start; 0x62 "SS"; 0x62 "ID"; 0xff = break.
 const RECORD_WITH_INDEFINITE_STRING_VALUE: &[u8] = &[
-    0x82, 0x18, 0x64, 0xa1, 0x00, 0x7f, 0x62, 0x53, 0x53, 0x62, 0x49, 0x44, 0xff,
+    0x18, 0x64, 0xa1, 0x00, 0x7f, 0x62, 0x53, 0x53, 0x62, 0x49, 0x44, 0xff,
 ];
 
 /// Same shape, but a chunk's major type doesn't match the string's own
 /// (a byte-string chunk inside a text-string sequence) -- malformed.
 const RECORD_WITH_MISMATCHED_CHUNK_MAJOR_TYPE: &[u8] =
-    &[0x82, 0x18, 0x64, 0xa1, 0x00, 0x7f, 0x42, 0x53, 0x53, 0xff];
+    &[0x18, 0x64, 0xa1, 0x00, 0x7f, 0x42, 0x53, 0x53, 0xff];
 
 #[test]
 fn an_indefinite_length_chunked_string_field_value_is_now_skip_safe() {
-    let records: Vec<_> = records_from_sequence(RECORD_WITH_INDEFINITE_STRING_VALUE)
-        .collect::<Result<_, _>>()
+    let rec = record_from_sequence(RECORD_WITH_INDEFINITE_STRING_VALUE)
         .expect("indefinite-length string field values are legal now");
-    assert_eq!(records.len(), 1);
-    assert!(!records[0].ignored);
+    assert_eq!(rec.type_id(), Key::Uint(100));
 
     // find_value/skip_any_item correctly find where the chunked string
     // ends (right after the break byte) -- confirmed by the fact parsing
@@ -607,14 +586,13 @@ fn an_indefinite_length_chunked_string_field_value_is_now_skip_safe() {
     // deliberately does NOT handle indefinite-length strings (see its own
     // docs) -- reading the concatenated content back needs a real CBOR
     // library, same as any other exotic shape.
-    let raw = find_value(records[0].map_bytes, 0).unwrap().unwrap();
+    let raw = find_value(rec.map_bytes, 0).unwrap().unwrap();
     assert_eq!(raw, &[0x7f, 0x62, 0x53, 0x53, 0x62, 0x49, 0x44, 0xff]);
 }
 
 #[test]
 fn a_malformed_indefinite_string_chunk_sequence_is_rejected_not_silently_walked() {
-    let result: Result<Vec<_>, _> =
-        records_from_sequence(RECORD_WITH_MISMATCHED_CHUNK_MAJOR_TYPE).collect();
+    let result = record_from_sequence(RECORD_WITH_MISMATCHED_CHUNK_MAJOR_TYPE);
     assert_eq!(
         result.err(),
         Some(Error::Cbor(cbor::Error::MalformedIndefiniteString))
@@ -637,10 +615,8 @@ fn a_malformed_indefinite_string_chunk_sequence_is_rejected_not_silently_walked(
 #[test]
 fn a_subrecord_round_trips_dispatched_by_its_own_typeid() {
     let container = Container::parse(SUBRECORDS_CONTAINER).expect("valid container");
-    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
-    assert_eq!(records.len(), 1);
-    let outer = &records[0];
-    assert_eq!(outer.type_id(), Some(Key::Uint(20)));
+    let outer = container.root();
+    assert_eq!(outer.type_id(), Key::Uint(20));
 
     let subs: Vec<_> = outer
         .subrecords()
@@ -648,7 +624,7 @@ fn a_subrecord_round_trips_dispatched_by_its_own_typeid() {
         .collect::<Result<_, _>>()
         .unwrap();
     assert_eq!(subs.len(), 1);
-    assert_eq!(subs[0].type_id(), Some(Key::Uint(2)));
+    assert_eq!(subs[0].type_id(), Key::Uint(2));
     let payload = find_value(subs[0].map_bytes, 0).unwrap().unwrap();
     assert_eq!(read_definite_string(payload).unwrap(), b"fragment");
 }
@@ -656,16 +632,14 @@ fn a_subrecord_round_trips_dispatched_by_its_own_typeid() {
 #[test]
 fn a_record_with_no_subrecords_has_them_absent_zero_cost_when_unused() {
     let container = Container::parse(WIFI_CONTAINER).expect("valid container");
-    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
-    assert!(records[0].subrecords().is_none());
+    assert!(container.root().subrecords().is_none());
 }
 
 #[test]
 fn a_subrecord_can_itself_carry_a_namespace_and_its_own_further_subrecords() {
     let container = Container::parse(SUBRECORDS_WITH_NAMESPACE_CONTAINER).expect("valid container");
-    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
-    let outer = &records[0];
-    assert_eq!(outer.type_id(), Some(Key::Uint(21)));
+    let outer = container.root();
+    assert_eq!(outer.type_id(), Key::Uint(21));
 
     let subs: Vec<_> = outer
         .subrecords()
@@ -674,7 +648,7 @@ fn a_subrecord_can_itself_carry_a_namespace_and_its_own_further_subrecords() {
         .unwrap();
     assert_eq!(subs.len(), 1);
     let inner = &subs[0];
-    assert_eq!(inner.type_id(), Some(Key::Uint(1)));
+    assert_eq!(inner.type_id(), Key::Uint(1));
     match inner.local_namespace() {
         Some(Key::ByteString(bytes)) => assert_eq!(bytes, &[0xcd, 0xcd, 0xcd, 0xcd]),
         other => panic!("expected ByteString local_namespace, got {:?}", other),
@@ -686,19 +660,27 @@ fn a_subrecord_can_itself_carry_a_namespace_and_its_own_further_subrecords() {
         .collect::<Result<_, _>>()
         .unwrap();
     assert_eq!(leaf.len(), 1);
-    assert_eq!(leaf[0].type_id(), Some(Key::Uint(22)));
+    assert_eq!(leaf[0].type_id(), Key::Uint(22));
 }
 
 #[test]
 fn every_record_is_self_bounded_a_record_with_subrecords_never_bleeds_into_its_sibling() {
     let container = Container::parse(SUBRECORDS_SIBLING_CONTAINER).expect("valid container");
-    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
+    // No namespace at the root -- typeId defaults to 0 (Bundle) and both
+    // top-level records become its subrecords.
+    assert_eq!(container.root().type_id(), Key::Uint(0));
+    let records: Vec<_> = container
+        .root()
+        .subrecords()
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
     assert_eq!(records.len(), 2);
 
-    assert_eq!(records[0].type_id(), Some(Key::Uint(23)));
+    assert_eq!(records[0].type_id(), Key::Uint(23));
     assert_eq!(records[0].subrecords().unwrap().count(), 1);
 
-    assert_eq!(records[1].type_id(), Some(Key::Uint(1)));
+    assert_eq!(records[1].type_id(), Key::Uint(1));
     assert!(records[1].subrecords().is_none());
     match records[1].local_namespace() {
         Some(Key::ByteString(bytes)) => assert_eq!(bytes, &[0xcd, 0xcd, 0xcd, 0xcd]),
@@ -706,52 +688,38 @@ fn every_record_is_self_bounded_a_record_with_subrecords_never_bleeds_into_its_s
     }
 }
 
-/// `[typeId(24), { 0: "parent payload" }, [{ 0: "no typeid here" }]]` --
-/// the trailing subrecord slot holds a well-formed CBOR array whose own
-/// first (and only) element is a bare map, with nothing namespace/
-/// typeId-shaped before it: well-formed CBOR, invalid Record grammar.
+/// `typeId(24), { 0: "parent payload" }, [{ 0: "no typeid here" }]` --
+/// written flat at the root (not array-wrapped); the trailing subrecord
+/// slot holds a well-formed CBOR array whose own first (and only)
+/// element is a bare map, with no namespace/typeId-shaped item before
+/// it. No longer "malformed": typeId defaults to 0 and the map becomes
+/// that (Bundle-shaped) subrecord's own field map (see docs/DESIGN.md).
 /// Hand-constructed (not via gen-rust-fixtures.js, which has no direct
-/// way to encode a malformed subrecord).
-const RECORD_WITH_MALFORMED_SUBRECORD: &[u8] = &[
-    0x83, 0x18, 0x18, 0xa1, 0x00, 0x6e, 0x70, 0x61, 0x72, 0x65, 0x6e, 0x74, 0x20, 0x70, 0x61, 0x79,
-    0x6c, 0x6f, 0x61, 0x64, 0x81, 0xa1, 0x00, 0x6e, 0x6e, 0x6f, 0x20, 0x74, 0x79, 0x70, 0x65, 0x69,
-    0x64, 0x20, 0x68, 0x65, 0x72, 0x65,
-];
-
-/// `[typeId(1), { 0: "sibling payload" }]` immediately following
-/// RECORD_WITH_MALFORMED_SUBRECORD in the same Sequence.
-const SIBLING_AFTER_MALFORMED_SUBRECORD: &[u8] = &[
-    0x82, 0x01, 0xa1, 0x00, 0x6f, 0x73, 0x69, 0x62, 0x6c, 0x69, 0x6e, 0x67, 0x20, 0x70, 0x61, 0x79,
-    0x6c, 0x6f, 0x61, 0x64,
+/// way to encode a bare-map-only subrecord).
+const RECORD_WITH_DEFAULTING_SUBRECORD: &[u8] = &[
+    0x18, 0x18, 0xa1, 0x00, 0x6e, 0x70, 0x61, 0x72, 0x65, 0x6e, 0x74, 0x20, 0x70, 0x61, 0x79, 0x6c,
+    0x6f, 0x61, 0x64, 0x81, 0xa1, 0x00, 0x6e, 0x6e, 0x6f, 0x20, 0x74, 0x79, 0x70, 0x65, 0x69, 0x64,
+    0x20, 0x68, 0x65, 0x72, 0x65,
 ];
 
 #[test]
-fn a_malformed_subrecord_does_not_corrupt_its_parent_or_any_sibling_top_level_record() {
+fn a_subrecord_with_no_typeid_of_its_own_defaults_to_bundle_and_never_corrupts_its_parent() {
     // Each Record's own array boundary is generic (skip_any_item, purely
     // well-formedness-based) and independent of whether its contents
-    // parse as valid Record grammar -- so the outer Sequence walker can
-    // always find the next sibling, and a malformed subrecord surfaces
-    // as that one subrecord being `ignored`, not a hard failure.
-    let mut buf = RECORD_WITH_MALFORMED_SUBRECORD.to_vec();
-    buf.extend_from_slice(SIBLING_AFTER_MALFORMED_SUBRECORD);
+    // parse as valid Record grammar -- so the outer walker can always
+    // find the next sibling.
+    let rec = record_from_sequence(RECORD_WITH_DEFAULTING_SUBRECORD).unwrap();
+    assert_eq!(rec.type_id(), Key::Uint(24));
 
-    let records: Vec<_> = records_from_sequence(&buf)
-        .collect::<Result<_, _>>()
-        .unwrap();
-    assert_eq!(records.len(), 2);
-
-    assert_eq!(records[0].type_id(), Some(Key::Uint(24)));
-    let subs: Vec<_> = records[0]
+    let subs: Vec<_> = rec
         .subrecords()
         .expect("subrecord slot present")
         .collect::<Result<_, _>>()
         .unwrap();
     assert_eq!(subs.len(), 1);
-    assert!(subs[0].ignored);
-
-    assert_eq!(records[1].type_id(), Some(Key::Uint(1)));
-    let payload = find_value(records[1].map_bytes, 0).unwrap().unwrap();
-    assert_eq!(read_definite_string(payload).unwrap(), b"sibling payload");
+    assert_eq!(subs[0].type_id(), Key::Uint(0));
+    let field = find_value(subs[0].map_bytes, 0).unwrap().unwrap();
+    assert_eq!(read_definite_string(field).unwrap(), b"no typeid here");
 }
 
 // ---------------------------------------------------------------------
@@ -766,9 +734,8 @@ fn a_malformed_subrecord_does_not_corrupt_its_parent_or_any_sibling_top_level_re
 fn a_map_shaped_payload_with_no_other_fields_gets_an_explicit_empty_field_map() {
     let container =
         Container::parse(MAP_SHAPED_PAYLOAD_NO_FIELDS_CONTAINER).expect("valid container");
-    let records: Vec<_> = container.records().collect::<Result<_, _>>().unwrap();
-    let rec = &records[0];
-    assert_eq!(rec.type_id(), Some(Key::Uint(20)));
+    let rec = container.root();
+    assert_eq!(rec.type_id(), Key::Uint(20));
     // The field Map is present but empty -- not absent -- disambiguating
     // it from the map-shaped payload that follows.
     assert_eq!(rec.map_bytes, &[0xa0][..]);
@@ -777,17 +744,17 @@ fn a_map_shaped_payload_with_no_other_fields_gets_an_explicit_empty_field_map() 
     assert_eq!(payload[0] >> 5, 5, "payload's own major type is map (5)");
 }
 
-/// `[20, { 0: "image/png" }, [6, { 0: "image/png" }], [7, { 0: "extra" }]]`
+/// `20, { 0: "image/png" }, [6, { 0: "image/png" }], [7, { 0: "extra" }]`
+/// written flat at the root.
 #[test]
 fn a_bare_array_right_after_the_map_is_always_subrecord_0_never_payload() {
     let bytes: &[u8] = &[
-        0x84, 0x14, 0xa1, 0x00, 0x69, 0x69, 0x6d, 0x61, 0x67, 0x65, 0x2f, 0x70, 0x6e, 0x67, 0x82,
-        0x06, 0xa1, 0x00, 0x69, 0x69, 0x6d, 0x61, 0x67, 0x65, 0x2f, 0x70, 0x6e, 0x67, 0x82, 0x07,
-        0xa1, 0x00, 0x65, 0x65, 0x78, 0x74, 0x72, 0x61,
+        0x14, 0xa1, 0x00, 0x69, 0x69, 0x6d, 0x61, 0x67, 0x65, 0x2f, 0x70, 0x6e, 0x67, 0x82, 0x06,
+        0xa1, 0x00, 0x69, 0x69, 0x6d, 0x61, 0x67, 0x65, 0x2f, 0x70, 0x6e, 0x67, 0x82, 0x07, 0xa1,
+        0x00, 0x65, 0x65, 0x78, 0x74, 0x72, 0x61,
     ];
-    let mut records = records_from_sequence(bytes);
-    let rec = records.next().unwrap().unwrap();
-    assert_eq!(rec.type_id(), Some(Key::Uint(20)));
+    let rec = record_from_sequence(bytes).unwrap();
+    assert_eq!(rec.type_id(), Key::Uint(20));
     assert!(rec.payload().is_none());
 
     let subs: Vec<_> = rec
@@ -796,6 +763,6 @@ fn a_bare_array_right_after_the_map_is_always_subrecord_0_never_payload() {
         .collect::<Result<_, _>>()
         .unwrap();
     assert_eq!(subs.len(), 2);
-    assert_eq!(subs[0].type_id(), Some(Key::Uint(6)));
-    assert_eq!(subs[1].type_id(), Some(Key::Uint(7)));
+    assert_eq!(subs[0].type_id(), Key::Uint(6));
+    assert_eq!(subs[1].type_id(), Key::Uint(7));
 }

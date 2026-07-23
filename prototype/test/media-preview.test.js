@@ -38,7 +38,6 @@ test('Media Preview round-trips with a Media Payload subrecord', () => {
   });
 
   const rec = core.decodeRecordBytes(bytes);
-  assert.equal(rec.ignored, false);
   assert.equal(rec.typeId, wrappers.MEDIA_PREVIEW_TYPE);
   assert.equal(rec.map.get(0), 'text/plain');
   assert.ok(rec.map.get(1).equals(hashPrefix));
@@ -103,7 +102,7 @@ test('multi-item: two independent Media Preview Records are consecutive top-leve
     subrecords: [{ typeId: wrappers.MEDIA_PAYLOAD_TYPE, fields: new Map([[0, 'image/png']]), payload: Buffer.from('content B') }],
   });
 
-  const records = core.decodeSequence(Buffer.concat([recA, recB]));
+  const records = core.decodeSequence(Buffer.concat([recA, recB])).subrecords;
   assert.equal(records.length, 2);
   assert.equal(records[0].map.get(3), 'doc.txt');
   assert.equal(records[0].subrecords[0].payload.toString(), 'content A');
@@ -117,8 +116,9 @@ test('Media Preview composes with Compress: Compress outermost, Preview as its s
   compressRec.subrecords = [
     { typeId: wrappers.MEDIA_PREVIEW_TYPE, fields: new Map([[0, 'text/plain'], [3, 'doc.txt']]) },
   ];
-  const container = core.encodeContainer([compressRec]);
-  const { records } = core.decodeContainer(container);
+  const container = core.encodeContainer({ subrecords: [compressRec] });
+  const root = core.decodeContainer(container);
+  const records = root.subrecords;
 
   const rec = core.applyCriticality(records[0], wrappers.COMPRESS_KNOWN_KEYS);
   assert.equal(rec.aborted, false);
@@ -134,8 +134,9 @@ test('Media Preview composes with Encrypt: Encrypt outermost, Preview as its sub
   encryptRec.subrecords = [
     { typeId: wrappers.MEDIA_PREVIEW_TYPE, fields: new Map([[0, 'application/octet-stream']]) },
   ];
-  const container = core.encodeContainer([encryptRec]);
-  const { records } = core.decodeContainer(container);
+  const container = core.encodeContainer({ subrecords: [encryptRec] });
+  const root = core.decodeContainer(container);
+  const records = root.subrecords;
 
   const rec = core.applyCriticality(records[0], wrappers.ENCRYPT_KNOWN_KEYS);
   assert.equal(rec.aborted, false);
@@ -158,12 +159,15 @@ test('Media Preview composes with Split: Split MUST stay outermost, Preview as i
       { typeId: wrappers.MEDIA_PREVIEW_TYPE, fields: new Map([[0, 'image/png'], [3, 'map.png']]) },
     ];
   }
-  const codes = fragments.map((frag) => core.encodeContainer([frag]));
+  // Each fragment is written flat at the root -- a single primary
+  // record (the Split fragment), no Bundle indirection (see
+  // docs/DESIGN.md) -- so resolveStack can read it directly.
+  const codes = fragments.map((frag) => core.encodeContainer(frag));
 
   // A "new" decoder can read identification straight off code 0's
   // subrecord, before any reassembly happens.
-  const { records: code0Records } = core.decodeContainer(codes[0]);
-  const preview = code0Records[0].subrecords[0];
+  const code0Root = core.decodeContainer(codes[0]);
+  const preview = code0Root.subrecords[0];
   assert.equal(preview.typeId, wrappers.MEDIA_PREVIEW_TYPE);
   assert.equal(preview.map.get(3), 'map.png');
 

@@ -2031,10 +2031,139 @@ Type, since the wire shape, skip behavior, and shared hash-derivation
 name-binding pattern (§3.5) are all identical; only the trust model and
 repetition etiquette differ (§4.4).
 
+## Root unification: the container discriminator collapsed into the ordinary Record grammar
+
+**Supersedes "Container discriminator redesign" immediately below —
+read this first.** The mandatory discriminator that section introduced
+has itself been replaced: there is no longer a separate container-level
+item at all. The container root is now an ordinary Record (§3.1),
+parsed end-of-buffer-bounded instead of by an explicit array length —
+the exact same grammar used everywhere else, applied to one more
+context. Treat every "discriminator" reference below this point as
+historical; the namespace *semantics* it carried (even/odd scoping,
+Hint-name qualification, per-code repetition) carried forward
+unchanged, landing on Bundle's own field Map (§4.6) and the ordinary
+namespace-pairing prefix (§3.1) instead of a bespoke shape.
+
+**The one grammar change that made this possible: typeId became
+optional, defaulting to `0` (Bundle) when absent.** Once that's true,
+"the container's own leading metadata" and "the container's first
+Record" stop needing to be different things — the root's own
+`namespace?`/`typeId?`/`map?`/`payload?` items are read directly off
+the Sequence, exactly like a subrecord's own items are read off its
+array, just bounded by end-of-buffer instead of an array header. A
+single primary Record (one Wi-Fi credential, one Media Payload) can now
+*be* the root directly, typeId and all, with zero indirection; several
+co-equal top-level Records fall back to typeId's default (Bundle) and
+become the root's subrecords, exactly the shape a bare CBOR Sequence of
+independent Records used to be.
+
+**The second grammar change, without which the first doesn't pay for
+itself: namespace recognition dropped its "must be immediately followed
+by a valid typeId" requirement.** A byte string at the leading position
+is now unconditionally the namespace, full stop. Keeping the old
+pairing rule while making typeId optional would have left "namespace
+present, typeId absent" as a combination the grammar simply couldn't
+express — the exact gap a version of this redesign explored by
+mistake before the rule was dropped (see FINDINGS.md). Dropping it
+costs exactly one thing: a Record whose payload happens to be
+byte-string-shaped, with no real namespace intended and typeId omitted,
+needs an explicit typeId (even `0`) to keep that payload from being
+read as a namespace instead. Every other shape (uint typeId, map,
+array subrecord) stays unambiguous by major type alone.
+
+**Where this came from.** A third-party bot's proposal
+(`PROPOSAL-implicit-bundle.md`, not committed to this repo) explored
+folding the discriminator and the top-level Sequence into "one CBOR
+item after magic, map = implicit Bundle, array = explicit Record." Its
+own cost table undercounted the common case badly — it kept the old
+namespace-pairing requirement, which meant the natural multi-record
+case (no namespace, several co-equal top-level Records) cost *more*
+than the mandatory discriminator it was replacing, once the forced
+Bundle-array wrapper was accounted for honestly against the actual
+CBOR-Sequence baseline, not against a same-format comparison that
+already assumed a Bundle wrapper on both sides. Reworking it through
+several rounds — making the root's own array implicit rather than
+explicit (matching how the top-level Sequence already worked), then
+dropping the namespace-pairing requirement once typeId's optionality
+made keeping it pointless — resolved that regression entirely: every
+scenario below is now break-even or better, not just the cases the
+original proposal's table happened to show favorably.
+
+**Wire cost, byte-counted against the mandatory-discriminator baseline
+this section supersedes (not against the original proposal's own,
+undercounted table):**
+
+| Scenario | Discriminator baseline | Root-unified | Diff |
+|---|---|---|---|
+| No namespace, single Record | `QDEF`+uint0+`[100,...]` | `QDEF`+`100,...` (flat) | **−2** (no discriminator byte, no array header) |
+| No namespace, N ≥ 2 top-level Records | `QDEF`+uint0+Rec,Rec,... | `QDEF`+Rec,Rec,... (subrecords of implicit root) | **−1** |
+| Namespace + hint, no content | `QDEF`+map{1:ns,3:hint} | `QDEF`+ns_bstr+map{3:hint} | **−1** (namespace no longer double-wrapped inside the map) |
+| Namespace + hint + one content Record | `QDEF`+map{1:ns,3:hint}+Rec | `QDEF`+ns_bstr+map{3:hint}+[Rec] | **−1** |
+| Bare namespace only, no hint, no content | `QDEF`+ns_bstr | `QDEF`+ns_bstr | **0** |
+
+No scenario regresses. This is the direct fix for the "Container
+discriminator redesign" section's own trade-off below, which explicitly
+accepted a permanent 1-byte tax on every container as the cost of
+resolving the discriminator/first-Record ambiguity structurally —
+typeId's optionality resolves the same ambiguity for free, since a
+missing typeId now has one well-defined meaning (defaults to Bundle)
+instead of being a state the grammar had to forbid.
+
+**A single primary Record needs no Bundle at all, closing a real gap
+the earlier discriminator design never addressed.** Under the mandatory
+discriminator, *every* container paid for a separate item before its
+first real Record, no matter how simple. Under root unification, "one
+Wi-Fi credential, nothing else" is `typeId, map` directly after magic —
+cheaper than plain NDEF-equivalent framing would suggest, and with the
+real typeId visible at the root, not one level down inside an implicit
+Bundle.
+
+**What stayed the same.** Namespace cascade semantics (§3.5): a
+subrecord with no override resolves against its immediate parent's
+effective namespace, recursively — unchanged, and now literally the
+*same* mechanism the root's own namespace uses to reach its
+subrecords, not a parallel one. Hint (key `3`) and backup namespace
+(key `5`) keep their key numbers, now living on Bundle's own field Map
+(§4.6) rather than a discriminator map form — namespace itself (key `1`
+in the old map form) is dropped entirely, since it's positional now,
+never a map key. Multi-code repetition requirements, the isolated-
+carrier pattern, and the hash-derivation algorithm are all unchanged.
+
+**A deliberate philosophy choice, not an oversight: typeId's default
+applies everywhere, root or subrecord, not just at the root.** A
+subrecord whose encoder forgot to write a typeId now silently becomes a
+Bundle rather than surfacing as a distinct "ignored, unroutable" state.
+Raised and accepted explicitly: parsers should be forgiving, encoders
+are responsible for their own output — the same trade this project
+already made for indefinite-length decoder tolerance (§3.1) and for
+letting field values carry any CBOR shape (FINDINGS.md), applied one
+more place.
+
+**No Rust-side change beyond the shared grammar function.**
+`rust/qdef-core` has no Type-specific logic for any Record Type — the
+same `parse_record_items` now serves the container root, the NDEF/own-
+URI body, and (via `parse_record_array`, reading past the array header
+first) every subrecord, differing only in what bounds them. No new
+dependency, no new concept for the crate to carry.
+
+Prototyped end to end: `prototype/src/core.js` (`encodeContainer`/
+`decodeContainer` now build and parse one root Record, no
+discriminator), `prototype/src/header.js` (lost `parseDiscriminator`
+entirely; `resolveLookupKeysDeep` needs no `ignored` check anymore
+since typeId always resolves), `prototype/src/wrappers.js`
+(`resolveStack` reads each code's root namespace directly), and
+`rust/qdef-core` (`Container::root()`, `record_from_sequence`, the
+shared `parse_record_items`), cross-validated against regenerated
+Node-encoded fixtures in `fixtures.rs`. See FINDINGS.md for the real
+implementation surprises this surfaced.
+
 ## Container discriminator redesign
 
-**Supersedes the optional Type `0` header documented below — read this
-first.** Everything from here down through
+**Historical — superseded by "Root unification" immediately above.**
+Kept as the real trail of reasoning that led to the mandatory
+discriminator, not as a description of current behavior; read the
+section above first. Everything from here down through
 "Own-URI-scheme carriers skip magic AND namespace-scoping" documents the
 optional-Record header design (Record Type `0`, an ordinary odd/optional
 key on an ordinary Record). That design shipped, was used in production

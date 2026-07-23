@@ -1,66 +1,18 @@
 'use strict';
-// Container discriminator (spec §3.5): the mandatory first CBOR item
-// after magic, dispatched by its own CBOR major type into one of
-// several shapes. core.js only knows how to split it off the front and
-// where it ends -- this module interprets what it means. Record-Type-
-// interpretation-specific handling (spec §3.3's optional tier), never a
-// mandatory-core concern: core.decodeContainer needs zero knowledge of
-// namespaces to do its job.
+// Namespace resolution (spec §3.5): there is no separate "container
+// discriminator" item anymore -- a Record's own namespace-pairing
+// prefix (core.js's Record.localNamespace, §3.1) is the only namespace
+// mechanism, used identically whether that Record is the container
+// root or an ordinary subrecord. This module is entirely about
+// *cascading* that value down through nesting and *resolving* it
+// against a typeId's parity; it has no shape to parse anymore -- see
+// docs/FINDINGS.md for why the discriminator collapsed into the
+// ordinary Record grammar once typeId became optional.
 //
 // Namespace IDs are always Decentralized (a byte string) -- there is no
-// Allocated (uint) namespace tier. An earlier draft gave namespace IDs
-// the same uint-or-byte-string convention as Record Type IDs; dropped
-// after checking what a real adopter (TagDrop) actually does (always
-// decentralized) and recognizing that a *namespace* has fundamentally
-// different collision-safety needs than a Type ID does: a namespace is
-// the global root of trust for everything scoped inside it, and it's
-// exactly the value that ends up baked into physical, already-printed
-// media with no way to retroactively fix a bad choice. See
-// docs/FINDINGS.md's decentralized-namespace finding for the full
-// reasoning, including the birthday-paradox math behind the 4-byte
-// self-certify floor below `HEADER_NAMESPACE_MIN_SELF_CERTIFY_BYTES`.
-//
-// Shapes, in the order a decoder checks them:
-//   uint 0                        -> no namespace declared (the common case,
-//                                    1 byte total, cheaper than the
-//                                    previous "no Type 0 present" convention
-//                                    cost -- 0 bytes -- ever was NOT: this
-//                                    trades that free case for an
-//                                    unconditionally unambiguous one; see
-//                                    DESIGN.md for why that trade was made)
-//   byte string                   -> Decentralized Namespace ID
-//                                    (self-certifying, no registry needed;
-//                                    the ONLY real namespace value shape)
-//   map                           -> full extensible form, matching what
-//                                    used to be the Type 0 Record's own
-//                                    map: {1: namespace (bstr), 3: hint
-//                                    (tstr), 5: a second, differently-
-//                                    sized bstr namespace for a length-
-//                                    promotion transition, ...future
-//                                    even/odd keys}. The ONLY way to carry
-//                                    a hint or a backup ID -- there is no
-//                                    bare positional-array shortcut for
-//                                    either (see docs/FINDINGS.md's
-//                                    discriminator-collapse finding for
-//                                    why: this item is a one-time,
-//                                    per-container cost, so the bytes a
-//                                    bespoke array shape would have saved
-//                                    were never worth extra shapes for a
-//                                    decoder to recognize).
-//   anything else (incl. arrays,  -> unrecognized shape, degrades to "no
-//   and any nonzero uint)            namespace" -- the same graceful
-//                                    degrade an absent or aborted Type 0
-//                                    Record already had, never a hard
-//                                    failure. A nonzero uint is included
-//                                    here deliberately: it used to mean
-//                                    an Allocated namespace and no longer
-//                                    means anything.
+// Allocated (uint) namespace tier. See docs/FINDINGS.md for why.
 
 const crypto = require('crypto');
-
-const HEADER_NAMESPACE_KEY = 1; // map form only: namespace (bstr)
-const HEADER_NAMESPACE_HINT_KEY = 3; // map form only: recoverable name for it
-const HEADER_NAMESPACE_BACKUP_KEY = 5; // map form only: a second bstr namespace, for a length-promotion transition
 
 // Self-certify freely at this length or longer (no registry, no
 // coordination -- pick your own bytes). Shorter than this is reserved:
@@ -75,51 +27,8 @@ const HEADER_NAMESPACE_BACKUP_KEY = 5; // map form only: a second bstr namespace
 const HEADER_NAMESPACE_MIN_SELF_CERTIFY_BYTES = 4;
 
 /**
- * Normalize the raw discriminator value returned by core.decodeContainer
- * into {namespace, hint, decentralizedBackup} (hint/decentralizedBackup
- * possibly undefined), or undefined if no namespace is declared. Absent,
- * the "uint 0" sentinel, and an unrecognized future shape (including any
- * nonzero uint -- there is no Allocated namespace tier) all mean exactly
- * the same thing to a caller: interpret every Record's Type ID globally,
- * as if this mechanism didn't exist for this container.
- */
-function parseDiscriminator(discriminator) {
-  if (discriminator === undefined) return undefined;
-
-  if (typeof discriminator === 'number' || typeof discriminator === 'bigint') {
-    // Only the zero sentinel means anything; any other uint used to be
-    // an Allocated namespace and now just degrades, same as an
-    // unrecognized shape.
-    return undefined;
-  }
-
-  if (Buffer.isBuffer(discriminator)) {
-    return { namespace: discriminator };
-  }
-
-  // Arrays are no longer a recognized discriminator shape (see the
-  // discriminator-collapse finding in docs/FINDINGS.md) -- an array here
-  // falls through to the final "unrecognized" return below, degrading
-  // gracefully to "no namespace" like any other unrecognized shape.
-
-  if (isMapLike(discriminator)) {
-    const namespace = mapGet(discriminator, HEADER_NAMESPACE_KEY);
-    if (namespace === undefined) return undefined;
-    return {
-      namespace,
-      hint: mapGet(discriminator, HEADER_NAMESPACE_HINT_KEY),
-      decentralizedBackup: mapGet(discriminator, HEADER_NAMESPACE_BACKUP_KEY),
-    };
-  }
-
-  // Text string, array, or any other shape: not a defined discriminator
-  // form -- degrades to "no namespace" (§3.5).
-  return undefined;
-}
-
-/**
  * Compares two namespace values for equality. A conformant namespace
- * value is always a Buffer now (§3.5 -- there is no Allocated/uint
+ * value is always a Buffer (§3.5 -- there is no Allocated/uint
  * namespace tier), and `===`/`!==` is never safe for that: it's
  * reference identity, not content equality, so two independently-
  * decoded Buffers holding byte-for-byte identical namespace values are
@@ -127,39 +36,16 @@ function parseDiscriminator(discriminator) {
  * length is already part of that identity for free, since two
  * different-length byte strings can never be byte-for-byte equal to
  * begin with; nothing extra needs checking for that beyond an ordinary
- * content comparison. The number/bigint branch below is defensive, not
- * a normal case: the map form's namespace key (`1`) is never type-
- * checked at the structural-decode layer, so a non-conformant encoder
- * could still put a uint there -- this just makes sure that degrades to
- * a safe, correct comparison instead of a silent bug, the same class as
- * the one this function was written to fix (FINDINGS.md).
+ * content comparison.
  */
 function namespaceEquals(a, b) {
   if (a === undefined || b === undefined) return a === b;
-  const aBuf = Buffer.isBuffer(a);
-  const bBuf = Buffer.isBuffer(b);
-  if (aBuf || bBuf) return aBuf && bBuf && a.equals(b);
-  return BigInt(a) === BigInt(b);
-}
-
-function isMapLike(item) {
-  if (item instanceof Map) return true;
-  return (
-    item !== null &&
-    typeof item === 'object' &&
-    !Buffer.isBuffer(item) &&
-    !Array.isArray(item)
-  );
-}
-
-function mapGet(mapLike, key) {
-  return mapLike instanceof Map ? mapLike.get(key) : mapLike[key];
+  return Buffer.isBuffer(a) && Buffer.isBuffer(b) && a.equals(b);
 }
 
 /**
- * Resolves the correct lookup key for a Record's Type ID, given the
- * container's normalized header (as returned by parseDiscriminator, or
- * undefined).
+ * Resolves the correct lookup key for a Record's Type ID, given its
+ * effective namespace header ({namespace: Buffer} or undefined).
  *
  * Classification (spec §3.1 -- a typeID is always a uint now; byte
  * string and text string Type IDs were both retired, see
@@ -187,13 +73,13 @@ function resolveLookupKey(header, typeId) {
 /**
  * A Record's own effective ambient header: its own namespace-pairing
  * override (core.js's Record.localNamespace, §3.1) if it declared one,
- * otherwise whatever ambient header it inherited (the container
- * discriminator for a top-level Record, or its *parent's own* effective
- * header for a subrecord -- see resolveLookupKeysDeep). A local override
- * takes priority for this one Record only; every sibling is unaffected.
+ * otherwise whatever ambient header it inherited (its *parent's own*
+ * effective header, recursively -- see resolveLookupKeysDeep). A local
+ * override takes priority for this one Record only; every sibling is
+ * unaffected.
  *
  * @param {{localNamespace?: Buffer}} record
- * @param {{namespace: Buffer, hint?: string}|undefined} ambientHeader
+ * @param {{namespace: Buffer}|undefined} ambientHeader
  */
 function effectiveHeaderForRecord(record, ambientHeader) {
   return record.localNamespace !== undefined ? { namespace: record.localNamespace } : ambientHeader;
@@ -202,48 +88,38 @@ function effectiveHeaderForRecord(record, ambientHeader) {
 /**
  * Resolves the correct lookup key for a Record, the same as
  * resolveLookupKey, but accounting for a per-Record namespace override
- * when the Record declares one. This is what makes more than one
- * namespace usable within a single container without taxing the common
- * single-namespace case: the ambient discriminator stays the cheap
- * default, and only a Record that actually wants a different namespace
- * pays anything extra for it.
+ * when the Record declares one.
  *
  * @param {{typeId: number|bigint, localNamespace?: Buffer}} record
- * @param {{namespace: Buffer, hint?: string}|undefined} containerHeader -
- *   as returned by parseDiscriminator, or undefined
+ * @param {{namespace: Buffer}|undefined} ambientHeader
  */
-function resolveLookupKeyForRecord(record, containerHeader) {
-  return resolveLookupKey(effectiveHeaderForRecord(record, containerHeader), record.typeId);
+function resolveLookupKeyForRecord(record, ambientHeader) {
+  return resolveLookupKey(effectiveHeaderForRecord(record, ambientHeader), record.typeId);
 }
 
 /**
  * Recursively resolves lookup keys for a Record and every one of its
- * subrecords (core.js's Record.subrecords, §3.1's generalized `ID[]{}`
- * shape), cascading the ambient namespace down through nesting: a
+ * subrecords, cascading the ambient namespace down through nesting: a
  * subrecord with no override of its own resolves against its
- * *immediate parent's* effective namespace, not directly against the
- * container's ambient one. A Record that pairs its own typeId with a
- * namespace therefore scopes its own subrecords too, for free, without
- * each one needing to repeat the same pairing item -- the concrete
- * amortization namespace-pairing alone doesn't get (see
- * resolveLookupKeyForRecord's own doc comment and docs/DESIGN.md's
- * "Embedded Records" entry).
+ * *immediate parent's* effective namespace, not directly against
+ * whatever the outermost ambient one was. A Record that pairs its own
+ * typeId with a namespace therefore scopes its own subrecords too, for
+ * free, without each one needing to repeat the same pairing item.
  *
- * Ignored (unroutable) Records are skipped, but their subrecords are
- * still walked -- an ignored parent's own namespace override (if any)
- * still cascades, since "ignored" only means "no typeId," not "no
- * usable namespace declaration."
+ * This is also, now, the container root's own cascade: calling this
+ * with the root Record (core.decodeContainer's return value) and no
+ * ambient header does the job a separate "container discriminator"
+ * mechanism used to -- the root's own namespace (if any) cascades to
+ * every one of its subrecords exactly like any other Record's would.
  *
  * @param {Object} record
- * @param {{namespace: Buffer, hint?: string}|undefined} ambientHeader
+ * @param {{namespace: Buffer}|undefined} ambientHeader
  * @returns {Array<{record: Object, key: Object}>} depth-first, in
- *   document order; only routable (non-ignored) Records are included.
+ *   document order.
  */
 function resolveLookupKeysDeep(record, ambientHeader, out = []) {
   const effectiveHeader = effectiveHeaderForRecord(record, ambientHeader);
-  if (!record.ignored) {
-    out.push({ record, key: resolveLookupKey(effectiveHeader, record.typeId) });
-  }
+  out.push({ record, key: resolveLookupKey(effectiveHeader, record.typeId) });
   for (const sub of record.subrecords || []) {
     resolveLookupKeysDeep(sub, effectiveHeader, out);
   }
@@ -265,12 +141,12 @@ function deriveHashId(name, byteWidth) {
 /**
  * §3.5's optional, opportunistic self-certifying strengthening for the
  * namespace field: `namespace = truncate(SHA-256(UTF-8(name)), N)`,
- * where N is simply the candidate namespace's own byte length (a
- * namespace value is always a byte string, §3.5 -- there is no uint
- * width to infer, unlike the now-retired Type Hint mechanism this
- * algorithm was first pinned for). Verification is opportunistic: no
- * hint means nothing to check, a match confirms the binding, a mismatch
- * degrades to "an unverified label," never a hard failure (§3.5).
+ * where N is simply the candidate namespace's own byte length. A hint
+ * name now lives in whatever Record's field Map carries it (e.g.
+ * Bundle's own key, §4.6) alongside the namespace-pairing prefix, not
+ * inside a separate discriminator shape. Verification is opportunistic:
+ * no hint means nothing to check, a match confirms the binding, a
+ * mismatch degrades to "an unverified label," never a hard failure.
  *
  * @param {Buffer|undefined} namespace
  * @param {string|undefined} hint
@@ -285,11 +161,7 @@ function verifyNamespaceHint(namespace, hint) {
 }
 
 module.exports = {
-  HEADER_NAMESPACE_KEY,
-  HEADER_NAMESPACE_HINT_KEY,
-  HEADER_NAMESPACE_BACKUP_KEY,
   HEADER_NAMESPACE_MIN_SELF_CERTIFY_BYTES,
-  parseDiscriminator,
   namespaceEquals,
   resolveLookupKey,
   resolveLookupKeyForRecord,
