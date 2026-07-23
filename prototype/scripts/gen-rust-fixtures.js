@@ -16,7 +16,12 @@ function rustBytes(name, buf) {
   const hex = Array.from(buf).map((b) => `0x${b.toString(16).padStart(2, '0')}`);
   const lines = [];
   for (let i = 0; i < hex.length; i += 16) lines.push('    ' + hex.slice(i, i + 16).join(', ') + ',');
-  return `pub const ${name}: &[u8] = &[\n${lines.join('\n')}\n];`;
+  // #[rustfmt::skip] keeps this item byte-identical to this script's own
+  // output no matter how short its array is -- `cargo fmt` would otherwise
+  // collapse a short array onto one line in a way this generator doesn't,
+  // and CI's fixtures-in-sync check diffs raw generator output against
+  // what's committed, not against rustfmt's opinion of it.
+  return `#[rustfmt::skip]\npub const ${name}: &[u8] = &[\n${lines.join('\n')}\n];`;
 }
 
 // --- Basic round-trip: a single Wi-Fi record, written flat at the ---
