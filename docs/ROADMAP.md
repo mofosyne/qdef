@@ -53,11 +53,18 @@ different footing than the rest of this list: it's an MVP explicitly
 scoped to the positional/checkpoint coverage strategy (NDEF Signature
 RTD parity, plus the Bundle-scoped case for free) rather than the
 general cross-tree hash-list form DESIGN.md still calls "decided, not
-yet built," and — unlike everything above — it wasn't checked against
-a real adopter's shipped need first. Built to explore the coverage
-mechanism's own dynamics ahead of an actual signing request, a
-deliberate, acknowledged departure from the discipline the rest of
-this document holds to (see FINDINGS.md #50).
+yet built," and it was built to explore the coverage mechanism's own
+dynamics ahead of an actual signing request rather than a real
+adopter's shipped need — a deliberate, acknowledged departure from the
+discipline the rest of this document holds to (FINDINGS.md #50).
+Checked against `mofosyne/tagdrop`'s real signed set immediately
+after: confirms the MVP's own stated boundary exactly (their Records
+sit at heterogeneous, Split-dependent nesting depths this positional
+form can't express) and surfaces two further gaps the still-unbuilt
+hash-list direction doesn't close either — a deliberate cost split
+between cheap-repeated and expensive-once fields, and a non-
+strippability guarantee neither Sign direction currently has
+(FINDINGS.md #51). Both flagged as open, not glossed over.
 
 **Format-wide mechanisms resolved and prototyped:** every Record is now
 exactly one self-delimited CBOR array (§3.1) — `[namespace?, typeId,
