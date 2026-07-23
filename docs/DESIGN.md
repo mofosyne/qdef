@@ -1771,6 +1771,31 @@ design precedent, not as evidence of real-world demand for any one of
 them; issue #32 found no solid data on how widely Signature RTD is
 actually deployed.
 
+**A fourth strategy: positional, but scoped to one subrecord list, not
+an app convention.** A middle path between TagDrop's declined nested
+form and NFC Forum's whole-Sequence checkpoint: a spec-defined
+Signature Type that, appearing as a subrecord, covers every subrecord
+before it within that same parent's subrecord list. It differs from
+TagDrop's declined form in the one respect that mattered there: the
+coverage rule lives in QDEF's own spec, not an app's, so any
+QDEF-aware decoder — not just one that already speaks TagDrop's
+convention — can check it, satisfying the same generic-decodability
+bar the hash-list form was built to meet. It differs from the
+hash-list form by needing zero coverage-identification bytes: covered
+subrecords are already a contiguous, self-delimiting run of items
+inside the parent's own array, concatenable and signable directly, no
+list and no re-serialized header needed (the deep-coverage bullet
+above already establishes that this concatenation needs no new array
+wrapper). Two limits, not open questions: coverage can only span
+subrecords sharing one immediate parent — it cannot reach TagDrop's
+own actual case (three top-level sibling Records with no common
+parent), which stays the hash-list form's job — and it carries the
+same insertion/reorder fragility as any positional scheme, just with a
+smaller blast radius (one subrecord list, not the whole container).
+Recorded as a fourth, narrower-scope option for "sign a tight group of
+subrecords under one parent" specifically, not a replacement for the
+hash-list form's general case, and not yet built.
+
 **Coverage-identification scheme — direction decided, not yet built.**
 Cover by content hash of each covered Record's own canonical bytes,
 never by Sequence index: an index breaks the moment anything is
