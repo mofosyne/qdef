@@ -2662,3 +2662,46 @@ DESIGN.md: this is the first Sign work done without a real adopter's
 shipped need behind it — built to explore the coverage mechanism's own
 dynamics, an acknowledged, deliberate departure from the "wait for real
 demand" discipline every other entry in this file was held to.
+
+### 51. TagDrop's real signed set corrected an earlier entry's own claim, and confirmed the Signature MVP's scope boundary exactly where predicted — but also found two gaps the still-unbuilt hash-list direction doesn't close either
+
+Presenting the positional Signature MVP (#50) to `mofosyne/tagdrop`
+for feedback did two things at once: confirmed the MVP's own stated
+limit, and corrected a factual claim this file's own DESIGN.md entry
+had been carrying since before this session. The earlier text
+described TagDrop's signed set as "three sibling Records, only one of
+which the signature happens to nest inside." That was wrong — the real
+shape is `SHA-256(MediaPreview' || MediaPayload'' || Extension')`,
+three Records whose relative nesting depth isn't fixed and changes
+between single-code and Split: single code, Content Extension and
+Media Preview are top-level siblings and Media Payload nests one level
+deeper inside Media Preview; under Split, Media Preview itself becomes
+Split's own subrecord, and Media Payload isn't a decodable Record in
+any single code's array at all — only opaque, fragmented bytes inside
+Split's payload slot until several codes reassemble. Positional-
+within-one-array can't express either shape, confirming the MVP's own
+documented boundary exactly, not a surprise.
+
+What wasn't already known: two more mismatches that the still-unbuilt
+hash-list direction doesn't resolve either, so "just build the
+hash-list form" isn't a full answer, only a partial one. First, a
+deliberate cost split — TagDrop keeps `signature_algorithm`/
+`signer_id` cheap and repeated (on Content Extension, present on every
+physical code) but `signature`/`signer_pubkey` (3.7 KB) paid once,
+nested in Media Payload; both the shipped MVP and the hash-list sketch
+bundle algorithm+pubkey+signature into one Record, with no way to
+split cheap metadata from expensive payload across two. Second,
+non-strippability — TagDrop's signature is nested inside what gets
+hashed and Split-fragmented, so removing it breaks reassembly, not a
+silent downgrade to unsigned; both the shipped positional form and the
+hash-list sibling form are equally strippable, since a sibling Record
+is always deletable without disturbing anything else by construction.
+
+No code changes from this entry — DESIGN.md's "Sign-as-nested-
+subrecord" paragraph corrected with the accurate shape, and a new
+paragraph added recording the cost-split and non-strippability gaps as
+open, not glossed over as "the hash-list form will handle it." Net
+effect on scope: unchanged. The MVP was already documented as not
+reaching TagDrop's case; this is the real-adopter check that confirms
+it precisely, and sharpens what "the general form" actually needs to
+be before it's worth building.

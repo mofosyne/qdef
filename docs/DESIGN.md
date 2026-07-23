@@ -1749,15 +1749,26 @@ it first looks like, and that is the finding:
   than the hash-list sibling form for a fixed, known coverage set (no
   `N × 32` bytes of hashes to store or check), but less general:
   verifiable only by a decoder that already knows the app-specific
-  coverage convention (TagDrop's actual signed set is three sibling
-  Records, only one of which the signature happens to nest inside —
-  the nesting position says where the signature bytes travel on the
-  wire, not what's covered). Declined as QDEF's own primitive because
-  it loses the one property a generic QDEF-level Sign mechanism exists
-  to provide: "any QDEF-aware decoder can check this," not just one
-  that already speaks the specific app's convention. Recorded here as
-  a live tradeoff future adopters weighing the same choice should see,
-  not as evidence the hash-list direction was wrong.
+  coverage convention. **Their actual signed set, corrected after a
+  detailed real-adopter check against the Signature (Type `16`) MVP
+  (below) — not three sibling Records as an earlier pass here claimed:**
+  `SHA-256(MediaPreview' || MediaPayload'' || Extension')`, three
+  Records whose relative nesting isn't fixed, changing shape between
+  single-code and Split. Single code: Content Extension and Media
+  Preview are both top-level siblings; Media Payload is one level
+  deeper, nested as Media Preview's own subrecord. Split (multi-code):
+  Content Extension stays top-level, but Media Preview becomes Split's
+  own subrecord instead, and Media Payload isn't a decodable Record in
+  any single code's array at all — it exists only as opaque,
+  fragmented bytes inside Split's payload slot until several physical
+  codes are reassembled. The nesting position says where the signature
+  bytes travel on the wire, not what's covered. Declined as QDEF's own
+  primitive because it loses the one property a generic QDEF-level
+  Sign mechanism exists to provide: "any QDEF-aware decoder can check
+  this," not just one that already speaks the specific app's
+  convention. Recorded here as a live tradeoff future adopters
+  weighing the same choice should see, not as evidence the hash-list
+  direction was wrong.
 
 **A third coverage-strategy precedent, for the record.** NFC Forum's
 own Signature RTD (a sibling NDEF record, same broad family as
@@ -1866,6 +1877,50 @@ from this project's usual "wait for real demand" discipline (see
 ROADMAP.md). Key management is out of scope entirely: the Public Key
 travels raw and inline, no registry, no Key ID reference — revisit
 once an actual multi-key or key-rotation need appears.
+
+**Checked against TagDrop's real signed set — confirms the stated
+scope boundary exactly, and surfaces two further gaps the hash-list
+direction doesn't close either.** Presented with §4.7 for feedback,
+`mofosyne/tagdrop` confirmed it breaks immediately on the constraint
+already named above ("never covers a Record at a different nesting
+level") — their real shape (corrected two paragraphs up) has Media
+Payload at a *different, Split-dependent* depth than Media Preview and
+Content Extension, and under Split it isn't a decoded Record in any
+single code's array at all until reassembly. Positional-within-one-
+array cannot express this, as documented; this is confirmation, not a
+surprise. But the same check named two more mismatches that are *not*
+resolved by simply pointing at the hash-list direction, worth keeping
+open rather than glossing over:
+
+- **A deliberate cost split between cheap-repeated and expensive-once
+  fields.** TagDrop keeps `signature_algorithm`/`signer_id` on Content
+  Extension — small, repeated on every physical code, so an isolated
+  single-code scan can show "signed by X" before the rest of a
+  multi-code group arrives — while `signature`/`signer_pubkey` (3.7 KB
+  combined) live nested inside Media Payload, paid once per group
+  regardless of code count. Both the Signature MVP and the hash-list
+  sketch above bundle algorithm, public key, and signature into one
+  Record; neither supports splitting cheap metadata from expensive
+  payload across two. Not addressed by "build the hash-list form" as
+  currently sketched — a real open gap, not yet designed for.
+- **Strippability being a feature is a regression for a scheme where
+  it's baked in.** TagDrop's signature is nested inside what gets
+  hashed and Split-fragmented, so tampering with or removing it breaks
+  reassembly/verification outright, not a silent downgrade to
+  unsigned. The hash-list sibling form is exactly as strippable as the
+  positional one — deleting the sibling Record downgrades to unsigned
+  either way. Reaching TagDrop's guarantee needs the signature to be
+  load-bearing for decoding itself, a materially different property
+  neither the shipped MVP nor the still-unbuilt hash-list direction
+  currently has.
+
+Net: the positional/sibling family (both built and still-unbuilt
+directions) solves checkpoint-style coverage over a flat or shallow
+tree. TagDrop's requirement is a fixed set of Records at heterogeneous,
+Split-dependent depths, with a deliberate metadata/payload cost split
+and a non-strippability guarantee — a different problem, confirmed by
+the adopter itself, not a case for stretching the positional form to
+reach. See FINDINGS.md #51.
 
 ## Nesting order enforcement — now answered, not open
 
