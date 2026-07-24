@@ -61,12 +61,13 @@ const MAGIC = Buffer.from([0x51, 0x44, 0x45, 0x46]); // "QDEF"
  * docs/DESIGN.md's "Self-delimited root"). The root is otherwise an
  * ordinary Record: it MAY carry a real typeId of its own (a single
  * primary Record, e.g. a Media Payload, needs no Bundle indirection at
- * all -- see docs/DESIGN.md), or omit typeId to default to Bundle (0)
+ * all -- see docs/DESIGN.md), or pass `typeId: 0` explicitly for Bundle
  * when the container holds several co-equal top-level Records, which
  * then live in `subrecords`.
  *
  * @param {Object} rootRecord - same shape as encodeRecordBytes's
- *   argument (typeId now optional).
+ *   argument (typeId is a required argument on this encoder API, even
+ *   though it's optional on the wire -- see recordToItems).
  */
 function encodeContainer(rootRecord) {
   return Buffer.concat([MAGIC, encodeRecordBytes(rootRecord)]);
@@ -82,11 +83,19 @@ function encodeContainer(rootRecord) {
  * reused everywhere.
  *
  * @param {Object} record
- * @param {number|bigint} [record.typeId] - omitted entirely means "no
- *   typeId item on the wire," relying on the decoder's default (0,
- *   Bundle). Pass 0 explicitly instead of omitting it when a bstr
- *   payload with no namespace needs to be disambiguated from a leading
- *   namespace bstr (see docs/DESIGN.md).
+ * @param {number|bigint} record.typeId - REQUIRED on this encoder API,
+ *   even though the wire grammar itself makes typeId optional (§3.1):
+ *   the decoder stays forgiving of any encoder's output that omits it
+ *   (defaults to 0, Bundle), but this reference encoder refuses to
+ *   produce that omission silently, since omission-vs-intent is exactly
+ *   the one ambiguity (a bstr payload with no namespace intended,
+ *   misread as a leading namespace bstr) that can only be resolved at
+ *   the point of encoding, never decoded back out of the bytes after
+ *   the fact -- see docs/DESIGN.md's "Encoder-enforced explicit typeId"
+ *   and prototype/scripts/qdef-lint.js's own footgun-check writeup for
+ *   why a post-hoc check can't catch this. Pass `0` explicitly for a
+ *   Bundle -- still omitted from the actual wire bytes, since `0` is
+ *   indistinguishable from absent to any decoder.
  * @param {Map<number, any>} [record.fields] - omitted when empty (saves
  *   one byte per record with no fields).
  * @param {*} [record.payload] - any well-formed CBOR value EXCEPT a bare
@@ -103,6 +112,12 @@ function encodeContainer(rootRecord) {
  *   elements after the payload.
  */
 function recordToItems({ typeId, fields, payload, localNamespace, subrecords }) {
+  if (typeId === undefined) {
+    throw new Error(
+      'typeId is required on this encoder API -- pass 0 explicitly for a Bundle rather than omitting it, ' +
+        'so an accidental omission fails loudly instead of silently producing ambiguous bytes (see docs/DESIGN.md)',
+    );
+  }
   if (Array.isArray(payload)) {
     throw new Error('payload cannot be array-shaped -- use subrecords to nest a Record instead');
   }
@@ -113,7 +128,13 @@ function recordToItems({ typeId, fields, payload, localNamespace, subrecords }) 
   }
   const items = [];
   if (localNamespace !== undefined) items.push(localNamespace);
-  if (typeId !== undefined) items.push(typeId);
+  // typeId 0 (Bundle) is still omitted from the actual wire bytes when
+  // possible -- indistinguishable from absent to any decoder either way
+  // (§3.1). The check above is call-time-only, catching an omitted
+  // *argument*, not an omitted *wire item*; this is not a wire-format
+  // change. Loose equality deliberately: typeId may be a BigInt for the
+  // 0x10000+ tier (§9), and `0n` must still compare equal to `0`.
+  if (typeId != 0) items.push(typeId);
 
   const hasFields = fields !== undefined && fields.size > 0;
   const payloadIsMapShaped = payload !== undefined && isMapItem(payload);

@@ -66,6 +66,7 @@ test('NDEF path: a bare self-delimited Record array (no magic) still routes via 
 // ---------------------------------------------------------------------
 test('a totally unrecognized Record Type is skippable without inspecting its keys', () => {
   const container = core.encodeContainer({
+    typeId: 0,
     subrecords: [
       { typeId: 12345, fields: new Map([[0, 'whatever'], [2, 'nested-app-data']]) },
       { typeId: rt.WIFI_TYPE, fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) },

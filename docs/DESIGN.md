@@ -2141,6 +2141,76 @@ magic-prefixed root that isn't array-shaped), and
 match. 138 Node tests and 40 Rust tests pass; `cargo fmt`/`clippy -D
 warnings` clean.
 
+## Encoder-enforced explicit typeId — a decoder-side non-change, a reference-encoder-side safety addition
+
+**The wire grammar is untouched. `rust/qdef-core` is untouched. Every
+existing container decodes exactly as before.** `typeId` stays optional
+on the wire (§3.1) — any encoder's output that omits it still defaults
+to `0` (Bundle), the forgiving-parser choice this project deliberately
+made and has not reconsidered. What changed is narrower: the Node
+prototype's own reference encoder (`core.js`'s `recordToItems`, the
+shared internals behind `encodeContainer`/`encodeRecordBytes`) now
+requires `typeId` as an explicit call-time argument — pass `0`
+explicitly for a Bundle, rather than omitting the key and letting it
+happen implicitly. Wire bytes are identical either way: `typeId: 0` is
+still omitted from the actual CBOR output, exactly as omission already
+was, since a decoder can't tell the two apart regardless.
+
+**Why this, and not wire-level mandatory typeId, which was considered
+and rejected first.** Raised directly: since a missing typeId is the
+one footgun `prototype/scripts/qdef-lint.js`'s own writeup concluded
+can never be caught post-hoc from bytes alone (namespace-present-
+typeId-absent is genuinely ambiguous, byte-identical whether it's an
+intentional Bundle or a forgotten typeId), should the wire grammar
+itself require typeId, closing the ambiguity structurally instead of
+by convention? Checked and rejected: making typeId wire-mandatory buys
+almost nothing in decoder simplicity (the same peek-and-branch shape
+survives regardless of whether the `else` branch defaults or throws)
+while reintroducing a real, previously-eliminated failure mode — "a
+well-formed array that isn't valid Record grammar" — which the
+architecture spent real effort removing (a subrecord missing its
+typeId currently degrades gracefully to Bundle rather than aborting its
+parent; see the array-wrapping and Root Unification entries above). It
+would also cost a real byte on every Bundle-shaped Record from *any*
+compliant encoder, not just the careless ones an encoder-side check
+alone already catches, and would bind every future decoder
+implementation to reject a shape the spec currently, deliberately,
+allows.
+
+**The distinction that resolves it: decoder permissiveness and encoder
+strictness are independently choosable, and only one of them is a
+protocol commitment.** A wire-mandatory rule binds every implementer,
+forever, to reject the same shape — the highest-stakes, least-reversible
+kind of decision this project makes. An encoder-side check binds only
+this encoder, is purely additive on top of what already ships, needs no
+reciprocal support from the decoder to be valuable, and costs nothing
+in wire bytes or decoder robustness. Root Unification's own stated
+philosophy — forgiving parser, responsible encoder — already implied
+exactly this split; this entry is that philosophy actually enforced in
+code for the one case (namespace-shadow ambiguity) it was coined for in
+the first place, rather than left as prose guidance an encoder author
+could still forget.
+
+**Real churn, not a design cost.** `recordToItems` throws
+`'typeId is required...'` when the argument is omitted. Every call site
+across the prototype that previously relied on omission-means-Bundle
+(test fixtures, `gen-rust-fixtures.js`) now passes `typeId: 0`
+explicitly — mechanical, and verified to produce byte-identical output:
+regenerating `rust/qdef-core/src/fixtures.rs` after the change diffs
+clean against what's already committed. The handful of
+`prototype/test/qdef-lint.test.js` cases that specifically exercise the
+decoder's tolerance for a legitimately-omitted typeId (a bare namespace
+declaration; the namespace+hint+content shape from §3.5's own worked
+example) needed the same one-line fix, not a rewrite — the decoder-side
+behavior they're testing never moved.
+
+Prototyped in `prototype/src/core.js` (`recordToItems`'s new guard) and
+verified across all 159 Node tests (unaffected — this is a call-time
+argument requirement, not a new runtime path any existing correct
+caller could trip) plus a byte-identical `fixtures.rs` regeneration
+confirming zero wire impact. `rust/qdef-core` needed no change at all —
+it's decode-only, and the wire format didn't move.
+
 ## Root unification: the container discriminator collapsed into the ordinary Record grammar
 
 **Supersedes "Container discriminator redesign" immediately below —

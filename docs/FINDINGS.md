@@ -2943,3 +2943,43 @@ bytes (once to find a boundary, once to actually parse) — every finding
 was reported twice until a `NO_FINDINGS` sink was introduced for the
 pure-bounding calls, verified by rerunning the exact fixtures that had
 shown the duplication.
+
+### 55. Encoder-side typeId made mandatory as a call-time argument — closing exactly the ambiguity #54's own linter had to declare undecidable, without reopening the failure mode #52 deliberately closed
+
+`qdef-lint.js` (#54) had to drop its "namespace present, typeId absent"
+footgun check because the two cases it would conflate — a forgotten
+typeId, and a Bundle root's typeId, which is *always* omitted — are
+byte-identical after the fact. That check was right to be dropped: a
+linter working from bytes alone genuinely can't tell them apart. But
+the encoder that produced those bytes always could — it knows whether
+it meant to write a Bundle or forgot a typeId — and prototype/src/
+core.js's `recordToItems` wasn't making it say so.
+
+Considered first, and rejected: making typeId mandatory on the *wire*,
+so a decoder could assume slot 2 is always present. Rejected for the
+same reason #52's root unification specifically bought: the guarantee
+that any well-formed CBOR array decodes as *some* valid Record (a
+subrecord missing typeId gracefully defaults to Bundle, rather than
+corrupting a sibling's positional read) would need reopening for every
+future decoder, not just this one, and every compliant encoder's actual
+Bundle records would pay a byte tax forever to buy back a parser
+simplification that turns out not to be one — the branch shape doesn't
+shrink, only what one branch does changes.
+
+The scoped alternative: `recordToItems` now throws if `typeId` is
+`undefined` — the wire format and `rust/qdef-core`'s decoder are
+untouched, typeId 0 is still omitted from the actual bytes exactly as
+before (`typeId != 0`, loose equality deliberately, so BigInt `0n` from
+the §9 large-Type-ID tier still counts as omittable). The check is
+call-time only: an omitted *argument* now fails loudly; an omitted
+*wire item* is unaffected and indistinguishable from before. Verified
+zero wire impact directly, not assumed: `gen-rust-fixtures.js`
+regenerated `rust/qdef-core/src/fixtures.rs` byte-identical to the
+already-committed file.
+
+Fixing every call site that relied on the old omission-is-allowed
+behavior touched 13 test files and `gen-rust-fixtures.js` itself (~51
+call sites, `typeId: 0,` added at each) — real churn, not a design
+cost, and mechanical: every one of them was passing `typeId: 0`
+implicitly already, just never writing it down. All 159 Node tests
+pass afterward.

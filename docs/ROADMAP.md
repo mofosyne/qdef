@@ -132,6 +132,19 @@ the spec (see FINDINGS.md). A CDDL schema was tried first and rejected
 — see FINDINGS.md for why the standard tooling couldn't actually
 validate QDEF's grammar, not just an assumption.
 
+**The reference encoder now requires `typeId` explicitly, the wire
+format doesn't change at all.** `prototype/src/core.js`'s
+`recordToItems` throws if `typeId` is omitted at call time, closing
+exactly the ambiguity the dropped footgun check above had to declare
+undecidable from bytes alone — the encoder always knows whether it
+meant a Bundle or forgot a typeId, even when the resulting bytes can't
+say. Wire-mandatory typeId was considered and rejected first: it would
+reopen the "any well-formed array decodes as some valid Record"
+guarantee root unification specifically bought, and tax every
+compliant encoder's actual Bundle records forever. `typeId: 0` is still
+omitted from the wire exactly as before; `rust/qdef-core` and every
+existing container are untouched (see FINDINGS.md).
+
 ## Deliberately not done yet
 
 - **Sign's general cross-tree coverage (the hash-list form).** Direction

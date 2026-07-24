@@ -92,6 +92,7 @@ test('Media Preview criticality: key 0 is critical, keys 1/3/5 are optional', ()
 
 test('multi-item: two independent Media Preview Records fall back to the implicit root Bundle and become its subrecords', () => {
   const seq = core.encodeRecordBytes({
+    typeId: 0,
     subrecords: [
       {
         typeId: wrappers.MEDIA_PREVIEW_TYPE,
@@ -120,7 +121,7 @@ test('Media Preview composes with Compress: Compress outermost, Preview as its s
   compressRec.subrecords = [
     { typeId: wrappers.MEDIA_PREVIEW_TYPE, fields: new Map([[0, 'text/plain'], [3, 'doc.txt']]) },
   ];
-  const container = core.encodeContainer({ subrecords: [compressRec] });
+  const container = core.encodeContainer({ typeId: 0, subrecords: [compressRec] });
   const root = core.decodeContainer(container);
   const records = root.subrecords;
 
@@ -138,7 +139,7 @@ test('Media Preview composes with Encrypt: Encrypt outermost, Preview as its sub
   encryptRec.subrecords = [
     { typeId: wrappers.MEDIA_PREVIEW_TYPE, fields: new Map([[0, 'application/octet-stream']]) },
   ];
-  const container = core.encodeContainer({ subrecords: [encryptRec] });
+  const container = core.encodeContainer({ typeId: 0, subrecords: [encryptRec] });
   const root = core.decodeContainer(container);
   const records = root.subrecords;
 

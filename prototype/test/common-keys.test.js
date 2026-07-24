@@ -70,6 +70,7 @@ test('COMMON_KEY_ID round-trips as an NDEF-ID-equivalent correlation token betwe
   // back to typeId's default (Bundle) at the root, same as under magic
   // (see docs/DESIGN.md's "Self-delimited root").
   const seq = core.encodeRecordBytes({
+    typeId: 0,
     subrecords: [
       {
         typeId: WIFI_TYPE,

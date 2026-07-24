@@ -115,6 +115,7 @@ test('an even typeID inside a pairing is vacuous -- still always global, matchin
 
 test('FINDING: multiple namespaces coexist within one container -- the root\'s own namespace stays the cheap ambient default, one subrecord opts into a different namespace', () => {
   const container = core.encodeContainer({
+    typeId: 0,
     localNamespace: AMBIENT_NAMESPACE,
     subrecords: [
       { typeId: 1, fields: new Map([[0, 'uses ambient namespace']]) },

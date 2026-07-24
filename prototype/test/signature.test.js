@@ -21,7 +21,7 @@ test('a Signature Record verifies the exact preceding top-level Records it was b
   ];
   const signatureRecord = sig.signatureEncode(covered, privateKey);
 
-  const container = core.encodeContainer({ subrecords: [...covered, signatureRecord] });
+  const container = core.encodeContainer({ typeId: 0, subrecords: [...covered, signatureRecord] });
   const root = core.decodeContainer(container);
   const records = root.subrecords;
 
@@ -37,7 +37,7 @@ test('reordering a covered Record after signing breaks verification -- positiona
   const b = { typeId: 10, fields: new Map([[0, 'https://example.com/open']]) };
   const signatureRecord = sig.signatureEncode([a, b], privateKey);
 
-  const container = core.encodeContainer({ subrecords: [b, a, signatureRecord] }); // swapped
+  const container = core.encodeContainer({ typeId: 0, subrecords: [b, a, signatureRecord] }); // swapped
   const root = core.decodeContainer(container);
   const records = root.subrecords;
 
@@ -52,7 +52,7 @@ test('inserting an unrelated Record between signing and verification breaks it t
   const signatureRecord = sig.signatureEncode([a, b], privateKey);
   const unrelated = { typeId: 10, fields: new Map([[0, 'https://example.com/unrelated']]) };
 
-  const container = core.encodeContainer({ subrecords: [a, unrelated, b, signatureRecord] });
+  const container = core.encodeContainer({ typeId: 0, subrecords: [a, unrelated, b, signatureRecord] });
   const root = core.decodeContainer(container);
   const records = root.subrecords;
 
@@ -67,7 +67,7 @@ test('tampering with a covered Record\'s own field after signing breaks verifica
   const signatureRecord = sig.signatureEncode([a], privateKey);
 
   const tampered = { typeId: rt.WIFI_TYPE, fields: new Map([[0, 'SSID-tampered'], [2, 'pass'], [4, 2]]) };
-  const container = core.encodeContainer({ subrecords: [tampered, signatureRecord] });
+  const container = core.encodeContainer({ typeId: 0, subrecords: [tampered, signatureRecord] });
   const root = core.decodeContainer(container);
   const records = root.subrecords;
 
@@ -80,7 +80,7 @@ test('a decoder with no interest in Signature skips the whole Record cleanly by 
   const a = { typeId: 10, fields: new Map([[0, 'https://example.com/open']]) };
   const signatureRecord = sig.signatureEncode([a], privateKey);
 
-  const container = core.encodeContainer({ subrecords: [a, signatureRecord] });
+  const container = core.encodeContainer({ typeId: 0, subrecords: [a, signatureRecord] });
   const root = core.decodeContainer(container);
   const records = root.subrecords;
 
@@ -101,7 +101,7 @@ test('a Signature nested as a subrecord covers only its own parent\'s preceding 
   const bundleSignature = sig.signatureEncode([inBundle, alsoInBundle], privateKey);
 
   const outsideBundle = { typeId: 10, fields: new Map([[0, 'https://example.com/outside']]) };
-  const container = core.encodeContainer({ subrecords: [
+  const container = core.encodeContainer({ typeId: 0, subrecords: [
     {
       typeId: rt.BUNDLE_TYPE,
       subrecords: [inBundle, alsoInBundle, bundleSignature],
@@ -124,7 +124,7 @@ test('two Signature Records in the same list checkpoint independently -- the sec
   const b = { typeId: 10, fields: new Map([[0, 'https://example.com/open']]) };
   const sigB = sig.signatureEncode([b], privateKey);
 
-  const container = core.encodeContainer({ subrecords: [a, sigA, b, sigB] });
+  const container = core.encodeContainer({ typeId: 0, subrecords: [a, sigA, b, sigB] });
   const root = core.decodeContainer(container);
   const records = root.subrecords;
 
@@ -149,7 +149,7 @@ test('an unsupported Algorithm value is reported, not silently treated as valid'
     payload: Buffer.alloc(64),
   };
 
-  const container = core.encodeContainer({ subrecords: [a, forgedAlgSignature] });
+  const container = core.encodeContainer({ typeId: 0, subrecords: [a, forgedAlgSignature] });
   const root = core.decodeContainer(container);
   const records = root.subrecords;
 
@@ -172,7 +172,7 @@ test('an unrecognized EVEN key in a Signature Record\'s own map aborts it via th
     payload: Buffer.alloc(64),
   };
 
-  const container = core.encodeContainer({ subrecords: [a, signatureWithUnknownCriticalField] });
+  const container = core.encodeContainer({ typeId: 0, subrecords: [a, signatureWithUnknownCriticalField] });
   const root = core.decodeContainer(container);
   const records = root.subrecords;
 

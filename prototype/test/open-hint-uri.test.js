@@ -17,7 +17,7 @@ const wrappers = require('../src/wrappers');
 // ---------------------------------------------------------------------
 
 test('a bare URI + label (no language, no action) round-trips -- the pre-existing minimal shape is unaffected', () => {
-  const container = core.encodeContainer({ subrecords: [
+  const container = core.encodeContainer({ typeId: 0, subrecords: [
     {
       typeId: wrappers.OPEN_HINT_URI_TYPE,
       fields: new Map([[0, 'https://example.com/open-this'], [1, 'Open in MyApp']]),
@@ -36,7 +36,7 @@ test('a bare URI + label (no language, no action) round-trips -- the pre-existin
 });
 
 test('language (key 3) and action (key 5) round-trip -- the Smart Poster equivalent shape', () => {
-  const container = core.encodeContainer({ subrecords: [
+  const container = core.encodeContainer({ typeId: 0, subrecords: [
     {
       typeId: wrappers.OPEN_HINT_URI_TYPE,
       fields: new Map([
@@ -58,7 +58,7 @@ test('language (key 3) and action (key 5) round-trip -- the Smart Poster equival
 });
 
 test('a decoder unaware of language/action still gets a complete, working URI and label -- the graceful-degrade guarantee both new keys were designed to preserve', () => {
-  const container = core.encodeContainer({ subrecords: [
+  const container = core.encodeContainer({ typeId: 0, subrecords: [
     {
       typeId: wrappers.OPEN_HINT_URI_TYPE,
       fields: new Map([
@@ -83,7 +83,7 @@ test('a decoder unaware of language/action still gets a complete, working URI an
 });
 
 test('multiple languages/URIs need no new mechanism -- repeated Open/Hint URI siblings, one per variant, reproduce Smart Poster multi-title and Multiple URI RTD behavior', () => {
-  const container = core.encodeContainer({ subrecords: [
+  const container = core.encodeContainer({ typeId: 0, subrecords: [
     {
       typeId: wrappers.OPEN_HINT_URI_TYPE,
       fields: new Map([[0, 'https://example.com/open-this'], [1, 'Open in MyApp'], [3, 'en']]),

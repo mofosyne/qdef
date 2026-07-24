@@ -18,6 +18,7 @@ const rt = require('../src/recordTypes');
 test('a namespace on the root Record round-trips, no hint, with one content subrecord', () => {
   const namespace = Buffer.from('663c1cf2', 'hex');
   const container = core.encodeContainer({
+    typeId: 0,
     localNamespace: namespace,
     subrecords: [{ typeId: 100, fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) }],
   });
@@ -30,6 +31,7 @@ test('a namespace on the root Record round-trips, no hint, with one content subr
 
 test('no namespace declared means the root Record simply has no localNamespace -- there is no longer a distinct "default discriminator" concept', () => {
   const container = core.encodeContainer({
+    typeId: 0,
     subrecords: [{ typeId: 100, fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) }],
   });
 
@@ -41,6 +43,7 @@ test('no namespace declared means the root Record simply has no localNamespace -
 test('the root Record\'s own map carries a namespace hint (Bundle key 3), for cases needing more than a bare namespace', () => {
   const namespace = Buffer.from('a9d6e1f30b7c4482', 'hex');
   const container = core.encodeContainer({
+    typeId: 0,
     localNamespace: namespace,
     fields: new Map([[rt.BUNDLE_HINT_KEY, 'com.example/tagdrop-paper']]),
   });
@@ -54,6 +57,7 @@ test('the root Record\'s own map also carries a second, backup namespace (Bundle
   const namespace = Buffer.from('a9d6e1f30b7c4482', 'hex'); // the new, longer namespace
   const decentralizedBackup = Buffer.from('a1b2c3d4', 'hex'); // the old, shorter one
   const container = core.encodeContainer({
+    typeId: 0,
     localNamespace: namespace,
     fields: new Map([
       [rt.BUNDLE_HINT_KEY, 'com.example/tagdrop-paper'],
@@ -68,7 +72,7 @@ test('the root Record\'s own map also carries a second, backup namespace (Bundle
 });
 
 test('a container with no content Records at all is still valid -- just a namespace declaration', () => {
-  const container = core.encodeContainer({ localNamespace: Buffer.from('663c1cf2', 'hex') });
+  const container = core.encodeContainer({ typeId: 0, localNamespace: Buffer.from('663c1cf2', 'hex') });
   const root = core.decodeContainer(container);
 
   assert.equal(root.subrecords, undefined);
@@ -77,6 +81,7 @@ test('a container with no content Records at all is still valid -- just a namesp
 
 test('the container is exactly magic + one self-delimited root Record array, no discriminator and no version byte', () => {
   const container = core.encodeContainer({
+    typeId: 0,
     subrecords: [{ typeId: 100, fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) }],
   });
 
@@ -124,6 +129,7 @@ test('no Hint name present means nothing to verify -- not-applicable, not a fail
 test('a real decoded root namespace round-trips into a verifiable Hint end to end', () => {
   const namespace = header.deriveHashId('com.example/tagdrop-paper', 8);
   const container = core.encodeContainer({
+    typeId: 0,
     localNamespace: namespace,
     fields: new Map([[rt.BUNDLE_HINT_KEY, 'com.example/tagdrop-paper']]),
   });

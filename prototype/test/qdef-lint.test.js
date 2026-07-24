@@ -41,6 +41,7 @@ test('namespace + typeId + map lints clean', () => {
 
 test('a Bundle root with subrecords lints clean', () => {
   const bytes = core.encodeContainer({
+    typeId: 0,
     subrecords: [
       { typeId: 1, fields: new Map([[0, 'a']]) },
       { typeId: 3, fields: new Map([[0, 'b']]) },
@@ -51,6 +52,7 @@ test('a Bundle root with subrecords lints clean', () => {
 
 test('nested subrecords, several levels deep, lint clean', () => {
   const bytes = core.encodeContainer({
+    typeId: 0,
     subrecords: [
       {
         typeId: 21,
@@ -75,12 +77,13 @@ test('the NDEF/own-URI path (no magic) lints clean', () => {
 });
 
 test('a bare namespace declaration with nothing else lints clean -- not a footgun, the cheapest legitimate shape (spec §3.5)', () => {
-  const bytes = core.encodeContainer({ localNamespace: Buffer.from('a7f90b3c', 'hex') });
+  const bytes = core.encodeContainer({ typeId: 0, localNamespace: Buffer.from('a7f90b3c', 'hex') });
   assert.deepEqual(lintRootBytes(bytes), []);
 });
 
 test('namespace + hint + one content subrecord (spec §3.5\'s own worked example) lints clean -- typeId is ALWAYS absent for a Bundle root, this is not ambiguous', () => {
   const bytes = core.encodeContainer({
+    typeId: 0,
     localNamespace: Buffer.from('a9d6e1f30b7c4482', 'hex'),
     fields: new Map([[3, 'com.example/tagdrop-paper']]),
     subrecords: [{ typeId: 100, fields: new Map([[0, 'SSID']]) }],
@@ -179,8 +182,9 @@ test('"namespace present, typeId absent" is deliberately NOT flagged -- undecida
   // namespace only; namespace + hint + content) -- covered above by
   // the grammar tests, repeated here to make the *absence* of this
   // check an explicit, intentional claim, not just incidental.
-  const bare = core.encodeContainer({ localNamespace: Buffer.from('a7f90b3c', 'hex') });
+  const bare = core.encodeContainer({ typeId: 0, localNamespace: Buffer.from('a7f90b3c', 'hex') });
   const withContent = core.encodeContainer({
+    typeId: 0,
     localNamespace: Buffer.from('a9d6e1f30b7c4482', 'hex'),
     fields: new Map([[3, 'hint']]),
     subrecords: [{ typeId: 100, fields: new Map([[0, 'SSID']]) }],
