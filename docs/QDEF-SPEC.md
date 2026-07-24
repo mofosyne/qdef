@@ -42,8 +42,8 @@ uints, and strings.
 
 QDEF is deliberately two things, not one:
 
-- A minimal **core format** (§3): magic framing, a CBOR Sequence of
-  Records, prefix-based Type-ID routing, and a per-key criticality
+- A minimal **core format** (§3): magic framing, a self-delimited root
+  Record, prefix-based Type-ID routing, and a per-key criticality
   rule. A parser that only implements this can route or skip any Record
   without knowing anything else about it.
 - A separate, optional **standard library** (§4): reusable building blocks
@@ -72,20 +72,21 @@ lean on instead.
 
 8-bit byte mode only — never alphanumeric; text-safety is explicitly not a
 goal. A 4-byte magic header (4 bytes total, no version byte) for instant
-optical-stream validation, followed directly by the **root Record's own
-items** — no separate discriminator, no wrapping CBOR array. The root is
-an ordinary Record (§3.1), parsed end-of-buffer-bounded rather than by an
-explicit array length: its own `namespace?`/`typeId?`/`map?`/`payload?`
-items stream directly off the CBOR Sequence (RFC 8742) that follows
-magic, and everything after them is its subrecords, each one an
-ordinary, self-delimited Record array in its own right.
+optical-stream validation, followed directly by the **root Record** —
+one self-delimited CBOR array (major type 4), the exact same shape as
+any subrecord (§3.1), holding that Record's own
+`namespace?`/`typeId?`/`map?`/`payload?`/`subrecord*` items. Self-
+delimiting the root this way means any bytes appended after the
+container are unambiguously outside it, by construction — no
+end-of-buffer guesswork, no marker needed.
 
 ```
 +----------------------+----------------------------------------------+
-|   Magic (4 bytes)     |     Root Record's own items (§3.1)            |
+|   Magic (4 bytes)     |     Root Record, one CBOR array (§3.1)        |
 +----------------------+----------------------------------------------+
-| 0x51 0x44 0x45 0x46   |  namespace?, typeId?, map?, payload?, sub*   |
-|       "QDEF"          |  (end-of-buffer-bounded, not array-wrapped)  |
+| 0x51 0x44 0x45 0x46   |  [ namespace?, typeId?, map?, payload?, sub* ]|
+|       "QDEF"          |  (self-delimited; anything after it is       |
+|                        |   provably outside the container)            |
 +----------------------+----------------------------------------------+
 ```
 
@@ -96,43 +97,44 @@ matches what the container actually holds:
 
 - **A single primary Record** (e.g. one Wi-Fi credential, one Media
   Payload) — write its own `typeId`/`map`/`payload` directly as the
-  root's items. No Bundle indirection, no wrapping array:
+  root array's items. No Bundle indirection:
   ```
-  QDEF 100 {0: "SSID", 2: "pass"}     -- one Record, typeId 100, at the root
+  QDEF [100, {0: "SSID", 2: "pass"}]   -- one Record, typeId 100, at the root
   ```
 - **Several co-equal top-level Records** (none subordinate to any
   other) — omit the root's typeId, letting it default to `0`, and give
-  each one as an explicit, self-delimited Record array; they become the
+  each one as a further element of the root array; they become the
   root's subrecords:
   ```
-  QDEF [100, {...}] [10, {...}]        -- two Records, subrecords of the
+  QDEF [[100, {...}], [10, {...}]]     -- two Records, subrecords of the
                                         --   implicit root Bundle
   ```
 
-A subrecord's own array header (its CBOR element count) is what bounds
-it — a decoder can always skip a whole subrecord generically, using
-nothing but ordinary CBOR array-skipping, without any Record-grammar
-knowledge at all.
+Both the root array and every subrecord's own array header (its CBOR
+element count) are what bound them — a decoder can always skip a whole
+Record generically, using nothing but ordinary CBOR array-skipping,
+without any Record-grammar knowledge at all.
 
 For NFC, the magic prefix is redundant: NDEF's own MIME-type field already
 identifies the payload. An NDEF record carrying QDEF content uses MIME type
-`application/vnd.qdef` with just the root Record's own items as the
-payload (the same end-of-buffer-bounded body, no magic bytes).
+`application/vnd.qdef` with the root Record's own self-delimited array as
+the payload, no magic bytes.
 
 **The same applies to an application carrying QDEF content under its own
 URI scheme** (§1's "When QDEF earns its place"): the scheme prefix
 (`myapp:...`) already identifies the payload, so the remainder is the
-same bare, end-of-buffer-bounded root body with no magic, decoded via
-the same `decodeSequence` path. See DESIGN.md for why this also affects
+same self-delimited root array with no magic, decoded via the same
+`decodeSequence` path. See DESIGN.md for why this also affects
 even-Type-ID collision safety on that carrier (§3.5).
 
 **No version byte.** §3.2's even/odd criticality rule already provides
 local forward compatibility; see [DESIGN.md](DESIGN.md#container-framing-choices)
 for why an earlier draft's version byte was removed.
 
-**No record count or total payload size in the header.** A CBOR Sequence
-is self-delimiting; see [DESIGN.md](DESIGN.md#container-framing-choices)
-for why these fields were deliberately left out.
+**No record count or total payload size in the header.** The root
+Record's own CBOR array is self-delimiting; see
+[DESIGN.md](DESIGN.md#container-framing-choices) for why these fields
+were deliberately left out.
 
 ## 3. The Record Architecture
 
@@ -191,13 +193,12 @@ Every Record is exactly one item list, in order: an optional namespace,
 an optional typeID-bearing item, an optional field Map (omitted when
 empty — saves one byte per record with no fields), an optional payload
 (any well-formed CBOR item except an array — §3.1's payload paragraph
-below), and zero or more subrecords. A **subrecord** is this same list
-wrapped in an explicit, definite-length CBOR array (major type 4) —
-self-bounded, so a decoder can always skip one generically. The
-**root** (§2) is this same list *without* the array wrapper, bounded by
-the end of the buffer instead: there is no separate grammar for "a
-Record at the container root" — this one, reused, either bounded by an
-explicit array or by running out of bytes.
+below), and zero or more subrecords, always wrapped in an explicit,
+definite-length CBOR array (major type 4) — self-bounded, so a decoder
+can always skip one generically. The **root** (§2) is this exact same
+array shape too: there is no separate grammar for "a Record at the
+container root" — this one, reused, self-delimiting the container the
+same way a subrecord self-delimits itself inside a larger item list.
 
 ```
 namespace?, typeId?, map?, payload?, subrecord*
@@ -386,9 +387,9 @@ the map when no payload is present, or following typeId when neither map
 nor payload is present) is itself a nested Record, recursively the same
 `namespace?, typeId?, map?, payload?, subrecord*` grammar defined in
 this section, wrapped in its own explicit, self-delimited array — there
-is no separate grammar for "a Record when it's nested," only this one,
-reused, bounded either way (an explicit array for a subrecord, the end
-of the buffer for the root, §2).
+is no separate grammar for "a Record when it's nested" or "a Record at
+the container root" (§2): this one, reused, every instance the exact
+same self-delimited CBOR array.
 
 ```
 [ 20,
@@ -419,8 +420,8 @@ see §3.1 for the even/odd classification of Type ID values, which is a
 separate convention on a separate axis.
 
 - **Even keys are CRITICAL.** An unrecognized even-numbered key MUST cause
-  the parser to abort processing *that record* (not the whole stream —
-  other records in the same Sequence are unaffected).
+  the parser to abort processing *that record* (not the whole container —
+  sibling records sharing the same array are unaffected).
 - **Odd keys are OPTIONAL.** An unrecognized odd-numbered key MUST be
   silently ignored; the rest of the record still processes normally.
 
@@ -479,7 +480,8 @@ well-formed CBOR and isolable this way — only that one Record is
 affected, never its siblings. A Record whose own array is not even
 well-formed CBOR (including a malformed indefinite-length chunk
 sequence within it) is a stronger failure: the parser cannot determine
-that boundary at all and cannot safely resume the Sequence.
+that boundary at all and cannot safely resume scanning for further
+siblings.
 
 ### 3.3 Conformance Levels
 
@@ -488,7 +490,7 @@ implementer has to bring a compression library or sector-reassembly logic
 just to support the *container*:
 
 - **Core QDEF parser (mandatory, all implementers):** verify magic, parse
-  the root Record's own items (§3.1/§2 — end-of-buffer-bounded, no
+  the root Record as one self-delimited CBOR array (§3.1/§2 — no
   separate discriminator to skip or interpret), read its typeID (and
   its subrecords' typeIDs, recursively) to route or skip, apply the
   even/odd rule (§3.2) to unrecognized keys. That's the entire surface
@@ -549,15 +551,15 @@ byte string — there is no uint (Allocated) namespace tier. See
 DESIGN.md for why.
 
 ```
-QDEF <no namespace>[100, {...}]              // no namespace: typeId 100 at the root directly
+QDEF [100, {...}]                              // no namespace: typeId 100 at the root directly
 
-QDEF h'a9d6e1f30b7c4482' [100, {...}]        // root namespace, no content of its own --
-                                              //   typeId defaults to 0 (Bundle), the Record
-                                              //   is its one subrecord
+QDEF [h'a9d6e1f30b7c4482', [100, {...}]]       // root namespace, no content of its own --
+                                                //   typeId defaults to 0 (Bundle), the Record
+                                                //   is its one subrecord
 
-QDEF h'a9d6e1f30b7c4482' {3: "com.example/tagdrop-paper"} [100, {...}]
-                                              // root namespace + hint (Bundle's own map,
-                                              //   §4.6) + one content subrecord
+QDEF [h'a9d6e1f30b7c4482', {3: "com.example/tagdrop-paper"}, [100, {...}]]
+                                                // root namespace + hint (Bundle's own map,
+                                                //   §4.6) + one content subrecord
 ```
 
 A recoverable **hint** name for a namespace, and a second, differently-
@@ -1065,7 +1067,7 @@ a plain, unwrapped Record.
 
 Unlike §4.1, this is deliberately **not** a wrapper — a plain standard record type Record
 Type meant to sit as a *sibling* alongside real content records in the same
-CBOR Sequence, carrying a URI any generic tool can follow if it doesn't
+array, carrying a URI any generic tool can follow if it doesn't
 understand anything else in the container. It's not exclusively a
 fallback: the identical Record is also the right choice for a QR code
 whose *entire* content is a single URI, with nothing else to fall back
@@ -1101,7 +1103,7 @@ DESIGN.md for why these mirror NDEF Smart Poster's own fields.
 
 **Multiple languages or URIs need no new mechanism** — repeat Open/Hint
 URI as an ordinary sibling Record, once per variant. Nothing in QDEF
-restricts how many Records of the same Type appear in one Sequence.
+restricts how many Records of the same Type appear in one array.
 
 ### 4.3 Media Payload (optional)
 
@@ -1382,7 +1384,7 @@ covers Records around it without wrapping or hiding them, so they stay
 plain and readable to a decoder that doesn't recognize Type 16 at all.
 Coverage is positional, not hash-based — a Signature Record covers
 every Record immediately preceding it **within the same array** (the
-top-level Sequence, or a shared parent's own subrecord list), since the
+root array, or a shared parent's own subrecord list), since the
 start of that array or the previous Signature Record within it,
 whichever is nearer. It never covers a Record at a different nesting
 level, its own parent's map or payload, or anything that follows it:
@@ -1429,7 +1431,7 @@ cost of the same reordering/insertion fragility any positional scheme
 carries: inserting, removing, or reordering a Record between the
 checkpoint and the Signature Record invalidates it, even if that change
 is otherwise unrelated. Scoping coverage to "same array" also bounds
-that fragility's blast radius to one list (the top-level Sequence, or
+that fragility's blast radius to one list (the root array, or
 one parent's subrecords) rather than the whole container, and confines
 what a Signature Record can cover to Records sharing one immediate
 context — it cannot reach an arbitrary cross-tree group of Records with

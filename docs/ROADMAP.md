@@ -11,13 +11,13 @@ found that prose review didn't.
 
 **The core is validated, not just written.** Magic framing, the
 unified root/subrecord Record grammar (the container root is an
-ordinary Record, parsed end-of-buffer-bounded, with typeID optional
-and defaulting to Bundle when omitted — no separate discriminator
-item), per-Record prefix typeID routing, and the even/odd criticality
-rule have each been built twice, independently — a Node prototype
-covering the full design, and a `#![no_std]`, zero-dependency Rust
-prototype of just the mandatory core that also builds for a bare-metal
-Cortex-M0 target.
+ordinary Record — one self-delimited CBOR array, the identical shape a
+subrecord already uses — with typeID optional and defaulting to Bundle
+when omitted, no separate discriminator item), per-Record prefix
+typeID routing, and the even/odd criticality rule have each been built
+twice, independently — a Node prototype covering the full design, and
+a `#![no_std]`, zero-dependency Rust prototype of just the mandatory
+core that also builds for a bare-metal Cortex-M0 target.
 Cross-validated against each other (the Rust decoder parses containers
 the Node encoder produced, not just its own output); test counts have
 grown substantially past any specific number quoted here — see each
@@ -69,18 +69,20 @@ between cheap-repeated and expensive-once fields, and a non-
 strippability guarantee neither Sign direction currently has
 (FINDINGS.md #51). Both flagged as open, not glossed over.
 
-**Format-wide mechanisms resolved and prototyped:** every subrecord is
-one self-delimited CBOR array (§3.1) — `[namespace?, typeId?, map?,
-payload?, subrecord*]`, typeId defaulting to `0` (Bundle) when
-omitted — and the container root uses the identical grammar, just
-bounded by end-of-buffer instead of an array header, so a single
-primary Record can sit flat at the root with zero indirection while
-several co-equal Records fall back to Bundle and become the root's own
-subrecords (FINDINGS.md #52, superseding the earlier mandatory
-discriminator). Any decoder can skip a whole Record it doesn't care
-about using nothing but ordinary CBOR array-skipping, with no
-Record-grammar knowledge at all, and a malformed inner Record can no
-longer corrupt discovery of its siblings (FINDINGS.md #41). Subrecords
+**Format-wide mechanisms resolved and prototyped:** every Record —
+subrecord or root alike — is one self-delimited CBOR array (§3.1) —
+`[namespace?, typeId?, map?, payload?, subrecord*]`, typeId defaulting
+to `0` (Bundle) when omitted — so a single primary Record can sit at
+the root with zero indirection while several co-equal Records fall
+back to Bundle and become the root's own subrecords (FINDINGS.md #52,
+superseding the earlier mandatory discriminator; #53 closed a real
+boundary gap in the root's own framing by array-wrapping it too, so
+bytes appended after the container are provably outside it rather than
+guessed at from where the buffer happens to end). Any decoder can skip
+a whole Record it doesn't care about using nothing but ordinary CBOR
+array-skipping, with no Record-grammar knowledge at all, and a
+malformed inner Record can no longer corrupt discovery of its siblings
+(FINDINGS.md #41). Subrecords
 generalize what was briefly a narrower `ID[]{}` mechanism into the same
 recursive grammar used everywhere else, resolving a real correlation
 problem TagDrop's own Media Preview/Payload proposal ran into. Also
@@ -115,6 +117,20 @@ surfaced a real limitation (documented, not hidden): TagDrop's
 deliberately-undeclared encryption can't map onto the Encrypt Wrapper,
 because being wrapped in a Type-`4` Record is itself a visible
 declaration — a genuine scope boundary, not a bug (FINDINGS.md #13).
+
+**A standalone grammar-and-footgun linter for any encoder's output**
+(`prototype/scripts/qdef-lint.js`), motivated by TagDrop wanting
+something bolt-on-able to their own encoder, not tied to this
+prototype's. Grammar checking mirrors `rust/qdef-core`'s own CBOR
+primitives rather than reusing `core.js` or the `cbor` npm package, so
+the algorithm — not this specific JS — is the portable artifact.
+Footgun checking (a CBOR bignum tag where a native-uint typeId was
+meant, non-canonical encoding, duplicate/misordered map keys) is
+layered on top; a "namespace present, typeId absent" check was tried
+and dropped after it fired on the single most standard root shape in
+the spec (see FINDINGS.md). A CDDL schema was tried first and rejected
+— see FINDINGS.md for why the standard tooling couldn't actually
+validate QDEF's grammar, not just an assumption.
 
 ## Deliberately not done yet
 

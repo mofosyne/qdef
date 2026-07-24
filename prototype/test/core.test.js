@@ -16,7 +16,7 @@ const rt = require('../src/recordTypes');
 
 test('a record with no typeID before the map defaults to typeId 0 (Bundle), not "ignored"', () => {
   const recordBytes = new Map([[0, 'SSID']]);
-  const container = Buffer.concat([core.MAGIC, cbor.encodeCanonical(recordBytes)]);
+  const container = Buffer.concat([core.MAGIC, cbor.encodeCanonical([recordBytes])]);
 
   const root = core.decodeContainer(container);
   assert.equal(root.typeId, 0);
@@ -44,18 +44,13 @@ test('an explicit typeId ahead of a bstr payload keeps it from being read as nam
 });
 
 // ---------------------------------------------------------------------
-// NDEF path (§2): no magic prefix, just the bare CBOR Sequence, parsed
-// exactly like the magic path past the magic check -- one Record,
-// end-of-buffer-bounded.
+// NDEF path (§2): no magic prefix, just the bare self-delimited Record
+// array, parsed exactly like the magic path past the magic check.
 // ---------------------------------------------------------------------
-test('NDEF path: a bare CBOR Sequence (no magic) still routes via decodeSequence, structurally identical to the magic path', () => {
-  // A single record written flat -- typeId and map as separate
-  // top-level Sequence items, not array-wrapped -- becomes the root
+test('NDEF path: a bare self-delimited Record array (no magic) still routes via decodeSequence, structurally identical to the magic path', () => {
+  // A single record, array-wrapped like any Record -- becomes the root
   // Record directly, no Bundle indirection (see docs/DESIGN.md).
-  const bareSeq = Buffer.concat([
-    cbor.encodeCanonical(100),
-    cbor.encodeCanonical(new Map([[0, 'SSID'], [2, 'pass'], [4, 2]])),
-  ]);
+  const bareSeq = cbor.encodeCanonical([100, new Map([[0, 'SSID'], [2, 'pass'], [4, 2]])]);
   // Sanity: this must NOT be parseable as a magic-prefixed container.
   assert.throws(() => core.decodeContainer(bareSeq), /bad magic/);
 
@@ -130,9 +125,9 @@ test('a second, would-be-backup typeID is not accumulated -- it is read as this 
   // payload now accepts any well-formed CBOR shape (§3.1/§3.2), so a
   // bare uint immediately after typeId -- with no map before it -- is
   // unconditionally this Record's payload, not a skipped stray item.
-  // 900 would have been a backup typeID, once -- written flat (not
-  // array-wrapped) so it becomes the root Record directly.
-  const recordBytes = Buffer.concat([cbor.encodeCanonical(100), cbor.encodeCanonical(900)]);
+  // 900 would have been a backup typeID, once -- array-wrapped as the
+  // root Record's own items.
+  const recordBytes = cbor.encodeCanonical([100, 900]);
   const container = Buffer.concat([core.MAGIC, recordBytes]);
 
   const root = core.decodeContainer(container);
@@ -142,7 +137,7 @@ test('a second, would-be-backup typeID is not accumulated -- it is read as this 
 });
 
 test('a map-shaped item right after typeId is always the field Map, never padding or payload', () => {
-  const recordBytes = Buffer.concat([cbor.encodeCanonical(100), cbor.encodeCanonical(new Map([[0, 'SSID']]))]);
+  const recordBytes = cbor.encodeCanonical([100, new Map([[0, 'SSID']])]);
   const container = Buffer.concat([core.MAGIC, recordBytes]);
 
   const root = core.decodeContainer(container);
@@ -167,4 +162,34 @@ test('an indefinite-length payload candidate is recognized as payload -- decoder
   assert.equal(rec.typeId, 20);
   assert.ok(Buffer.isBuffer(rec.payload));
   assert.equal(rec.payload.toString(), 'hello');
+});
+
+// ---------------------------------------------------------------------
+// Self-delimited root (see docs/DESIGN.md): the root is one CBOR array,
+// exactly like a subrecord, so bytes appended after it are provably
+// outside the container -- not end-of-buffer guesswork, and not
+// required to even be valid CBOR themselves.
+// ---------------------------------------------------------------------
+
+test('bytes appended after the root array, both magic-prefixed and NDEF/own-URI, are ignored -- not decode errors, not misread as more subrecords', () => {
+  const container = core.encodeContainer({ typeId: 100, fields: new Map([[0, 'SSID']]) });
+  const seq = core.encodeRecordBytes({ typeId: 100, fields: new Map([[0, 'SSID']]) });
+
+  // Trailing bytes that are themselves well-formed CBOR (a second,
+  // independent top-level item) must NOT be picked up as a subrecord --
+  // the root array already declared its own element count.
+  const validCborTrailer = cbor.encodeCanonical('not part of this container');
+  const withValidTrailer = core.decodeContainer(Buffer.concat([container, validCborTrailer]));
+  assert.equal(withValidTrailer.typeId, 100);
+  assert.equal(withValidTrailer.subrecords, undefined);
+
+  // Trailing bytes that AREN'T even valid CBOR (e.g. TagDrop's own
+  // deniability use case: a second, differently-encrypted payload
+  // appended after a visible one) must not throw either.
+  const junkTrailer = Buffer.from([0xff, 0xff, 0xff, 0x00, 0x01, 0x02]);
+  const withJunkTrailer = core.decodeContainer(Buffer.concat([container, junkTrailer]));
+  assert.equal(withJunkTrailer.typeId, 100);
+
+  const seqWithJunkTrailer = core.decodeSequence(Buffer.concat([seq, junkTrailer]));
+  assert.equal(seqWithJunkTrailer.typeId, 100);
 });

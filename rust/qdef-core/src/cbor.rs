@@ -39,6 +39,11 @@ pub enum Error {
     UnexpectedBreak,
     /// `skip_any_item` ran out of nesting depth (stack overflow guard).
     DepthOverflow,
+    /// The item at the start of a self-delimited Record body (the
+    /// container root, an NDEF/own-URI body) wasn't a definite-length
+    /// array -- every Record, root included, is exactly one such array
+    /// (see docs/DESIGN.md's "Self-delimited root").
+    NotAnArray,
 }
 
 pub(crate) struct Head {

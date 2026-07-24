@@ -10,10 +10,11 @@ found.
 
 - `src/core.js` — the mandatory core: magic framing, the unified root/
   subrecord Record grammar (the container root is an ordinary Record,
-  parsed end-of-buffer-bounded — no separate discriminator item),
-  per-Record prefix typeID recognition (optional, defaulting to `0`/
-  Bundle when omitted; a bare uint, or a namespace-pairing array), the
-  optional payload slot, and the even/odd criticality rule (spec §2–§3).
+  one self-delimited CBOR array — the identical shape a subrecord
+  already uses, no separate discriminator item), per-Record prefix
+  typeID recognition (optional, defaulting to `0`/Bundle when omitted;
+  a bare uint, or a namespace-pairing array), the optional payload
+  slot, and the even/odd criticality rule (spec §2–§3).
   No knowledge of any specific Record Type. Encodes every Record with
   RFC 8949 §4.2.1 canonical CBOR (spec §3.4), not just whatever the
   `cbor` package's default encoder happens to produce.
@@ -37,6 +38,20 @@ found.
   verify a hash-derived Namespace ID from a name (spec §3.5). Decentralized
   Record Type IDs no longer exist as a mechanism, so these are
   namespace-only now.
+- `scripts/qdef-lint.js` — a standalone, dependency-free grammar-and-
+  footgun checker for arbitrary QDEF bytes from *any* encoder, not just
+  this prototype's own (`node scripts/qdef-lint.js [--no-magic]
+  <file|hex>`). Two separate layers: grammar checking (well-formed per
+  §3.1/§2, no Record-Type semantics, mirroring `rust/qdef-core`'s own
+  CBOR primitives so the algorithm — not this specific JS — is what's
+  meant to be portable) and footgun checking (patterns that are legal
+  CBOR but almost certainly a mistake, each traced to a real bug in
+  `docs/FINDINGS.md`, not invented for this tool). Considered and
+  rejected: a CDDL schema instead of a hand-written checker — the
+  standard Rust `cddl` implementation (two major versions tested)
+  can't correctly validate an array with more than one optional slot
+  occupied, which is QDEF's normal case, not an edge case; see
+  `docs/FINDINGS.md`.
 - `scripts/gen-rust-fixtures.js` — generates `rust/qdef-core/src/fixtures.rs`
   from this prototype's own canonical encoder, so the independently
   hand-rolled Rust decoder is cross-validated against independently
@@ -46,7 +61,10 @@ found.
   Split(parity)→Encrypt→plain stack with fragment-drop recovery, and the
   even/odd criticality rule.
 - `test/core.test.js` — Record Type ID routing edge cases, the NDEF
-  no-magic path, and the streaming-decode claim.
+  no-magic path, the streaming-decode claim, and the self-delimited
+  root's actual guarantee: bytes appended after the root array, valid
+  CBOR or not, are provably ignored on both the magic and NDEF/own-URI
+  paths.
 - `test/header.test.js` — root/subrecord namespace recognition and
   graceful degrade, namespace-Hint hash-derivation verification, and
   namespace-scoped Type ID lookup-key resolution.
@@ -104,6 +122,14 @@ found.
   encoder rather than assumed uniform: Compress saves 2 bytes (its map
   is dropped entirely), Encrypt and Split each save exactly 1 (their
   maps still hold other fields).
+- `test/qdef-lint.test.js` — `scripts/qdef-lint.js`'s two layers: every
+  shape the real encoder produces lints clean (including the two shapes
+  that ruled out a "namespace present, typeId absent" footgun check —
+  it's undecidable from bytes alone and the common case is correct, not
+  a mistake), each footgun fires exactly once (not duplicated — a real
+  bug caught during development, since `skipAnyItem` both bounds items
+  *and* audits their canonical encoding as a side effect), and
+  genuinely malformed CBOR degrades to a clean error, not a crash.
 
 ## Running
 

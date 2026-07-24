@@ -25,10 +25,13 @@ test('Type 100 (Wi-Fi) record round-trips through a full container', () => {
   });
 
   assert.equal(container.subarray(0, 4).toString('latin1'), 'QDEF');
-  // No version byte, no discriminator: the root Record's own items
-  // start immediately after magic. First item is the typeID (uint 100
-  // = major type 0, 0x18 0x64).
-  assert.equal(container[4] >> 5, 0); // CBOR major type 0 = uint
+  // No version byte, no discriminator: the root Record, self-delimited
+  // as one CBOR array, starts immediately after magic (see docs/
+  // DESIGN.md's "Self-delimited root"). First byte is that array's own
+  // header (major type 4); its first element is the typeID (uint 100 =
+  // major type 0, 0x18 0x64).
+  assert.equal(container[4] >> 5, 4); // CBOR major type 4 = array
+  assert.equal(container[5] >> 5, 0); // CBOR major type 0 = uint
 
   const rec = core.applyCriticality(core.decodeContainer(container), rt.WIFI_KNOWN_KEYS);
 

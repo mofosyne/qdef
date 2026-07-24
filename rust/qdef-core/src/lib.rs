@@ -4,12 +4,11 @@
 //! live in a separate standard-record-type layer, not here, by design.
 //!
 //! There is exactly one grammar, applied identically everywhere -- the
-//! container root, an NDEF/own-URI-scheme body, and every subrecord all
-//! parse the same way, the only difference being what bounds the item
-//! list (end-of-buffer for the first two, an explicit array for the
-//! last). No separate "container discriminator" concept exists (see
-//! docs/DESIGN.md and docs/FINDINGS.md for why: it collapsed into this
-//! same grammar once typeId became optional):
+//! container root, an NDEF/own-URI-scheme body, and every subrecord are
+//! all the same one self-delimited CBOR array (see docs/DESIGN.md's
+//! "Self-delimited root" entry). No separate "container discriminator"
+//! concept exists (see docs/DESIGN.md and docs/FINDINGS.md for why: it
+//! collapsed into this same grammar once typeId became optional):
 //! `[namespace?, typeId?, map?, payload?, subrecord*]`
 //! - namespace (optional): a byte string. Recognized whenever the
 //!   current position holds one, unconditionally -- there is no
@@ -49,12 +48,15 @@
 //! Record's own interpretation succeeds.
 //!
 //! No version byte: the container is magic followed directly by the
-//! root Record's own items -- no discriminator, no CBOR Sequence of
-//! independent top-level Records. The root is otherwise an ordinary
-//! Record: it MAY carry a real typeId of its own (a single primary
-//! Record, e.g. a Media Payload, needs no Bundle indirection at all),
-//! or omit typeId to default to Bundle (0) when the container holds
-//! several co-equal top-level Records, which then live in its
+//! root Record, encoded as one self-delimited CBOR array -- no
+//! discriminator, no CBOR Sequence of independent top-level Records.
+//! Self-delimiting the root this way means any bytes appended after the
+//! container are unambiguously outside it, by construction -- no
+//! end-of-buffer guesswork, no marker needed. The root is otherwise an
+//! ordinary Record: it MAY carry a real typeId of its own (a single
+//! primary Record, e.g. a Media Payload, needs no Bundle indirection at
+//! all), or omit typeId to default to Bundle (0) when the container
+//! holds several co-equal top-level Records, which then live in its
 //! subrecords.
 //!
 //! `no_std`, zero heap allocation, zero dependencies. §3.2's field-value-
@@ -90,11 +92,13 @@ enum ControlFlow {
     Stop,
 }
 
-/// A parsed QDEF container: valid magic followed by the root Record's
-/// own items, end-of-buffer-bounded (see `parse_record_items`). No
+/// A parsed QDEF container: valid magic followed by the root Record,
+/// self-delimited as one CBOR array (see `parse_root_record`). No
 /// discriminator to skip or interpret -- the root's own namespace/map
 /// fields (if any) carry exactly the job a separate discriminator item
-/// used to (see the crate-level doc comment).
+/// used to (see the crate-level doc comment). Bytes after the root
+/// array (if any) are never touched -- they are provably outside the
+/// container, not guessed at from where `buf` happens to end.
 pub struct Container<'a> {
     root: Record<'a>,
 }
@@ -107,7 +111,7 @@ impl<'a> Container<'a> {
         if buf[0..4] != MAGIC {
             return Err(Error::BadMagic);
         }
-        let root = parse_record_items(&buf[4..], 0)?;
+        let root = parse_root_record(&buf[4..])?;
         Ok(Container { root })
     }
 
@@ -121,12 +125,31 @@ impl<'a> Container<'a> {
     }
 }
 
-/// The NDEF path (§2): a bare CBOR Sequence with no magic prefix,
-/// because NDEF's own MIME type (`application/vnd.qdef`) already
-/// identifies the payload. Structurally identical to `Container::parse`
-/// past the magic check: one Record, end-of-buffer-bounded.
+/// The NDEF path (§2): a bare, self-delimited Record array with no
+/// magic prefix, because NDEF's own MIME type (`application/vnd.qdef`)
+/// already identifies the payload. Structurally identical to
+/// `Container::parse` past the magic check, and to `parse_root_record`
+/// -- kept as a separate named entry point for call-site clarity, not
+/// because the grammar differs.
 pub fn record_from_sequence(seq: &[u8]) -> Result<Record<'_>, Error> {
-    parse_record_items(seq, 0)
+    parse_root_record(seq)
+}
+
+/// Parses one self-delimited Record array from the start of `buf`,
+/// ignoring any bytes after it -- the shared implementation behind
+/// `Container::parse` (past the magic check) and `record_from_sequence`.
+/// First confirms `buf` starts with a definite-length array (every
+/// Record, root included, is exactly one -- see the crate-level doc
+/// comment), then determines its exact byte span generically via
+/// `cbor::skip_any_item`, the same way `Records::next` already bounds a
+/// subrecord, before handing that trimmed slice to `parse_record_array`.
+fn parse_root_record(buf: &[u8]) -> Result<Record<'_>, Error> {
+    let head = cbor::read_head(buf).map_err(Error::Cbor)?;
+    if head.major != 4 || head.is_indefinite() {
+        return Err(Error::Cbor(cbor::Error::NotAnArray));
+    }
+    let total_len = cbor::skip_any_item(buf).map_err(Error::Cbor)?;
+    parse_record_array(&buf[..total_len])
 }
 
 pub struct Records<'a> {
@@ -259,11 +282,11 @@ impl<'a> Record<'a> {
 /// Parses a single Record from its own, already-length-bounded CBOR
 /// array (`buf` is exactly one Record's worth of bytes -- its own array
 /// header plus every one of its declared elements, no more, no less;
-/// see `Records::next`, which determines this bound generically via
-/// `cbor::skip_any_item` before calling this function). Reads past the
-/// array's own header, then hands the rest to `parse_record_items`,
-/// which walks the shared grammar identically whether the item list
-/// came from an explicit array or an end-of-buffer-bounded body.
+/// see `Records::next` for a subrecord, or `parse_root_record` for the
+/// root/NDEF-own-URI case, both of which determine this bound
+/// generically via `cbor::skip_any_item` before calling this function).
+/// Reads past the array's own header, then hands the rest to
+/// `parse_record_items`, which walks the shared grammar.
 fn parse_record_array(buf: &[u8]) -> Result<Record<'_>, Error> {
     let head = cbor::read_head(buf).map_err(Error::Cbor)?;
     parse_record_items(buf, head.head_len)
@@ -271,11 +294,11 @@ fn parse_record_array(buf: &[u8]) -> Result<Record<'_>, Error> {
 
 /// Parses one Record from a flat, already-bounded run of CBOR items:
 /// `buf[start..]` is exactly that run, with `buf.len()` as its end --
-/// either a subrecord's own array elements (start = the array's own
-/// header length, see `parse_record_array`), or an entire end-of-buffer-
-/// bounded body (the container root, an NDEF/own-URI body). No
-/// structural difference between these contexts: this one function
-/// serves both.
+/// always a Record array's own elements (start = the array's own header
+/// length), whether that array is a subrecord, the container root, or
+/// an NDEF/own-URI body (see `parse_record_array`, `parse_root_record`).
+/// No structural difference between these contexts: this one function
+/// serves all of them.
 ///
 ///   `[namespace?, typeId?, map?, payload?, subrecord*]`
 ///

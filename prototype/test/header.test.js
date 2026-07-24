@@ -75,16 +75,19 @@ test('a container with no content Records at all is still valid -- just a namesp
   assert.ok(root.localNamespace);
 });
 
-test('the container is exactly magic + the root Record\'s own items, no discriminator and no version byte', () => {
+test('the container is exactly magic + one self-delimited root Record array, no discriminator and no version byte', () => {
   const container = core.encodeContainer({
     subrecords: [{ typeId: 100, fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) }],
   });
 
   assert.deepEqual(container.subarray(0, 4), core.MAGIC);
   // No leading discriminator byte anymore -- the byte right after magic
-  // is already the subrecord's own array header (0x82, a 2-element
-  // array: typeId and map, nothing else).
-  assert.equal(container[4], 0x82);
+  // is the root Record's own array header (0x81, a 1-element array:
+  // just the one subrecord, since typeId/map/payload are all absent),
+  // followed immediately by that subrecord's own array header (0x82, a
+  // 2-element array: typeId and map, nothing else).
+  assert.equal(container[4], 0x81);
+  assert.equal(container[5], 0x82);
 });
 
 // ---------------------------------------------------------------------

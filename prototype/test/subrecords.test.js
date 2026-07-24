@@ -94,13 +94,13 @@ test('a non-array item after the map is read as this Record\'s payload, not skip
 });
 
 test('every Record is self-bounded by its own array -- two top-level Records, one with subrecords and one without, never bleed into each other', () => {
-  const withSub = core.encodeRecordBytes({
-    typeId: 20,
-    fields: new Map([[0, 'A']]),
-    subrecords: [{ typeId: 2, fields: new Map([[0, 1]]) }],
+  const seq = core.encodeRecordBytes({
+    subrecords: [
+      { typeId: 20, fields: new Map([[0, 'A']]), subrecords: [{ typeId: 2, fields: new Map([[0, 1]]) }] },
+      { typeId: 1, fields: new Map([[0, 'B']]) },
+    ],
   });
-  const plain = core.encodeRecordBytes({ typeId: 1, fields: new Map([[0, 'B']]) });
-  const records = core.decodeSequence(Buffer.concat([withSub, plain])).subrecords;
+  const records = core.decodeSequence(seq).subrecords;
 
   assert.equal(records.length, 2);
   assert.equal(records[0].typeId, 20);
@@ -117,14 +117,15 @@ test('a subrecord with no typeId of its own defaults to Bundle (0), and never co
   // past it. It's no longer "malformed": typeId defaults to 0 and the
   // map becomes that (Bundle-shaped) Record's own field map -- the
   // forgiving-parser choice (see docs/DESIGN.md).
-  const parentWithDefaultingSub = cbor.encodeCanonical([
+  const parentWithDefaultingSub = [
     20,
     new Map([[0, 'parent payload']]),
     [new Map([[0, 'no typeid here']])], // subrecord with no typeId: defaults to 0
-  ]);
-  const sibling = core.encodeRecordBytes({ typeId: 1, fields: new Map([[0, 'sibling payload']]) });
+  ];
+  const sibling = [1, new Map([[0, 'sibling payload']])];
+  const seq = cbor.encodeCanonical([parentWithDefaultingSub, sibling]);
 
-  const records = core.decodeSequence(Buffer.concat([parentWithDefaultingSub, sibling])).subrecords;
+  const records = core.decodeSequence(seq).subrecords;
   assert.equal(records.length, 2);
   assert.equal(records[0].typeId, 20);
   assert.equal(records[0].subrecords.length, 1);
