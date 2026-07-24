@@ -2875,3 +2875,71 @@ per-record array-wrapping entry both already showed.
 Rust tests grew to 40. `cargo fmt`/`clippy -D warnings` clean. See
 DESIGN.md's "Self-delimited root" entry for the full byte-cost table
 and the corrected TagDrop message.
+
+### 54. CDDL couldn't validate QDEF's own grammar, not just a theoretical concern — confirmed with a decisive, minimal repro before building anything on top of it
+
+TagDrop wanting something bolt-on-able to their own encoder (not tied
+to this prototype's) raised whether QDEF's Record grammar could be
+expressed as a CDDL (RFC 8610) schema instead of hand-writing a checker
+per language — CDDL validators already exist in several languages, so
+"portable for free" was the appeal. Flagged one real risk up front,
+before committing: QDEF's grammar leans on positional, greedy
+disambiguation (several optional array slots, each recognized by CBOR
+major type, several of which are normally occupied at once), and
+whether real CDDL tooling actually handles that needed verifying, not
+assuming.
+
+It doesn't, at least not the standard Rust implementation. Wrote the
+real QDEF grammar as CDDL and validated it with `cddl` (the RFC 8610
+reference-adjacent implementation) against real bytes from the Node
+encoder — the recursive version (subrecords via `* record`) stack-
+overflowed the validator itself before reaching any real check.
+Reduced the non-recursive version to a 2-line minimal repro:
+`pair = [ ? uint, ? tstr ]` validates `[5]` but **fails to validate
+`[5, "hi"]`** — an entirely ordinary array with both optional slots
+occupied. Confirmed on two major versions (0.9.5 and the then-latest
+0.10.6) — same failure both times, ruling out a version-specific bug.
+This is exactly QDEF's normal case (namespace *and* typeId *and* map
+all present is the common shape, not an edge case), so the failure
+isn't a corner the schema could route around — it invalidates the
+premise the CDDL option was chosen for. Only one implementation was
+tested; not a claim that every CDDL tool in every language shares this
+bug, but enough to drop the "portable for free" assumption that made
+CDDL attractive over hand-writing a checker.
+
+Built `prototype/scripts/qdef-lint.js` instead: grammar checking
+mirrors `rust/qdef-core`'s own `read_head`/`skip_any_item` primitives
+(ported, not wrapped — deliberately not built on `core.js` or the
+`cbor` npm package, so the algorithm itself, not this specific JS, is
+the intended portable artifact), plus a separate footgun-checking layer
+for patterns that are legal CBOR but almost certainly not what the
+encoder meant.
+
+One footgun check was designed, implemented, tested against real
+encoder output, and then removed — a real design mistake caught by the
+same evidentiary discipline as the CDDL test itself, not shipped and
+found out later. "Namespace present, typeId absent" seemed like an
+obvious signal for the real, documented ambiguity (a namespace-shaped
+payload with a forgotten typeId, §3.1) — until it was run against the
+single most standard root shape in the entire spec (a namespaced Bundle
+with a hint and content, §3.5's own worked example), which is *also*
+"namespace present, typeId absent," since a Bundle root's typeId is
+*always* omitted. The two cases are byte-identical by construction —
+the spec is explicit that only the encoder can resolve this, not a
+decoder or linter working from bytes after the fact — so the check
+fired on nearly every correctly-formed namespaced container and was
+dropped rather than shipped noisy. `prototype/test/qdef-lint.test.js`
+asserts its absence explicitly, not just its silence by omission.
+
+The footguns that survived are all genuinely decidable from bytes
+alone: a CBOR bignum tag (2/3) sitting where a native-uint typeId would
+be recognized (the real bug FINDINGS.md #14 already found and fixed
+once), non-canonical integer/length encoding, duplicate map keys, and
+non-canonical map key ordering (all §3.4). A second real bug surfaced
+writing the test suite, not the design: `skipAnyItem` both bounds an
+item's byte span *and* audits its canonical encoding as a side effect
+of walking it, and the grammar walk called it twice over the same
+bytes (once to find a boundary, once to actually parse) — every finding
+was reported twice until a `NO_FINDINGS` sink was introduced for the
+pure-bounding calls, verified by rerunning the exact fixtures that had
+shown the duplication.

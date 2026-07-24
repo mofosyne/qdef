@@ -38,6 +38,20 @@ found.
   verify a hash-derived Namespace ID from a name (spec §3.5). Decentralized
   Record Type IDs no longer exist as a mechanism, so these are
   namespace-only now.
+- `scripts/qdef-lint.js` — a standalone, dependency-free grammar-and-
+  footgun checker for arbitrary QDEF bytes from *any* encoder, not just
+  this prototype's own (`node scripts/qdef-lint.js [--no-magic]
+  <file|hex>`). Two separate layers: grammar checking (well-formed per
+  §3.1/§2, no Record-Type semantics, mirroring `rust/qdef-core`'s own
+  CBOR primitives so the algorithm — not this specific JS — is what's
+  meant to be portable) and footgun checking (patterns that are legal
+  CBOR but almost certainly a mistake, each traced to a real bug in
+  `docs/FINDINGS.md`, not invented for this tool). Considered and
+  rejected: a CDDL schema instead of a hand-written checker — the
+  standard Rust `cddl` implementation (two major versions tested)
+  can't correctly validate an array with more than one optional slot
+  occupied, which is QDEF's normal case, not an edge case; see
+  `docs/FINDINGS.md`.
 - `scripts/gen-rust-fixtures.js` — generates `rust/qdef-core/src/fixtures.rs`
   from this prototype's own canonical encoder, so the independently
   hand-rolled Rust decoder is cross-validated against independently
@@ -108,6 +122,14 @@ found.
   encoder rather than assumed uniform: Compress saves 2 bytes (its map
   is dropped entirely), Encrypt and Split each save exactly 1 (their
   maps still hold other fields).
+- `test/qdef-lint.test.js` — `scripts/qdef-lint.js`'s two layers: every
+  shape the real encoder produces lints clean (including the two shapes
+  that ruled out a "namespace present, typeId absent" footgun check —
+  it's undecidable from bytes alone and the common case is correct, not
+  a mistake), each footgun fires exactly once (not duplicated — a real
+  bug caught during development, since `skipAnyItem` both bounds items
+  *and* audits their canonical encoding as a side effect), and
+  genuinely malformed CBOR degrades to a clean error, not a crash.
 
 ## Running
 

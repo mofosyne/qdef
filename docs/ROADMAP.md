@@ -118,6 +118,20 @@ deliberately-undeclared encryption can't map onto the Encrypt Wrapper,
 because being wrapped in a Type-`4` Record is itself a visible
 declaration — a genuine scope boundary, not a bug (FINDINGS.md #13).
 
+**A standalone grammar-and-footgun linter for any encoder's output**
+(`prototype/scripts/qdef-lint.js`), motivated by TagDrop wanting
+something bolt-on-able to their own encoder, not tied to this
+prototype's. Grammar checking mirrors `rust/qdef-core`'s own CBOR
+primitives rather than reusing `core.js` or the `cbor` npm package, so
+the algorithm — not this specific JS — is the portable artifact.
+Footgun checking (a CBOR bignum tag where a native-uint typeId was
+meant, non-canonical encoding, duplicate/misordered map keys) is
+layered on top; a "namespace present, typeId absent" check was tried
+and dropped after it fired on the single most standard root shape in
+the spec (see FINDINGS.md). A CDDL schema was tried first and rejected
+— see FINDINGS.md for why the standard tooling couldn't actually
+validate QDEF's grammar, not just an assumption.
+
 ## Deliberately not done yet
 
 - **Sign's general cross-tree coverage (the hash-list form).** Direction
