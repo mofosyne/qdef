@@ -2782,3 +2782,96 @@ no per-Type logic anywhere, only generic grammar). 137 Node tests and
 clean. See DESIGN.md's "Root unification" section (supersedes
 "Container discriminator redesign") for the full byte-cost table and
 worked wire examples.
+
+### 53. Root Unification's own end-of-buffer root left a real boundary gap — `mofosyne/tagdrop`'s bot found it, a definite-length array closed it more cheaply than their own fix
+
+Presenting Root Unification (#52, merged as `mofosyne/qdef#42`) to
+`mofosyne/tagdrop`'s bot for review surfaced a real gap rather than a
+false alarm: an end-of-buffer-bounded root can't tell "no more root
+items" apart from "no more bytes in the buffer at all," so a generic
+decoder has no way to recognize a well-defined root extent independent
+of whatever bytes happen to follow it on the wire. Their own concrete
+case — a second, differently-encrypted payload deliberately appended
+after a visible one, which their own decoder skips today only because
+it has app-specific foreknowledge of exactly how many Records to
+expect — isn't a TagDrop wire-format problem (their carrier never uses
+QDEF's magic header at all), but it's a real one for any adopter, or
+any generic tool, that wants to enumerate a root Bundle without that
+kind of out-of-band knowledge.
+
+Their own proposed fix didn't hold up under the same byte-counted
+scrutiny this project applies everywhere else. Two variants: a genuine
+CBOR indefinite-length array (`0x9F`...`0xFF`), or a bare `0xFF` break
+code dropped at the top level of the existing flat framing as a
+QDEF-specific convention layered on top of standard CBOR. Checked
+directly: the indefinite-length form costs 2 bytes when used (open plus
+close), not the 1 byte their own writeup claimed; the bare-marker form
+produces bytes that are illegal CBOR outside an indefinite-length
+context per RFC 8949 — a strict generic CBOR decoder is required to
+reject a lone break code, directly conflicting with this project's
+standing goal of staying valid, boring CBOR that generic tooling can at
+least parse structurally, a goal this file and DESIGN.md have both
+guarded before (the tag-routing removal, FINDINGS.md's field-value-
+shape entries).
+
+The adopted fix came from a simpler question, asked directly: "consider
+just having one CBOR array?" Wrapping the root Record in one ordinary
+definite-length CBOR array — the exact shape a subrecord already uses —
+is self-delimiting by construction, with zero new CBOR semantics and no
+opt-in marker: read the header, consume its declared elements, and
+whatever follows the buffer is provably outside it. Verified against
+the real encoder for all five of Root Unification's own documented
+scenarios: every one gives back exactly the 1 array-header byte that
+design had just saved, except a single primary Record (still `−2`
+against the pre-Root-Unification discriminator baseline, since that
+array was never optional for a lone Record); the others move from a
+genuine win to break-even, and a bare namespace with nothing else
+becomes a permanent 1-byte tax it didn't carry before. A real, one-time
+cost, accepted for a boundary guarantee that now holds unconditionally
+for every container rather than only for ones that opt into paying for
+it.
+
+Applied uniformly to both the magic-prefixed path and the NDEF/own-URI
+path — TagDrop's own carrier — per explicit direction ("do it for both
+tagdrop and binary qr for consistency"), not scoped to the magic path
+alone as first suggested. This is a real, deliberate departure from
+Root Unification's own claim that TagDrop's bytes were untouched: they
+were, by Root Unification alone; they are not by this follow-up, since
+TagDrop's previously-flat multi-record NDEF/own-URI payloads must now
+be array-wrapped too, same as the magic path — the outgoing message to
+`mofosyne/tagdrop` was corrected to say so rather than left standing on
+the earlier, now-inaccurate claim.
+
+A real bug surfaced implementing this, not just a wire-format
+consequence: `core.js`'s shared `decodeRecordBytes` used
+`cbor.decodeAllSync`, which throws on trailing bytes that aren't
+themselves well-formed CBOR — exactly the case self-delimiting exists
+to make safe, since TagDrop's own appended second payload is opaque
+ciphertext, not valid CBOR. Fixed by switching to
+`cbor.decodeFirstSync(buf, { extendedResults: true })`, confirmed by a
+quick empirical check (not assumed from the library's docs) that it
+genuinely never inspects bytes past the first decoded item, malformed
+or not. Both languages now carry direct test coverage for exactly this
+claim (`core.test.js`, `tests.rs`): trailing bytes after the root
+array, both well-formed-but-unrelated CBOR and outright non-CBOR junk,
+are provably ignored rather than causing a decode error or being
+misread as more subrecords — a guarantee that didn't exist as a tested
+claim before this entry, only as an implication of the design.
+
+Also simplified the implementation past where Root Unification left it:
+`decodeContainer`/`decodeSequence` (`core.js`) and
+`Container::parse`/`record_from_sequence` (`rust/qdef-core`) no longer
+carry their own end-of-buffer-bounded parsing path — they're now thin
+wrappers around the exact same array-Record-parsing function a
+subrecord already used (`decodeRecordBytes` in JS; a new
+`parse_root_record` helper in Rust, reusing `Records::next`'s own
+`cbor::skip_any_item`-based bounding before handing off to
+`parse_record_array`). One parsing entry point instead of two — a
+second, unprompted case of "generalize the grammar, watch the code
+shrink," the same pattern Root Unification itself and the earlier
+per-record array-wrapping entry both already showed.
+
+137 Node tests grew to 138 (the new trailing-bytes-tolerance test); 39
+Rust tests grew to 40. `cargo fmt`/`clippy -D warnings` clean. See
+DESIGN.md's "Self-delimited root" entry for the full byte-cost table
+and the corrected TagDrop message.

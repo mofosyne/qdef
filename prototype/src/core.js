@@ -5,12 +5,11 @@
 //
 // There is exactly one grammar, applied identically everywhere -- the
 // container root, an NDEF/own-URI-scheme body, a Wrapper Record's
-// unwrapped inner bytes, and every subrecord all parse the same way,
-// the only difference being what bounds the item list (end-of-buffer
-// for the first three, an explicit array for the last). No separate
-// "container discriminator" concept exists (see docs/DESIGN.md and
-// docs/FINDINGS.md for why: it collapsed into this same grammar once
-// typeId became optional):
+// unwrapped inner bytes, and every subrecord are all the same one
+// self-delimited CBOR array (see docs/DESIGN.md's "Self-delimited root"
+// entry). No separate "container discriminator" concept exists (see
+// docs/DESIGN.md and docs/FINDINGS.md for why: it collapsed into this
+// same grammar once typeId became optional):
 //   [namespace?, typeId?, map?, payload?, subrecord*]
 // - namespace (optional): a byte string. Recognized whenever the
 //   current position holds one, unconditionally -- there is no
@@ -53,9 +52,13 @@ const cbor = require('cbor');
 const MAGIC = Buffer.from([0x51, 0x44, 0x45, 0x46]); // "QDEF"
 
 /**
- * Encode a QDEF container: magic followed by the root Record's own
- * items, each encoded as a separate CBOR item and concatenated (a
- * Sequence) -- not wrapped in an outer array. The root is otherwise an
+ * Encode a QDEF container: magic followed by the root Record, encoded
+ * as one self-delimited CBOR array -- the exact same shape
+ * encodeRecordBytes produces for any other Record (a subrecord, a
+ * Wrapper's inner content). Self-delimiting the root this way means any
+ * bytes appended after the container are unambiguously outside it, by
+ * construction -- no end-of-buffer guesswork, no marker needed (see
+ * docs/DESIGN.md's "Self-delimited root"). The root is otherwise an
  * ordinary Record: it MAY carry a real typeId of its own (a single
  * primary Record, e.g. a Media Payload, needs no Bundle indirection at
  * all -- see docs/DESIGN.md), or omit typeId to default to Bundle (0)
@@ -66,9 +69,7 @@ const MAGIC = Buffer.from([0x51, 0x44, 0x45, 0x46]); // "QDEF"
  *   argument (typeId now optional).
  */
 function encodeContainer(rootRecord) {
-  const items = recordToItems(rootRecord);
-  const parts = items.map((item) => cbor.encodeCanonical(item));
-  return Buffer.concat([MAGIC, ...parts]);
+  return Buffer.concat([MAGIC, encodeRecordBytes(rootRecord)]);
 }
 
 /**
@@ -162,11 +163,13 @@ function encodeRecordBytes(record) {
 }
 
 /**
- * Decode a QDEF container: verify magic, then parse everything after it
- * as one Record, end-of-buffer-bounded (see parseRecordFromItems). No
+ * Decode a QDEF container: verify magic, then decode everything after it
+ * as one self-delimited Record array (see decodeRecordBytes). No
  * discriminator to skip or interpret -- the root's own namespace/map
  * fields (if any) carry exactly the job a separate discriminator item
- * used to.
+ * used to. Bytes after the root array (if any) are never touched --
+ * they are provably outside the container, not guessed at from where
+ * the buffer happens to end.
  */
 function decodeContainer(buf) {
   if (buf.length < 4) throw new Error('QDEF container too short for magic');
@@ -174,21 +177,22 @@ function decodeContainer(buf) {
   if (!magic.equals(MAGIC)) {
     throw new Error(`bad magic: ${magic.toString('hex')}`);
   }
-  const items = cbor.decodeAllSync(buf.subarray(4));
-  return parseRecordFromItems(items);
+  return decodeRecordBytes(buf.subarray(4));
 }
 
 /**
- * Decode a bare CBOR Sequence with no magic prefix -- the NDEF/own-URI-
- * scheme path (§2), where the carrier (an NDEF MIME type, or an app's
- * own scheme prefix) already identifies the format and already isolates
- * this content from every other QDEF-aware decoder. Structurally
- * identical to decodeContainer past the magic check: one Record,
- * end-of-buffer-bounded.
+ * Decode a bare, self-delimited Record array with no magic prefix --
+ * the NDEF/own-URI-scheme path (§2), where the carrier (an NDEF MIME
+ * type, or an app's own scheme prefix) already identifies the format
+ * and already isolates this content from every other QDEF-aware
+ * decoder. Structurally identical to decodeContainer past the magic
+ * check, and to decodeRecordBytes -- kept as a separate named export
+ * for call-site clarity (this one path's caller-visible meaning is "the
+ * whole NDEF/own-URI body," not "one Wrapper's unwrapped inner Record"),
+ * not because the grammar differs.
  */
 function decodeSequence(seq) {
-  const items = cbor.decodeAllSync(seq);
-  return parseRecordFromItems(items);
+  return decodeRecordBytes(seq);
 }
 
 /**
@@ -209,11 +213,10 @@ function parseRecordList(items) {
 
 /**
  * Parse a single Record from an already-decoded, flat list of CBOR
- * items -- either a subrecord's own array elements, or an entire
- * end-of-buffer-bounded body (the container root, an NDEF/own-URI
- * body, or a Wrapper Record's unwrapped inner bytes). No structural
- * difference between these contexts: this one function serves all of
- * them.
+ * items -- a Record's own array elements, whether that array is a
+ * subrecord, the container root, an NDEF/own-URI body, or a Wrapper
+ * Record's unwrapped inner bytes. No structural difference between
+ * these contexts: this one function serves all of them.
  *
  *   [namespace?, typeId?, map?, payload?, subrecord*]
  *
@@ -337,19 +340,23 @@ function applyCriticality(record, knownKeys) {
 }
 
 /**
- * Decode a single Record from raw bytes — used for inner Records a
- * Wrapper Record (§4.1) unwraps: just "the encoded bytes of another
- * Record," always one self-delimited CBOR array (the same shape
- * encodeRecordBytes always produces, since these bytes are re-parsed
- * exactly like an ordinary subrecord would be, not a fresh top-level
- * QDEF container). Not the same bounding rule the container root uses:
- * a byte-string payload slot already carries its own explicit length,
- * so there's no EOF to bound against here, only "one array, then done."
+ * Decode a single self-delimited Record array from raw bytes -- the one
+ * shared implementation behind decodeContainer (past the magic check)
+ * and decodeSequence, and also used directly for inner Records a
+ * Wrapper Record (§4.1) unwraps. Reads exactly the first CBOR item off
+ * `buf` and requires it to be an array (the same shape encodeRecordBytes
+ * always produces); any bytes after that first item are never touched
+ * -- they are provably outside this Record, not guessed at from where
+ * `buf` happens to end (see docs/DESIGN.md's "Self-delimited root").
  */
 function decodeRecordBytes(buf) {
-  const items = cbor.decodeAllSync(buf);
-  const [first] = items;
-  if (Array.isArray(first)) return parseRecordFromItems(first);
+  // extendedResults: true so trailing bytes of any shape -- valid CBOR
+  // or not -- are simply left unread rather than triggering a decode
+  // error or being (mis)interpreted as more items. That tolerance is
+  // the entire point of self-delimiting the root: what follows the
+  // array is provably none of this decoder's business.
+  const { value } = cbor.decodeFirstSync(buf, { extendedResults: true });
+  if (Array.isArray(value)) return parseRecordFromItems(value);
   return parseRecordFromItems([]);
 }
 

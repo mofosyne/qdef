@@ -28,14 +28,10 @@ const header = require('../src/header');
 const PREVIEW_TYPE = 32768;
 const KNOWN_KEYS = new Set([0]);
 
-test('a bare CBOR Sequence carried under a custom URI scheme round-trips with no magic bytes and no discriminator, via the same decodeSequence path NDEF uses', () => {
-  // Written flat -- typeId and map as separate top-level Sequence items,
-  // not array-wrapped -- so it becomes the root Record directly, no
-  // Bundle indirection and no magic bytes.
-  const bareSeq = Buffer.concat([
-    cbor.encodeCanonical(PREVIEW_TYPE),
-    cbor.encodeCanonical(new Map([[0, 'preview text']])),
-  ]);
+test('a bare self-delimited Record array carried under a custom URI scheme round-trips with no magic bytes and no discriminator, via the same decodeSequence path NDEF uses', () => {
+  // Array-wrapped, like any Record -- becomes the root Record directly,
+  // no Bundle indirection and no magic bytes.
+  const bareSeq = cbor.encodeCanonical([PREVIEW_TYPE, new Map([[0, 'preview text']])]);
 
   assert.throws(() => core.decodeContainer(bareSeq), /bad magic/);
 

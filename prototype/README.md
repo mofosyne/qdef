@@ -10,10 +10,11 @@ found.
 
 - `src/core.js` — the mandatory core: magic framing, the unified root/
   subrecord Record grammar (the container root is an ordinary Record,
-  parsed end-of-buffer-bounded — no separate discriminator item),
-  per-Record prefix typeID recognition (optional, defaulting to `0`/
-  Bundle when omitted; a bare uint, or a namespace-pairing array), the
-  optional payload slot, and the even/odd criticality rule (spec §2–§3).
+  one self-delimited CBOR array — the identical shape a subrecord
+  already uses, no separate discriminator item), per-Record prefix
+  typeID recognition (optional, defaulting to `0`/Bundle when omitted;
+  a bare uint, or a namespace-pairing array), the optional payload
+  slot, and the even/odd criticality rule (spec §2–§3).
   No knowledge of any specific Record Type. Encodes every Record with
   RFC 8949 §4.2.1 canonical CBOR (spec §3.4), not just whatever the
   `cbor` package's default encoder happens to produce.
@@ -46,7 +47,10 @@ found.
   Split(parity)→Encrypt→plain stack with fragment-drop recovery, and the
   even/odd criticality rule.
 - `test/core.test.js` — Record Type ID routing edge cases, the NDEF
-  no-magic path, and the streaming-decode claim.
+  no-magic path, the streaming-decode claim, and the self-delimited
+  root's actual guarantee: bytes appended after the root array, valid
+  CBOR or not, are provably ignored on both the magic and NDEF/own-URI
+  paths.
 - `test/header.test.js` — root/subrecord namespace recognition and
   graceful degrade, namespace-Hint hash-derivation verification, and
   namespace-scoped Type ID lookup-key resolution.

@@ -66,16 +66,23 @@ test('a Type recognizing a Common Field Key reads it like any other known key, w
 
 test('COMMON_KEY_ID round-trips as an NDEF-ID-equivalent correlation token between two otherwise-unrelated Records', () => {
   const sharedId = Buffer.from('order-4471');
-  const recA = core.encodeRecordBytes({
-    typeId: WIFI_TYPE,
-    fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2], [commonKeys.COMMON_KEY_ID, sharedId]]),
-  });
-  const recB = core.encodeRecordBytes({
-    typeId: wrappers.MEDIA_PAYLOAD_TYPE,
-    fields: new Map([[0, 'text/plain'], [commonKeys.COMMON_KEY_ID, sharedId]]),
+  // Two co-equal top-level Records under the NDEF/own-URI path fall
+  // back to typeId's default (Bundle) at the root, same as under magic
+  // (see docs/DESIGN.md's "Self-delimited root").
+  const seq = core.encodeRecordBytes({
+    subrecords: [
+      {
+        typeId: WIFI_TYPE,
+        fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2], [commonKeys.COMMON_KEY_ID, sharedId]]),
+      },
+      {
+        typeId: wrappers.MEDIA_PAYLOAD_TYPE,
+        fields: new Map([[0, 'text/plain'], [commonKeys.COMMON_KEY_ID, sharedId]]),
+      },
+    ],
   });
 
-  const [a, b] = core.decodeSequence(Buffer.concat([recA, recB])).subrecords;
+  const [a, b] = core.decodeSequence(seq).subrecords;
   assert.ok(a.map.get(commonKeys.COMMON_KEY_ID).equals(sharedId));
   assert.ok(b.map.get(commonKeys.COMMON_KEY_ID).equals(sharedId));
 });

@@ -123,11 +123,13 @@ Validation passed.
 
 ### Step 4: Use it as the root namespace
 
+The root is one self-delimited CBOR array — the same shape as any
+subrecord (spec §2/§3.1):
+
 ```
-h'3cf2360e'                          // root namespace, no hint (cheapest form)
-1, {                                 // typeId + map, namespace-scoped —
-  1: "route data here",              //   this Record IS the root, no
-}                                     //   Bundle indirection needed
+[ h'3cf2360e', 1, {                  // namespace, typeId, map, all in the
+  1: "route data here",              //   root's own array -- this Record
+} ]                                  //   IS the root, no Bundle indirection needed
 ```
 
 To also carry a recoverable Hint name for the namespace, add a Bundle
@@ -135,8 +137,9 @@ map (typeId `0`, or simply omitted — Bundle is the default) right after
 the namespace instead of going straight to your first Record:
 
 ```
-h'3cf2360e', { 3: "com.example/myapp-paper" }   // namespace + hint, still Bundle
-[ 1, { 1: "route data here" } ]                 // your Record as a subrecord
+[ h'3cf2360e', { 3: "com.example/myapp-paper" },   // namespace + hint, still Bundle
+  [ 1, { 1: "route data here" } ]                  //   your Record as a subrecord
+]
 ```
 
 **Key points:**

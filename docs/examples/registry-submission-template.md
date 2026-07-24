@@ -108,15 +108,18 @@ typeID is never a map key:
 
 If this Type ID is namespace-scoped (an odd uint), show the namespace
 declaration (spec §3.5) it's scoped under too — the ordinary leading
-byte string of the root Record, or of an enclosing Record:
+byte string of the root Record, or of an enclosing Record. The root
+itself is one self-delimited CBOR array (spec §2), so the namespace and
+this Record (now a subrecord) both sit inside it:
 
 ```
-44 c103df40                      # bytes(4) — root namespace: h'c103df40'
-82                                # array(2) — this Record's own array
-   01                             # unsigned(1) — typeID: 1 (namespace-scoped)
-   a2                             # map(2) — the Record's field Map
-      02  18 64                   # brightness: 100
-      04  19 0fa0                 # color temp: 4000
+82                                # array(2) — the root Record's own array
+   44 c103df40                   # bytes(4) — root namespace: h'c103df40'
+   82                             # array(2) — this Record's own array (a subrecord)
+      01                          # unsigned(1) — typeID: 1 (namespace-scoped)
+      a2                          # map(2) — the Record's field Map
+         02  18 64                # brightness: 100
+         04  19 0fa0              # color temp: 4000
 ```
 
 ---

@@ -90,19 +90,23 @@ test('Media Preview criticality: key 0 is critical, keys 1/3/5 are optional', ()
   assert.deepEqual(ok.ignoredKeys, [7]);
 });
 
-test('multi-item: two independent Media Preview Records are consecutive top-level items, never wrapped in an enclosing array', () => {
-  const recA = core.encodeRecordBytes({
-    typeId: wrappers.MEDIA_PREVIEW_TYPE,
-    fields: new Map([[0, 'text/plain'], [3, 'doc.txt']]),
-    subrecords: [{ typeId: wrappers.MEDIA_PAYLOAD_TYPE, fields: new Map([[0, 'text/plain']]), payload: Buffer.from('content A') }],
-  });
-  const recB = core.encodeRecordBytes({
-    typeId: wrappers.MEDIA_PREVIEW_TYPE,
-    fields: new Map([[0, 'image/png'], [3, 'photo.png']]),
-    subrecords: [{ typeId: wrappers.MEDIA_PAYLOAD_TYPE, fields: new Map([[0, 'image/png']]), payload: Buffer.from('content B') }],
+test('multi-item: two independent Media Preview Records fall back to the implicit root Bundle and become its subrecords', () => {
+  const seq = core.encodeRecordBytes({
+    subrecords: [
+      {
+        typeId: wrappers.MEDIA_PREVIEW_TYPE,
+        fields: new Map([[0, 'text/plain'], [3, 'doc.txt']]),
+        subrecords: [{ typeId: wrappers.MEDIA_PAYLOAD_TYPE, fields: new Map([[0, 'text/plain']]), payload: Buffer.from('content A') }],
+      },
+      {
+        typeId: wrappers.MEDIA_PREVIEW_TYPE,
+        fields: new Map([[0, 'image/png'], [3, 'photo.png']]),
+        subrecords: [{ typeId: wrappers.MEDIA_PAYLOAD_TYPE, fields: new Map([[0, 'image/png']]), payload: Buffer.from('content B') }],
+      },
+    ],
   });
 
-  const records = core.decodeSequence(Buffer.concat([recA, recB])).subrecords;
+  const records = core.decodeSequence(seq).subrecords;
   assert.equal(records.length, 2);
   assert.equal(records[0].map.get(3), 'doc.txt');
   assert.equal(records[0].subrecords[0].payload.toString(), 'content A');

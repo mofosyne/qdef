@@ -434,9 +434,9 @@ fn an_indefinite_length_payload_is_not_recognized_here_documented_node_divergenc
     // conformant encoder's own (always definite-length) output is
     // required to round-trip identically everywhere.
     //
-    // typeID uint(20), indefinite-length byte string "hello" -- written
-    // flat (not array-wrapped), so it's the root Record directly.
-    const BYTES: &[u8] = &[0x14, 0x5f, 0x45, 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0xff];
+    // [typeID uint(20), indefinite-length byte string "hello"],
+    // array-wrapped (0x82 = array of 2).
+    const BYTES: &[u8] = &[0x82, 0x14, 0x5f, 0x45, 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0xff];
     let rec = record_from_sequence(BYTES).unwrap();
     assert_eq!(rec.type_id(), Key::Uint(20));
     assert_eq!(rec.payload(), None);
@@ -450,23 +450,24 @@ fn an_indefinite_length_payload_is_not_recognized_here_documented_node_divergenc
 // committed fixture set. See docs/FINDINGS.md.
 // ---------------------------------------------------------------------
 
-/// `typeId(100), { 0: "SSID", -1: "wifi-record-1" }` -- written flat
-/// (not array-wrapped), so it's the root Record directly.
+/// `[typeId(100), { 0: "SSID", -1: "wifi-record-1" }]`, array-wrapped
+/// (0x82 = array of 2) as any self-delimited root Record must be now
+/// (see docs/DESIGN.md's "Self-delimited root").
 const RECORD_WITH_NEG_KEY: &[u8] = &[
-    0x18, 0x64, 0xa2, 0x00, 0x64, 0x53, 0x53, 0x49, 0x44, 0x20, 0x6d, 0x77, 0x69, 0x66, 0x69, 0x2d,
-    0x72, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x2d, 0x31,
+    0x82, 0x18, 0x64, 0xa2, 0x00, 0x64, 0x53, 0x53, 0x49, 0x44, 0x20, 0x6d, 0x77, 0x69, 0x66, 0x69,
+    0x2d, 0x72, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x2d, 0x31,
 ];
 
-/// RECORD_WITH_NEG_KEY immediately followed by a second, ordinary,
-/// array-wrapped Record (`[typeId(200), { 0: "second" }]`) -- since the
-/// root already consumed its own typeId/map from the first two flat
-/// items, this second (array-shaped) item becomes the root's subrecord,
-/// proving the Sequence survives past the negative-keyed Record's own
-/// fields, not just that Record in isolation.
+/// The same typeId/map as RECORD_WITH_NEG_KEY, plus a second, ordinary
+/// Record (`[typeId(200), { 0: "second" }]`) as a subrecord -- all three
+/// items (typeId, map, subrecord) wrapped in one root array (0x83 =
+/// array of 3), proving the walker survives past the negative-keyed
+/// Record's own fields to find its sibling, not just that Record in
+/// isolation.
 const TWO_RECORD_SEQ_WITH_NEG_KEY: &[u8] = &[
-    0x18, 0x64, 0xa2, 0x00, 0x64, 0x53, 0x53, 0x49, 0x44, 0x20, 0x6d, 0x77, 0x69, 0x66, 0x69, 0x2d,
-    0x72, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x2d, 0x31, 0x82, 0x18, 0xc8, 0xa1, 0x00, 0x66, 0x73, 0x65,
-    0x63, 0x6f, 0x6e, 0x64,
+    0x83, 0x18, 0x64, 0xa2, 0x00, 0x64, 0x53, 0x53, 0x49, 0x44, 0x20, 0x6d, 0x77, 0x69, 0x66, 0x69,
+    0x2d, 0x72, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x2d, 0x31, 0x82, 0x18, 0xc8, 0xa1, 0x00, 0x66, 0x73,
+    0x65, 0x63, 0x6f, 0x6e, 0x64,
 ];
 
 #[test]
@@ -504,23 +505,23 @@ fn check_criticality_treats_an_unrecognized_odd_negative_key_the_same_as_an_odd_
 /// Four fixtures pinning the raw-CBOR-argument-to-actual-value parity
 /// table directly: `Key::NegInt` carries the *raw argument* (RFC 8949
 /// §3.1: actual value is `-1 - arg`), which has the *inverse* parity of
-/// the argument itself. Each is `typeId(100), { 0: "SSID", <key>: "a" }`
-/// (written flat, not array-wrapped) with `<key>` encoded at CBOR
-/// argument 0/1/2/3 respectively (heads 0x20/0x21/0x22/0x23) -- bytes
-/// generated from the Node prototype via an inline script, not
-/// `gen-rust-fixtures.js` (same EXPERIMENTAL status as
-/// `RECORD_WITH_NEG_KEY` above).
+/// the argument itself. Each is `[typeId(100), { 0: "SSID", <key>: "a" }]`,
+/// array-wrapped (0x82 = array of 2) as any self-delimited root Record
+/// must be now, with `<key>` encoded at CBOR argument 0/1/2/3
+/// respectively (heads 0x20/0x21/0x22/0x23) -- bytes generated from the
+/// Node prototype via an inline script, not `gen-rust-fixtures.js` (same
+/// EXPERIMENTAL status as `RECORD_WITH_NEG_KEY` above).
 const RECORD_WITH_NEG_KEY_ARG0_VALUE_NEG1_ODD: &[u8] = &[
-    0x18, 0x64, 0xa2, 0x00, 0x64, 0x53, 0x53, 0x49, 0x44, 0x20, 0x61, 0x61,
+    0x82, 0x18, 0x64, 0xa2, 0x00, 0x64, 0x53, 0x53, 0x49, 0x44, 0x20, 0x61, 0x61,
 ];
 const RECORD_WITH_NEG_KEY_ARG1_VALUE_NEG2_EVEN: &[u8] = &[
-    0x18, 0x64, 0xa2, 0x00, 0x64, 0x53, 0x53, 0x49, 0x44, 0x21, 0x61, 0x61,
+    0x82, 0x18, 0x64, 0xa2, 0x00, 0x64, 0x53, 0x53, 0x49, 0x44, 0x21, 0x61, 0x61,
 ];
 const RECORD_WITH_NEG_KEY_ARG2_VALUE_NEG3_ODD: &[u8] = &[
-    0x18, 0x64, 0xa2, 0x00, 0x64, 0x53, 0x53, 0x49, 0x44, 0x22, 0x61, 0x61,
+    0x82, 0x18, 0x64, 0xa2, 0x00, 0x64, 0x53, 0x53, 0x49, 0x44, 0x22, 0x61, 0x61,
 ];
 const RECORD_WITH_NEG_KEY_ARG3_VALUE_NEG4_EVEN: &[u8] = &[
-    0x18, 0x64, 0xa2, 0x00, 0x64, 0x53, 0x53, 0x49, 0x44, 0x23, 0x61, 0x61,
+    0x82, 0x18, 0x64, 0xa2, 0x00, 0x64, 0x53, 0x53, 0x49, 0x44, 0x23, 0x61, 0x61,
 ];
 
 #[test]
@@ -562,17 +563,17 @@ fn negint_arg_to_value_parity_table_is_computed_correctly_not_just_the_raw_args_
 // for gen-rust-fixtures.js to cross-validate against here).
 // ---------------------------------------------------------------------
 
-/// `typeId(100), { 0: (indefinite text string) "SSID" chunked as "SS"+"ID" }`
-/// written flat, not array-wrapped. 0x7f = indefinite-length text string
-/// start; 0x62 "SS"; 0x62 "ID"; 0xff = break.
+/// `[typeId(100), { 0: (indefinite text string) "SSID" chunked as "SS"+"ID" }]`,
+/// array-wrapped (0x82 = array of 2). 0x7f = indefinite-length text
+/// string start; 0x62 "SS"; 0x62 "ID"; 0xff = break.
 const RECORD_WITH_INDEFINITE_STRING_VALUE: &[u8] = &[
-    0x18, 0x64, 0xa1, 0x00, 0x7f, 0x62, 0x53, 0x53, 0x62, 0x49, 0x44, 0xff,
+    0x82, 0x18, 0x64, 0xa1, 0x00, 0x7f, 0x62, 0x53, 0x53, 0x62, 0x49, 0x44, 0xff,
 ];
 
 /// Same shape, but a chunk's major type doesn't match the string's own
 /// (a byte-string chunk inside a text-string sequence) -- malformed.
 const RECORD_WITH_MISMATCHED_CHUNK_MAJOR_TYPE: &[u8] =
-    &[0x18, 0x64, 0xa1, 0x00, 0x7f, 0x42, 0x53, 0x53, 0xff];
+    &[0x82, 0x18, 0x64, 0xa1, 0x00, 0x7f, 0x42, 0x53, 0x53, 0xff];
 
 #[test]
 fn an_indefinite_length_chunked_string_field_value_is_now_skip_safe() {
@@ -688,18 +689,19 @@ fn every_record_is_self_bounded_a_record_with_subrecords_never_bleeds_into_its_s
     }
 }
 
-/// `typeId(24), { 0: "parent payload" }, [{ 0: "no typeid here" }]` --
-/// written flat at the root (not array-wrapped); the trailing subrecord
-/// slot holds a well-formed CBOR array whose own first (and only)
-/// element is a bare map, with no namespace/typeId-shaped item before
-/// it. No longer "malformed": typeId defaults to 0 and the map becomes
-/// that (Bundle-shaped) subrecord's own field map (see docs/DESIGN.md).
-/// Hand-constructed (not via gen-rust-fixtures.js, which has no direct
-/// way to encode a bare-map-only subrecord).
+/// `[typeId(24), { 0: "parent payload" }, [{ 0: "no typeid here" }]]`,
+/// array-wrapped (0x83 = array of 3, since typeId/map/subrecord are its
+/// three elements); the subrecord slot holds a well-formed CBOR array
+/// whose own first (and only) element is a bare map, with no
+/// namespace/typeId-shaped item before it. No longer "malformed":
+/// typeId defaults to 0 and the map becomes that (Bundle-shaped)
+/// subrecord's own field map (see docs/DESIGN.md). Hand-constructed
+/// (not via gen-rust-fixtures.js, which has no direct way to encode a
+/// bare-map-only subrecord).
 const RECORD_WITH_DEFAULTING_SUBRECORD: &[u8] = &[
-    0x18, 0x18, 0xa1, 0x00, 0x6e, 0x70, 0x61, 0x72, 0x65, 0x6e, 0x74, 0x20, 0x70, 0x61, 0x79, 0x6c,
-    0x6f, 0x61, 0x64, 0x81, 0xa1, 0x00, 0x6e, 0x6e, 0x6f, 0x20, 0x74, 0x79, 0x70, 0x65, 0x69, 0x64,
-    0x20, 0x68, 0x65, 0x72, 0x65,
+    0x83, 0x18, 0x18, 0xa1, 0x00, 0x6e, 0x70, 0x61, 0x72, 0x65, 0x6e, 0x74, 0x20, 0x70, 0x61, 0x79,
+    0x6c, 0x6f, 0x61, 0x64, 0x81, 0xa1, 0x00, 0x6e, 0x6e, 0x6f, 0x20, 0x74, 0x79, 0x70, 0x65, 0x69,
+    0x64, 0x20, 0x68, 0x65, 0x72, 0x65,
 ];
 
 #[test]
@@ -744,14 +746,14 @@ fn a_map_shaped_payload_with_no_other_fields_gets_an_explicit_empty_field_map() 
     assert_eq!(payload[0] >> 5, 5, "payload's own major type is map (5)");
 }
 
-/// `20, { 0: "image/png" }, [6, { 0: "image/png" }], [7, { 0: "extra" }]`
-/// written flat at the root.
+/// `[20, { 0: "image/png" }, [6, { 0: "image/png" }], [7, { 0: "extra" }]]`,
+/// array-wrapped (0x84 = array of 4: typeId, map, and two subrecords).
 #[test]
 fn a_bare_array_right_after_the_map_is_always_subrecord_0_never_payload() {
     let bytes: &[u8] = &[
-        0x14, 0xa1, 0x00, 0x69, 0x69, 0x6d, 0x61, 0x67, 0x65, 0x2f, 0x70, 0x6e, 0x67, 0x82, 0x06,
-        0xa1, 0x00, 0x69, 0x69, 0x6d, 0x61, 0x67, 0x65, 0x2f, 0x70, 0x6e, 0x67, 0x82, 0x07, 0xa1,
-        0x00, 0x65, 0x65, 0x78, 0x74, 0x72, 0x61,
+        0x84, 0x14, 0xa1, 0x00, 0x69, 0x69, 0x6d, 0x61, 0x67, 0x65, 0x2f, 0x70, 0x6e, 0x67, 0x82,
+        0x06, 0xa1, 0x00, 0x69, 0x69, 0x6d, 0x61, 0x67, 0x65, 0x2f, 0x70, 0x6e, 0x67, 0x82, 0x07,
+        0xa1, 0x00, 0x65, 0x65, 0x78, 0x74, 0x72, 0x61,
     ];
     let rec = record_from_sequence(bytes).unwrap();
     assert_eq!(rec.type_id(), Key::Uint(20));
@@ -765,4 +767,31 @@ fn a_bare_array_right_after_the_map_is_always_subrecord_0_never_payload() {
     assert_eq!(subs.len(), 2);
     assert_eq!(subs[0].type_id(), Key::Uint(6));
     assert_eq!(subs[1].type_id(), Key::Uint(7));
+}
+
+// ---------------------------------------------------------------------
+// Self-delimited root (see docs/DESIGN.md): the root is one CBOR array,
+// exactly like a subrecord, so bytes appended after it are provably
+// outside the container -- not end-of-buffer guesswork, and not
+// required to even be valid CBOR themselves.
+// ---------------------------------------------------------------------
+
+#[test]
+fn bytes_appended_after_the_root_array_are_ignored_not_decode_errors_not_misread_as_more_subrecords(
+) {
+    // Neither well-formed-but-unrelated CBOR nor outright non-CBOR junk
+    // appended after the root array's own declared elements should
+    // affect parsing -- the array already declared its own element
+    // count, so nothing past it is ever read.
+    let junk_trailer: &[u8] = &[0xff, 0xff, 0xff, 0x00, 0x01, 0x02];
+
+    let mut magic_with_trailer = WIFI_CONTAINER.to_vec();
+    magic_with_trailer.extend_from_slice(junk_trailer);
+    let container = Container::parse(&magic_with_trailer).expect("trailing junk must not error");
+    assert_eq!(container.root().type_id(), Key::Uint(100));
+
+    let mut seq_with_trailer = BARE_SEQUENCE_NO_MAGIC.to_vec();
+    seq_with_trailer.extend_from_slice(junk_trailer);
+    let rec = record_from_sequence(&seq_with_trailer).expect("trailing junk must not error");
+    assert_eq!(rec.type_id(), Key::Uint(100));
 }

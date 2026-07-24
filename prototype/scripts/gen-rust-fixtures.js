@@ -62,10 +62,9 @@ const defaultTypeidZeroContainer = core.encodeContainer({
   fields: new Map([[0, 'SSID']]),
 });
 
-// --- Bare NDEF/own-URI-scheme sequence: no magic, structurally ---
-// identical to the magic path past the magic check -- one Record,
-// end-of-buffer-bounded. Written flat (typeId and map as separate items,
-// not array-wrapped) so it becomes the root Record directly.
+// --- Bare NDEF/own-URI-scheme body: no magic, structurally identical ---
+// to the magic path past the magic check -- one self-delimited Record
+// array (see docs/DESIGN.md's "Self-delimited root").
 
 const bareSequenceNoMagic = core
   .encodeContainer({
@@ -222,13 +221,11 @@ const bstrAlwaysNamespaceContainer = core.encodeContainer({
 // most one typeID-bearing item per Record. A second uint immediately
 // following the primary, with no map before it, is read as this
 // Record's own payload (§3.1's payload slot now accepts any CBOR
-// shape) -- not accumulated as a "backup" typeID. Written flat (not
-// array-wrapped) so it becomes the root Record directly.
+// shape) -- not accumulated as a "backup" typeID.
 
 const secondTypeIdNotAccumulatedContainer = Buffer.concat([
   core.MAGIC,
-  cbor.encodeCanonical(rt.WIFI_TYPE),
-  cbor.encodeCanonical(900), // would have been a backup, once -- now just this Record's payload
+  cbor.encodeCanonical([rt.WIFI_TYPE, 900]), // 900 would have been a backup, once -- now just this Record's payload
 ]);
 
 // --- Namespace prefix (§3.1) ---
