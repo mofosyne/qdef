@@ -20,7 +20,11 @@ found.
   one: the decoder stays forgiving of any encoder's output that omits
   it, but this reference encoder won't produce that omission by
   accident (see docs/DESIGN.md's "Encoder-enforced explicit typeId").
-  No knowledge of any specific Record Type. Encodes every Record with
+  Payload is further restricted to a byte string or a text string only
+  (no scalar, map, or tag), and REQUIRES a nonzero `typeId` -- a Bundle
+  (`typeId: 0`) can never carry a payload, closing a real silent-
+  data-loss bug the same way (see docs/DESIGN.md's payload-narrowing
+  entries). No knowledge of any specific Record Type. Encodes every Record with
   RFC 8949 §4.2.1 canonical CBOR (spec §3.4), not just whatever the
   `cbor` package's default encoder happens to produce.
 - `src/header.js` — interprets a Record's namespace declaration (spec
@@ -127,6 +131,12 @@ found.
   encoder rather than assumed uniform: Compress saves 2 bytes (its map
   is dropped entirely), Encrypt and Split each save exactly 1 (their
   maps still hold other fields).
+- `test/payload-shape.test.js` — payload's shape restriction (byte
+  string or text string only -- a scalar or map-shaped payload is
+  rejected outright, closing a real bug where either used to be
+  silently misread as typeId or namespace and lost) and the flat rule
+  that a payload requires a nonzero typeId (a Bundle can never carry
+  one, namespace or not).
 - `test/qdef-lint.test.js` — `scripts/qdef-lint.js`'s two layers: every
   shape the real encoder produces lints clean (including the two shapes
   that ruled out a "namespace present, typeId absent" footgun check —

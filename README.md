@@ -21,31 +21,34 @@ unrelated Records, each independently routable, in one 74-byte payload
 ```
 51 44 45 46                              # "QDEF" magic (4 bytes,
                                           #   NFC drops this -- see below)
-00                                        # discriminator: no namespace
-                                          #   declared (§3.5)
 
-82                                        # Record 1: array(2)
-   18 64                                 #   typeID: 100 (Wi-Fi, illustrative)
-   a3                                    #   field map(3)
-      00   6e 4d 79 20 43 6f 66 66 65 65 20 53 68 6f 70
-                                         #     key 0: "My Coffee Shop"
-      02   68 67 75 65 73 74 31 32 33   #     key 2: "guest123"
-      04   02                            #     key 4: 2 (WPA2)
+82                                        # root Record: array(2) -- typeId
+                                          #   omitted, defaults to 0 (Bundle);
+                                          #   its 2 items are its subrecords
 
-82                                        # Record 2: array(2)
-   0a                                    #   typeID: 10 (Open/Hint URI,
-                                          #     standard record type)
-   a1                                    #   field map(1)
-      00   78 1f 68 74 74 70 73 3a 2f 2f 65 78 61 6d 70
-           6c 65 2e 63 6f 6d 2f 63 6f 66 66 65 65 2d 6d
-           65 6e 75
-                                         #     key 0: "https://example.com/coffee-menu"
+   82                                    #   Record 1: array(2)
+      18 64                             #     typeID: 100 (Wi-Fi, illustrative)
+      a3                                #     field map(3)
+         00   6e 4d 79 20 43 6f 66 66 65 65 20 53 68 6f 70
+                                        #       key 0: "My Coffee Shop"
+         02   68 67 75 65 73 74 31 32 33 #     key 2: "guest123"
+         04   02                        #       key 4: 2 (WPA2)
+
+   82                                    #   Record 2: array(2)
+      0a                                #     typeID: 10 (Open/Hint URI,
+                                          #       standard record type)
+      a1                                #     field map(1)
+         00   78 1f 68 74 74 70 73 3a 2f 2f 65 78 61 6d 70
+              6c 65 2e 63 6f 6d 2f 63 6f 66 66 65 65 2d 6d
+              65 6e 75
+                                        #       key 0: "https://example.com/coffee-menu"
 ```
 
 In JSON-ish terms, that's:
 
 ```jsonc
-// magic + discriminator: "no namespace, plain global Type IDs"
+// magic, then the root Record: typeId omitted (implicit Bundle),
+// its 2 subrecords each self-contained with their own typeId
 [
   [100, { "0": "My Coffee Shop", "2": "guest123", "4": 2 }],
   [10,  { "0": "https://example.com/coffee-menu" }]
@@ -98,8 +101,8 @@ QDEF is:
 
 - **Binary-first**, not text-safe — no alphanumeric-mode constraint, so no
   base32/base41-style encoding overhead.
-- **Multi-action** — a CBOR Sequence of Records, so unrelated applications
-  can share one physical code.
+- **Multi-action** — one self-delimited CBOR array of Records, so
+  unrelated applications can share one physical code.
 - **Layered**, on purpose: a minimal mandatory *core* (routing and
   criticality only) plus a separate, optional *standard library*
   (splitting a payload across multiple codes, compression, encryption, a
