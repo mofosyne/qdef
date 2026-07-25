@@ -3053,3 +3053,16 @@ common payload-free case at all. Wire format and decoder both still
 unchanged; `gen-rust-fixtures.js` regenerates byte-identical, since no
 existing fixture ever combined `typeId: 0` with a payload. 164 Node
 tests pass.
+
+**Update:** confirmed a zero-action outcome directly with `mofosyne/tagdrop`,
+not just inferred from their previously-documented usage patterns.
+Checked against their actual encoders: their Compress Wrapper
+(`TagDropCodec.kt:394`, `compressWrap`) and Media Payload
+(`TagDropCodec.kt:595-599`, `buildMediaPayload`) both always emit a raw
+byte-string payload alongside a nonzero typeId (`8` and `6`
+respectively) — clean under both #56's shape restriction and this
+entry's flat rule. Their root Bundle construction (`encodeRootBundle`)
+has no payload parameter in its API at all, so it structurally cannot
+violate the new rule even by accident. All three of this run's
+encoder-hardening changes are confirmed no-ops for TagDrop's real
+implementation, not just its previously-observed shape.
