@@ -24,17 +24,18 @@
 //   decoder's to reject (see docs/DESIGN.md). No other typeId shape is
 //   legal, and there is no backup-typeId accumulation.
 // - map? (optional): the field Map, omitted when empty — default {}.
-// - payload? (optional): any well-formed CBOR item EXCEPT an array (same
-//   shape rule as an ordinary field value, §3.2, minus major type 4),
-//   carrying this Record's opaque content (for Wrapper Records) or
-//   direct application payload (e.g. Media Payload's content or a
-//   simple text record). Arrays are excluded specifically so a bare
-//   array right after the map/typeId is always unambiguously the start
-//   of subrecords, never a payload -- no marker needed to tell the two
-//   apart (see docs/DESIGN.md). A map-shaped payload requires the field
-//   Map to also be explicitly present (even empty), since major type 5
-//   right after typeId is otherwise always the field Map, never the
-//   payload.
+// - payload? (optional): a byte string or a text string (nothing else --
+//   see docs/DESIGN.md for why the shape was narrowed from "any CBOR
+//   item except an array"), carrying this Record's opaque content (for
+//   Wrapper Records) or direct application payload (e.g. Media
+//   Payload's content or a simple text record). Arrays are excluded so
+//   a bare array right after the map/typeId is always unambiguously the
+//   start of subrecords, never a payload -- no marker needed to tell
+//   the two apart. A byte-string payload with no namespace and typeId
+//   0 (omitted from the wire) would collide with the namespace slot --
+//   this reference encoder refuses to produce that, requiring a
+//   nonzero typeId or an explicit namespace instead (see
+//   docs/DESIGN.md).
 // - subrecord* (zero or more): every remaining item after the payload
 //   (or after the map if no payload is present) is itself a nested
 //   Record, recursively the same shape, always array-wrapped -- a
@@ -98,11 +99,13 @@ function encodeContainer(rootRecord) {
  *   indistinguishable from absent to any decoder.
  * @param {Map<number, any>} [record.fields] - omitted when empty (saves
  *   one byte per record with no fields).
- * @param {*} [record.payload] - any well-formed CBOR value EXCEPT a bare
- *   array, carrying this Record's opaque content (for Wrapper Records)
- *   or direct payload (e.g. Media Payload's content, simple text). To
- *   nest another Record, use `subrecords` -- payload can never be
- *   array-shaped (see docs/DESIGN.md for why).
+ * @param {Buffer|string} [record.payload] - a byte string or a text
+ *   string only, carrying this Record's opaque content (for Wrapper
+ *   Records) or direct payload (e.g. Media Payload's content, simple
+ *   text). To nest another Record, use `subrecords`. A byte-string
+ *   payload with no `localNamespace` and `typeId` of `0` is rejected --
+ *   it would be indistinguishable on the wire from a leading namespace
+ *   (see docs/DESIGN.md).
  * @param {Buffer} [record.localNamespace] - if given, this Record's
  *   own namespace, overriding any inherited ambient one for this
  *   Record (and, per header.js's cascading resolution, for its own
@@ -118,12 +121,25 @@ function recordToItems({ typeId, fields, payload, localNamespace, subrecords }) 
         'so an accidental omission fails loudly instead of silently producing ambiguous bytes (see docs/DESIGN.md)',
     );
   }
-  if (Array.isArray(payload)) {
-    throw new Error('payload cannot be array-shaped -- use subrecords to nest a Record instead');
-  }
-  if (isRecordSpec(payload)) {
+  if (payload !== undefined && !Buffer.isBuffer(payload) && typeof payload !== 'string') {
+    if (Array.isArray(payload)) {
+      throw new Error('payload cannot be array-shaped -- use subrecords to nest a Record instead');
+    }
+    if (isRecordSpec(payload)) {
+      throw new Error(
+        'payload cannot be a record spec ({typeId, fields, ...}) -- use subrecords to nest a Record instead',
+      );
+    }
     throw new Error(
-      'payload cannot be a record spec ({typeId, fields, ...}) -- use subrecords to nest a Record instead',
+      'payload must be a byte string (Buffer) or a text string -- no other CBOR shape is supported ' +
+        '(see docs/DESIGN.md)',
+    );
+  }
+  if (Buffer.isBuffer(payload) && localNamespace === undefined && typeId == 0) {
+    throw new Error(
+      'a byte-string payload with no localNamespace and typeId 0 is ambiguous on the wire -- it would be ' +
+        'indistinguishable from a leading namespace; pass a nonzero typeId or an explicit localNamespace ' +
+        '(see docs/DESIGN.md)',
     );
   }
   const items = [];
@@ -137,16 +153,8 @@ function recordToItems({ typeId, fields, payload, localNamespace, subrecords }) 
   if (typeId != 0) items.push(typeId);
 
   const hasFields = fields !== undefined && fields.size > 0;
-  const payloadIsMapShaped = payload !== undefined && isMapItem(payload);
 
-  if (hasFields) {
-    items.push(fields);
-  } else if (payloadIsMapShaped) {
-    // A map-shaped payload needs the field Map explicitly present (even
-    // empty) -- major type 5 right after typeId is otherwise always the
-    // field Map, never the payload. See docs/DESIGN.md.
-    items.push(new Map());
-  }
+  if (hasFields) items.push(fields);
 
   if (payload !== undefined) items.push(payload);
 

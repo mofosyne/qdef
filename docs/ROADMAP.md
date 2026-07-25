@@ -145,6 +145,20 @@ compliant encoder's actual Bundle records forever. `typeId: 0` is still
 omitted from the wire exactly as before; `rust/qdef-core` and every
 existing container are untouched (see FINDINGS.md).
 
+**Payload narrowed to byte string or text string only, closing a real
+silent-data-loss bug.** A bare uint or byte-string payload with `typeId:
+0` and no namespace used to decode back with the payload silently
+reinterpreted as typeId or namespace and gone entirely — found while
+tracing why the mandatory-typeId change above still felt like a special
+case for one particular shape. Rather than add a fourth guard mechanism
+alongside the three `recordToItems` already had (array/record-spec
+throw, map-shaped auto-inserted an empty field Map), the fix removes
+the ambiguous shapes: a conformant encoder now emits only bstr/tstr as
+payload, and the one truly unremovable collision (byte-string payload
+at position 0, indistinguishable from namespace) is now a loud
+call-time throw instead of a silent trap. Wire format and decoder both
+unchanged (see FINDINGS.md).
+
 ## Deliberately not done yet
 
 - **Sign's general cross-tree coverage (the hash-list form).** Direction

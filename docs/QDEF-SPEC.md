@@ -336,16 +336,21 @@ tag (CBOR tag `2`/`3`). Verify your specific encoder does this, not just
 that some CBOR library is present. See FINDINGS.md #14.
 
 **Payload.** Immediately following the optional field Map (or following
-typeId when no Map is present), a Record MAY carry exactly one payload:
-any well-formed CBOR item EXCEPT an array — a byte string, a text
-string, a scalar, or a nested map or tag, the same shape rule an
-ordinary field value has (§3.2) minus major type 4. A text-string
-payload is assumed to be plaintext — a decoder may infer a media type
-(e.g. `text/plain`) at its discretion — a byte-string payload is opaque,
-its meaning described by the Record's own field Map. Arrays are
-excluded specifically so that an array immediately after the Map (or
-typeId) is always unambiguously the start of subrecords, never a
-payload — no marker or lookahead needed to tell the two apart. Absent,
+typeId when no Map is present), a Record MAY carry exactly one payload.
+**A conformant encoder MUST emit only a byte string or a text string**
+here — not a scalar, a map, a tag, or any other CBOR shape (narrowed
+from an earlier, broader rule; see DESIGN.md and FINDINGS.md for the
+real bug that motivated it). A text-string payload is assumed to be
+plaintext — a decoder may infer a media type (e.g. `text/plain`) at its
+discretion — a byte-string payload is opaque, its meaning described by
+the Record's own field Map. A decoder MAY still recognize any other
+non-array CBOR shape found in this position (the same shape rule an
+ordinary field value has, §3.2, minus major type 4) for forward
+compatibility with bytes from an encoder that predates this rule or
+doesn't follow it — but a conformant encoder never produces one.
+Arrays are excluded specifically so that an array immediately after the
+Map (or typeId) is always unambiguously the start of subrecords, never
+a payload — no marker or lookahead needed to tell the two apart. Absent,
 it costs nothing.
 
 ```
@@ -359,13 +364,14 @@ another Record, use a subrecord (§3.1's Subrecords paragraph below) —
 payload can never itself be a nested Record (see DESIGN.md for why this
 was tried and reverted).
 
-**A map-shaped payload requires the field Map to also be explicitly
-present** — even empty (`{}`, one byte) — since major type 5
-immediately after typeId is otherwise always the field Map, never the
-payload (§3.1's Phase-2 rule). This is the one payload shape that needs
-a carve-out: every other shape is disambiguated by position and
-cardinality alone, but map-shape is already claimed by the field Map's
-own recognition rule.
+**A byte-string payload with no namespace and typeId `0` (omitted from
+the wire) is indistinguishable from a leading namespace.** A conformant
+encoder MUST NOT produce this combination — pass a nonzero typeId, or
+an explicit namespace, to keep the byte string in the payload position
+instead of the namespace position (see DESIGN.md). This is the one
+remaining collision once map- and scalar-shaped payloads are excluded;
+every other payload shape is disambiguated by position and cardinality
+alone.
 
 **A conformant encoder MUST emit the payload as a definite-length CBOR
 item** — §3.4's canonical-encoding requirement already implies this. An

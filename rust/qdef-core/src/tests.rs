@@ -725,18 +725,29 @@ fn a_subrecord_with_no_typeid_of_its_own_defaults_to_bundle_and_never_corrupts_i
 }
 
 // ---------------------------------------------------------------------
-// Payload's shape rule (§3.1/§3.2): any well-formed CBOR item EXCEPT an
-// array -- arrays are always subrecords, never payload, no marker
-// needed. A map-shaped payload needs the field Map explicitly present,
-// since major type 5 right after typeId is otherwise always the field
-// Map.
+// Payload's shape rule (§3.1/§3.2): a conformant encoder emits only a
+// byte string or a text string -- narrowed from "any well-formed CBOR
+// item except an array" after a scalar or map-shaped payload with no
+// namespace/typeId to protect it turned out to be silently misread as
+// typeId or namespace, losing the payload entirely (see FINDINGS.md
+// #56). Arrays are always subrecords, never payload, no marker needed.
+// The decoder itself is unchanged and still recognizes any non-array
+// shape it finds there, including a map, for tolerance of bytes from an
+// encoder that predates or doesn't follow the narrowed rule --
+// `gen-rust-fixtures.js` no longer produces this shape, so this test
+// hand-constructs it instead of using a generated fixture.
 // ---------------------------------------------------------------------
 
 #[test]
-fn a_map_shaped_payload_with_no_other_fields_gets_an_explicit_empty_field_map() {
-    let container =
-        Container::parse(MAP_SHAPED_PAYLOAD_NO_FIELDS_CONTAINER).expect("valid container");
-    let rec = container.root();
+fn the_decoder_still_tolerates_a_map_shaped_payload_with_an_explicit_empty_field_map_even_though_no_conformant_encoder_produces_one(
+) {
+    // [20, {}, {1: "arbitrary map-shaped payload value"}], no magic.
+    let bytes: &[u8] = &[
+        0x83, 0x14, 0xa0, 0xa1, 0x01, 0x78, 0x22, 0x61, 0x72, 0x62, 0x69, 0x74, 0x72, 0x61, 0x72,
+        0x79, 0x20, 0x6d, 0x61, 0x70, 0x2d, 0x73, 0x68, 0x61, 0x70, 0x65, 0x64, 0x20, 0x70, 0x61,
+        0x79, 0x6c, 0x6f, 0x61, 0x64, 0x20, 0x76, 0x61, 0x6c, 0x75, 0x65,
+    ];
+    let rec = record_from_sequence(bytes).unwrap();
     assert_eq!(rec.type_id(), Key::Uint(20));
     // The field Map is present but empty -- not absent -- disambiguating
     // it from the map-shaped payload that follows.

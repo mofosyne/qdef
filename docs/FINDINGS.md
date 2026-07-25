@@ -2983,3 +2983,51 @@ call sites, `typeId: 0,` added at each) — real churn, not a design
 cost, and mechanical: every one of them was passing `typeId: 0`
 implicitly already, just never writing it down. All 159 Node tests
 pass afterward.
+
+### 56. A byte-string or uint payload with typeId 0 and no namespace silently lost the payload entirely — found by asking why the mandatory-typeId fix (#55) still felt like a special case
+
+A follow-up design conversation about #55 zeroed in on one specific
+combination — `[namespace, 0, payload]` requiring the explicit `0` to
+read naturally, while a bare `[payload]` did not — and asked why the
+asymmetry existed at all. Checked directly rather than theorized about:
+it existed because `recordToItems` had a real, live gap. Encoding
+`{ typeId: 0, payload: 42 }` (a bare uint, no namespace, no map) and
+decoding the result back gave `{ typeId: 42, payload: undefined }` —
+the uint silently reinterpreted as typeId, the actual payload gone.
+The identical thing happened to a byte-string payload under the same
+conditions, reinterpreted as a leading namespace instead. Neither case
+was an error or a crash — both produced a fully well-formed, differently-
+meaning Record, the same failure shape as FINDINGS.md's superseded
+missing-`null`-marker entry, just never noticed because nothing had
+gone looking for it in the payload slot specifically.
+
+`recordToItems` already had guards for two of the four colliding
+payload shapes — array-shaped (throws) and record-spec-shaped
+(throws) — plus a silent auto-insert workaround for a third
+(map-shaped, protected by an automatically-inserted empty field Map).
+Byte-string and uint-shaped payload had no guard of any kind.
+
+**Fix: narrow the legal payload shape instead of adding a fourth
+guard.** A conformant encoder now emits only a byte string or a text
+string as payload — no scalar, no map, no tag. This removes the
+uint-vs-typeId and map-vs-field-Map collisions outright rather than
+compensating for them, and deletes the map-shaped-payload carve-out
+(and its auto-insert mechanism) entirely, since map is no longer a
+legal payload shape to protect. Checked against every real call site
+in `src/wrappers.js`, `src/signature.js`, and every test file: all
+already only ever used a byte string; the one file exercising
+scalar/map payload (`payload-any-shape.test.js`, since renamed
+`payload-shape.test.js`) existed specifically to assert the rule this
+entry retires.
+
+One collision survives narrowing on principle, not oversight: a
+byte-string payload at position 0 (no namespace, no nonzero typeId) is
+still the same shape as namespace itself, occupying the same position
+— no shape restriction elsewhere removes it. Closed the same way #55
+closed the equivalent typeId gap: a loud call-time throw rather than a
+silent auto-fix, consistent with how array- and record-spec-shaped
+payload are already handled. `rust/qdef-core` needed no change — it
+returns the payload position as opaque bytes regardless of shape, so
+decoder tolerance for non-conformant bytes (including this project's
+own pre-existing output) is unaffected either way. 163 Node tests pass
+afterward.

@@ -1352,16 +1352,79 @@ Migration-free for tagdrop's own `[typeId, map, subrecord]` shapes, and
 for anything else already built against the shape this format shipped
 with for most of its life — the reverted grammar is a strict subset of
 what was already correct before array-shaped payload existed. Verified:
-`prototype/test/payload-any-shape.test.js` and `subrecords.test.js`
-rewritten for the excluded-array rule; `rust/qdef-core`'s
-`payload_as_record` method removed outright (dead code once payload can
-never be array-shaped); the three `SUBRECORDS_*` fixtures regenerated
-back to their pre-marker byte length. 128 Node tests, 39 Rust tests,
-`cargo fmt`/`clippy -D warnings` clean.
+`prototype/test/payload-shape.test.js` (then named
+`payload-any-shape.test.js`) and `subrecords.test.js` rewritten for the
+excluded-array rule; `rust/qdef-core`'s `payload_as_record` method
+removed outright (dead code once payload can never be array-shaped);
+the three `SUBRECORDS_*` fixtures regenerated back to their pre-marker
+byte length. 128 Node tests, 39 Rust tests, `cargo fmt`/`clippy -D
+warnings` clean.
 
 See FINDINGS.md for the adopter-feedback trail in full, including the
 follow-up refinement on the debugger-detection argument that actually
 closed the question.
+
+## Payload narrowed again — to byte string or text string only, closing a real silent-data-loss bug the array revert didn't touch
+
+The array revert above (previous entry) left every non-array shape
+alone: "scalar, string, map with its carve-out, tag." Two of those
+survivors turned out to have exactly the same failure mode array-shaped
+payload did — an encoder-producible shape the decoder's positional
+grammar can't tell apart from an earlier slot — just never noticed,
+because nothing had gone looking. Checked directly, not assumed: a
+Record built with `typeId: 0` (Bundle, omitted from the wire) and a
+bare uint payload and nothing else decodes back with the uint
+*reinterpreted as typeId* and the payload **silently gone**
+(`payload: undefined`) — not an error, not a decode failure, just data
+loss on round-trip through this project's own reference encoder. The
+identical thing happens to a byte-string payload under the same
+conditions, reinterpreted as a leading namespace instead. Both were
+live, unguarded gaps: `recordToItems` had explicit throws for
+array-shaped and record-spec-shaped payload, and a silent auto-insert
+workaround for map-shaped payload, but bstr- and uint-shaped payload
+had no guard of any kind.
+
+**Rather than add a fourth guard mechanism, the fix removes the shapes
+that need guarding.** A conformant encoder now emits only a byte string
+or a text string as payload — no scalar, no map, no tag. This deletes
+two ambiguities outright (uint-vs-typeId, map-vs-field-Map) rather than
+compensating for them, and deletes the map-shaped-payload carve-out
+paragraph and its auto-inserted empty-Map mechanism along with it,
+since map is no longer a legal payload shape at all. Checked against
+every real call site in `src/wrappers.js` and `src/signature.js`
+(Compress, Encrypt, Split, Signature) plus every test file: all of them
+already only ever used a byte string. The dedicated "any shape is
+legal" test file was the only thing actually exercising the now-
+disallowed shapes — it existed to prove a rule this entry retires.
+
+**One collision survives the narrowing, structurally, not by
+oversight: a byte-string payload at position 0 (no namespace, no
+nonzero typeId) is still indistinguishable from a namespace.** Byte
+string is namespace's own recognized shape — no amount of narrowing
+payload's *other* shapes removes this one, since it isn't a shape
+collision, it's the same shape occupying the same position. Closed the
+same way the mandatory-typeId-argument change (the entry before the
+array-shaped-payload story) closed the equivalent gap: a loud
+call-time throw — `recordToItems` rejects a byte-string payload with no
+`localNamespace` and `typeId` (loosely) `0` — rather than a silent
+auto-fix, consistent with how array- and record-spec-shaped payload are
+already handled. Pass a nonzero typeId, or an explicit namespace
+(even one unrelated to the payload's actual meaning), and the
+collision is gone.
+
+**Wire format and decoder both unchanged**, same split as the
+mandatory-typeId-argument change: a decoder still recognizes any
+non-array CBOR shape it finds in the payload position, for forward
+compatibility with an encoder — including this project's own past
+output, or a foreign encoder — that predates or ignores this rule.
+Only what a *conformant encoder* is willing to produce narrowed.
+`rust/qdef-core` needed no change; it already returns the payload
+position as opaque bytes regardless of shape.
+
+Prototyped in `prototype/src/core.js` (`recordToItems`'s narrowed
+validation) and `prototype/test/payload-shape.test.js` (renamed from
+`payload-any-shape.test.js`, rewritten to assert the retired shapes now
+throw, plus the two collision-closing tests).
 
 ## Common Field Keys (§3.6) — the negative-key space's actual use, once the JS/Rust criticality divergence was fixed rather than just documented
 
