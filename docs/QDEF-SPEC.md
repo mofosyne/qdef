@@ -374,6 +374,15 @@ This is the one remaining collision once map- and scalar-shaped
 payloads are excluded; every other payload shape is disambiguated by
 position and cardinality alone.
 
+> **Note:** this costs nothing Bundle ever had a defined use for.
+> Bundle (§4.6) is structural — its meaning is entirely in its
+> subrecords, and its own field Map is namespace metadata only, never
+> application content (§4.6). A payload would have been an undefined
+> fourth content channel alongside that. A Record that genuinely wants
+> both a namespace and an opaque payload attached still can — give it
+> any nonzero typeId instead of `0`; nothing becomes unrepresentable,
+> it's just no longer spelled "Bundle."
+
 **A conformant encoder MUST emit the payload as a definite-length CBOR
 item** — §3.4's canonical-encoding requirement already implies this. An
 indefinite-length item in this position is still well-formed CBOR a
@@ -1313,9 +1322,11 @@ data — for grouping related Records together as subrecords without
 implying any transformation of their contents. It's also, now, what the
 container root implicitly is whenever typeId is omitted there (§2/§3.1)
 — Bundle is the standard record type that meaning is defined against,
-not a container-only special case. A Bundle's own field Map carries
-only namespace metadata (below), never application content; its
-meaning is otherwise entirely in its subrecords:
+not a container-only special case. Bundle MUST NOT carry a payload
+(§3.1) — no loss in practice, since Bundle never had a defined use for
+one. A Bundle's own field Map carries only namespace metadata (below),
+never application content; its meaning is otherwise entirely in its
+subrecords:
 
 ```
 Type 0: {                        // Bundle (standard record type)
