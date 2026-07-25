@@ -53,7 +53,7 @@ test('Type 900 (TagDrop registration) round-trips an opaque nested CBOR Sequence
     cbor.encode(Buffer.from('hello from tagdrop sector bytes')),
   ]);
 
-  const container = core.encodeContainer({ subrecords: [
+  const container = core.encodeContainer({ typeId: 0, subrecords: [
     {
       typeId: rt.TAGDROP_REGISTRATION_TYPE,
       fields: new Map([[0, fakeTagDropSeq]]),
@@ -94,7 +94,7 @@ function buildPgpBackupCodes(secretKeyBytes, aesKey) {
 
   // One physical QR/NFC code per fragment.
   return fragmentRecords.map((fragRec) =>
-    core.encodeContainer({ subrecords: [fragRec] })
+    core.encodeContainer({ typeId: 0, subrecords: [fragRec] })
   );
 }
 
@@ -159,7 +159,7 @@ test('PGP backup worked example: 2 dropped fragments is unrecoverable (single XO
 // 4. Even/odd key criticality round trip (§3.2)
 // ---------------------------------------------------------------------
 test('unrecognized EVEN key aborts the record', () => {
-  const container = core.encodeContainer({ subrecords: [
+  const container = core.encodeContainer({ typeId: 0, subrecords: [
     {
       typeId: rt.WIFI_TYPE,
       fields: new Map([
@@ -180,7 +180,7 @@ test('unrecognized EVEN key aborts the record', () => {
 });
 
 test('unrecognized ODD key is silently ignored, rest of record still processes', () => {
-  const container = core.encodeContainer({ subrecords: [
+  const container = core.encodeContainer({ typeId: 0, subrecords: [
     {
       typeId: rt.WIFI_TYPE,
       fields: new Map([
@@ -203,7 +203,7 @@ test('unrecognized ODD key is silently ignored, rest of record still processes',
 });
 
 test('one aborted record does not affect sibling records in the same Sequence', () => {
-  const container = core.encodeContainer({ subrecords: [
+  const container = core.encodeContainer({ typeId: 0, subrecords: [
     {
       typeId: rt.WIFI_TYPE,
       fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2], [6, 'unknown critical']]),

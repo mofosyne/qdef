@@ -59,6 +59,7 @@ const wifiUnknownOddKeyContainer = core.encodeContainer({
 // map as its own field Map.
 
 const defaultTypeidZeroContainer = core.encodeContainer({
+  typeId: 0,
   fields: new Map([[0, 'SSID']]),
 });
 
@@ -78,6 +79,7 @@ const bareSequenceNoMagic = core
 // (unknown even key), second is fine.
 
 const twoRecordContainer = core.encodeContainer({
+  typeId: 0,
   subrecords: [
     { typeId: rt.WIFI_TYPE, fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2], [6, 'unknown critical']]) },
     { typeId: rt.TAGDROP_REGISTRATION_TYPE, fields: new Map([[0, Buffer.from('sibling record')]]) },
@@ -199,6 +201,7 @@ const largeTypeIdContainer = core.encodeContainer({
 // (byte-string) namespace with one Wi-Fi content subrecord.
 
 const rootNamespaceContainer = core.encodeContainer({
+  typeId: 0,
   localNamespace: Buffer.from('a9d6e1f30b7c4482', 'hex'),
   subrecords: [{ typeId: rt.WIFI_TYPE, fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) }],
 });
@@ -212,6 +215,7 @@ const rootNamespaceContainer = core.encodeContainer({
 // explicit typeId at all -- typeId defaults to 0 (Bundle).
 
 const bstrAlwaysNamespaceContainer = core.encodeContainer({
+  typeId: 0,
   localNamespace: Buffer.from('a7f90b3c', 'hex'),
   fields: new Map([[0, 'decentralized payload']]),
 });
@@ -337,6 +341,7 @@ const subrecordsWithNamespaceContainer = core.encodeContainer({
 // (Bundle) and both become its subrecords.
 
 const subrecordsSiblingContainer = core.encodeContainer({
+  typeId: 0,
   subrecords: [
     {
       typeId: 23,
@@ -345,17 +350,6 @@ const subrecordsSiblingContainer = core.encodeContainer({
     },
     { typeId: 1, localNamespace: Buffer.from('cdcdcdcd', 'hex'), fields: new Map([[0, 'B']]) },
   ],
-});
-
-// --- Map-shaped payload, no other fields: the encoder auto-inserts an ---
-// empty field Map ahead of it, since major type 5 right after typeId is
-// otherwise always the field Map, never the payload (§3.1's map-shape
-// carve-out). Payload can never be array-shaped -- see docs/DESIGN.md
-// for why that was tried and reverted.
-
-const mapShapedPayloadNoFieldsContainer = core.encodeContainer({
-  typeId: 20,
-  payload: new Map([[1, 'arbitrary map-shaped payload value']]),
 });
 
 // --- Output ---
@@ -424,5 +418,3 @@ console.log(
 );
 console.log();
 console.log(rustBytes('SUBRECORDS_SIBLING_CONTAINER', subrecordsSiblingContainer));
-console.log();
-console.log(rustBytes('MAP_SHAPED_PAYLOAD_NO_FIELDS_CONTAINER', mapShapedPayloadNoFieldsContainer));

@@ -1352,16 +1352,121 @@ Migration-free for tagdrop's own `[typeId, map, subrecord]` shapes, and
 for anything else already built against the shape this format shipped
 with for most of its life — the reverted grammar is a strict subset of
 what was already correct before array-shaped payload existed. Verified:
-`prototype/test/payload-any-shape.test.js` and `subrecords.test.js`
-rewritten for the excluded-array rule; `rust/qdef-core`'s
-`payload_as_record` method removed outright (dead code once payload can
-never be array-shaped); the three `SUBRECORDS_*` fixtures regenerated
-back to their pre-marker byte length. 128 Node tests, 39 Rust tests,
-`cargo fmt`/`clippy -D warnings` clean.
+`prototype/test/payload-shape.test.js` (then named
+`payload-any-shape.test.js`) and `subrecords.test.js` rewritten for the
+excluded-array rule; `rust/qdef-core`'s `payload_as_record` method
+removed outright (dead code once payload can never be array-shaped);
+the three `SUBRECORDS_*` fixtures regenerated back to their pre-marker
+byte length. 128 Node tests, 39 Rust tests, `cargo fmt`/`clippy -D
+warnings` clean.
 
 See FINDINGS.md for the adopter-feedback trail in full, including the
 follow-up refinement on the debugger-detection argument that actually
 closed the question.
+
+## Payload narrowed again — to byte string or text string only, closing a real silent-data-loss bug the array revert didn't touch
+
+The array revert above (previous entry) left every non-array shape
+alone: "scalar, string, map with its carve-out, tag." Two of those
+survivors turned out to have exactly the same failure mode array-shaped
+payload did — an encoder-producible shape the decoder's positional
+grammar can't tell apart from an earlier slot — just never noticed,
+because nothing had gone looking. Checked directly, not assumed: a
+Record built with `typeId: 0` (Bundle, omitted from the wire) and a
+bare uint payload and nothing else decodes back with the uint
+*reinterpreted as typeId* and the payload **silently gone**
+(`payload: undefined`) — not an error, not a decode failure, just data
+loss on round-trip through this project's own reference encoder. The
+identical thing happens to a byte-string payload under the same
+conditions, reinterpreted as a leading namespace instead. Both were
+live, unguarded gaps: `recordToItems` had explicit throws for
+array-shaped and record-spec-shaped payload, and a silent auto-insert
+workaround for map-shaped payload, but bstr- and uint-shaped payload
+had no guard of any kind.
+
+**Rather than add a fourth guard mechanism, the fix removes the shapes
+that need guarding.** A conformant encoder now emits only a byte string
+or a text string as payload — no scalar, no map, no tag. This deletes
+two ambiguities outright (uint-vs-typeId, map-vs-field-Map) rather than
+compensating for them, and deletes the map-shaped-payload carve-out
+paragraph and its auto-inserted empty-Map mechanism along with it,
+since map is no longer a legal payload shape at all. Checked against
+every real call site in `src/wrappers.js` and `src/signature.js`
+(Compress, Encrypt, Split, Signature) plus every test file: all of them
+already only ever used a byte string. The dedicated "any shape is
+legal" test file was the only thing actually exercising the now-
+disallowed shapes — it existed to prove a rule this entry retires.
+
+**One collision survives the narrowing, structurally, not by
+oversight: a byte-string payload at position 0 (no namespace, no
+nonzero typeId) is still indistinguishable from a namespace.** Byte
+string is namespace's own recognized shape — no amount of narrowing
+payload's *other* shapes removes this one, since it isn't a shape
+collision, it's the same shape occupying the same position. Closed the
+same way the mandatory-typeId-argument change (the entry before the
+array-shaped-payload story) closed the equivalent gap: a loud
+call-time throw — `recordToItems` rejects a byte-string payload with no
+`localNamespace` and `typeId` (loosely) `0` — rather than a silent
+auto-fix, consistent with how array- and record-spec-shaped payload are
+already handled. Pass a nonzero typeId, or an explicit namespace
+(even one unrelated to the payload's actual meaning), and the
+collision is gone.
+
+**Wire format and decoder both unchanged**, same split as the
+mandatory-typeId-argument change: a decoder still recognizes any
+non-array CBOR shape it finds in the payload position, for forward
+compatibility with an encoder — including this project's own past
+output, or a foreign encoder — that predates or ignores this rule.
+Only what a *conformant encoder* is willing to produce narrowed.
+`rust/qdef-core` needed no change; it already returns the payload
+position as opaque bytes regardless of shape.
+
+Prototyped in `prototype/src/core.js` (`recordToItems`'s narrowed
+validation) and `prototype/test/payload-shape.test.js` (renamed from
+`payload-any-shape.test.js`, rewritten to assert the retired shapes now
+throw). The namespace-conditional collision guard described above was
+itself refined one round further almost immediately — see the next
+entry.
+
+## Payload/typeId-0 collision guard simplified from namespace-conditional to unconditional — a flat rule reads easier than a correct-but-conditional one
+
+The entry above closed the byte-string-payload-vs-namespace collision
+with a guard scoped exactly to when the collision could actually occur:
+reject only if `localNamespace` was also absent. Correct, but immediately
+flagged as inconsistent in review — "a byte-string payload only
+sometimes needing an explicit typeId depending on whether a namespace
+happens to also be present" is a harder rule to hold in your head than
+it needs to be, and QDEF hadn't shipped yet, so there was no reason to
+keep the narrower, more "efficient" guard just because it technically
+permitted one more construction.
+
+**Replaced with a flat rule: a payload requires a nonzero typeId,
+full stop.** A Bundle (typeId `0`) can never carry a payload, whether or
+not a namespace is also present — `recordToItems` now rejects
+`payload !== undefined && typeId == 0` unconditionally, rather than
+`Buffer.isBuffer(payload) && localNamespace === undefined && typeId ==
+0`. This also closes the door on the exact same collision for a
+would-be scalar/map payload if either of those shapes were ever
+reintroduced later, at no extra cost — the rule is about typeId
+presence, not about the payload's specific shape.
+
+**This was also considered as a wire-level change (making typeId
+mandatory on every Record, never omitted, closing the same collision by
+construction) and rejected as strictly more expensive for no extra
+benefit.** Wire-mandatory typeId would tax every payload-free Bundle
+(the common case — grouping subrecords, or a bare namespace
+declaration) by one byte, to fix a collision that only actually
+involves records that *also* carry a payload. Scoping the fix to
+"payload requires typeId" instead keeps every payload-free Bundle
+exactly as cheap as before, while achieving the identical consistency
+goal — payload's relationship to typeId is now one flat rule with zero
+exceptions, not "usually optional, but sometimes secretly required."
+
+**Wire format and decoder unchanged, same as every entry in this run**:
+a payload-free Bundle still omits typeId from the wire; `rust/qdef-core`
+needed no change. Verified: `gen-rust-fixtures.js` regenerates
+`fixtures.rs` byte-identical, since no existing fixture combined
+`typeId: 0` with a payload. 164 Node tests pass.
 
 ## Common Field Keys (§3.6) — the negative-key space's actual use, once the JS/Rust criticality divergence was fixed rather than just documented
 
@@ -2140,6 +2245,76 @@ magic-prefixed root that isn't array-shaped), and
 `prototype/scripts/gen-rust-fixtures.js`/`fixtures.rs` regenerated to
 match. 138 Node tests and 40 Rust tests pass; `cargo fmt`/`clippy -D
 warnings` clean.
+
+## Encoder-enforced explicit typeId — a decoder-side non-change, a reference-encoder-side safety addition
+
+**The wire grammar is untouched. `rust/qdef-core` is untouched. Every
+existing container decodes exactly as before.** `typeId` stays optional
+on the wire (§3.1) — any encoder's output that omits it still defaults
+to `0` (Bundle), the forgiving-parser choice this project deliberately
+made and has not reconsidered. What changed is narrower: the Node
+prototype's own reference encoder (`core.js`'s `recordToItems`, the
+shared internals behind `encodeContainer`/`encodeRecordBytes`) now
+requires `typeId` as an explicit call-time argument — pass `0`
+explicitly for a Bundle, rather than omitting the key and letting it
+happen implicitly. Wire bytes are identical either way: `typeId: 0` is
+still omitted from the actual CBOR output, exactly as omission already
+was, since a decoder can't tell the two apart regardless.
+
+**Why this, and not wire-level mandatory typeId, which was considered
+and rejected first.** Raised directly: since a missing typeId is the
+one footgun `prototype/scripts/qdef-lint.js`'s own writeup concluded
+can never be caught post-hoc from bytes alone (namespace-present-
+typeId-absent is genuinely ambiguous, byte-identical whether it's an
+intentional Bundle or a forgotten typeId), should the wire grammar
+itself require typeId, closing the ambiguity structurally instead of
+by convention? Checked and rejected: making typeId wire-mandatory buys
+almost nothing in decoder simplicity (the same peek-and-branch shape
+survives regardless of whether the `else` branch defaults or throws)
+while reintroducing a real, previously-eliminated failure mode — "a
+well-formed array that isn't valid Record grammar" — which the
+architecture spent real effort removing (a subrecord missing its
+typeId currently degrades gracefully to Bundle rather than aborting its
+parent; see the array-wrapping and Root Unification entries above). It
+would also cost a real byte on every Bundle-shaped Record from *any*
+compliant encoder, not just the careless ones an encoder-side check
+alone already catches, and would bind every future decoder
+implementation to reject a shape the spec currently, deliberately,
+allows.
+
+**The distinction that resolves it: decoder permissiveness and encoder
+strictness are independently choosable, and only one of them is a
+protocol commitment.** A wire-mandatory rule binds every implementer,
+forever, to reject the same shape — the highest-stakes, least-reversible
+kind of decision this project makes. An encoder-side check binds only
+this encoder, is purely additive on top of what already ships, needs no
+reciprocal support from the decoder to be valuable, and costs nothing
+in wire bytes or decoder robustness. Root Unification's own stated
+philosophy — forgiving parser, responsible encoder — already implied
+exactly this split; this entry is that philosophy actually enforced in
+code for the one case (namespace-shadow ambiguity) it was coined for in
+the first place, rather than left as prose guidance an encoder author
+could still forget.
+
+**Real churn, not a design cost.** `recordToItems` throws
+`'typeId is required...'` when the argument is omitted. Every call site
+across the prototype that previously relied on omission-means-Bundle
+(test fixtures, `gen-rust-fixtures.js`) now passes `typeId: 0`
+explicitly — mechanical, and verified to produce byte-identical output:
+regenerating `rust/qdef-core/src/fixtures.rs` after the change diffs
+clean against what's already committed. The handful of
+`prototype/test/qdef-lint.test.js` cases that specifically exercise the
+decoder's tolerance for a legitimately-omitted typeId (a bare namespace
+declaration; the namespace+hint+content shape from §3.5's own worked
+example) needed the same one-line fix, not a rewrite — the decoder-side
+behavior they're testing never moved.
+
+Prototyped in `prototype/src/core.js` (`recordToItems`'s new guard) and
+verified across all 159 Node tests (unaffected — this is a call-time
+argument requirement, not a new runtime path any existing correct
+caller could trip) plus a byte-identical `fixtures.rs` regeneration
+confirming zero wire impact. `rust/qdef-core` needed no change at all —
+it's decode-only, and the wire format didn't move.
 
 ## Root unification: the container discriminator collapsed into the ordinary Record grammar
 

@@ -38,6 +38,7 @@ test('a Bundle round-trips with an omitted empty map and its subrecords intact',
 
 test('an application with no interest in Bundle skips the whole Record (and its subrecords) cleanly by Type ID alone', () => {
   const container = core.encodeContainer({
+    typeId: 0,
     subrecords: [
       {
         typeId: rt.BUNDLE_TYPE,

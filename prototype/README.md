@@ -12,9 +12,14 @@ found.
   subrecord Record grammar (the container root is an ordinary Record,
   one self-delimited CBOR array — the identical shape a subrecord
   already uses, no separate discriminator item), per-Record prefix
-  typeID recognition (optional, defaulting to `0`/Bundle when omitted;
-  a bare uint, or a namespace-pairing array), the optional payload
-  slot, and the even/odd criticality rule (spec §2–§3).
+  typeID recognition (optional on the wire, defaulting to `0`/Bundle
+  when omitted; a bare uint, or a namespace-pairing array), the
+  optional payload slot, and the even/odd criticality rule (spec §2–§3).
+  `recordToItems` (the encoder's shared internals) requires `typeId` as
+  an explicit argument regardless — a decoder-only choice, not a wire
+  one: the decoder stays forgiving of any encoder's output that omits
+  it, but this reference encoder won't produce that omission by
+  accident (see docs/DESIGN.md's "Encoder-enforced explicit typeId").
   No knowledge of any specific Record Type. Encodes every Record with
   RFC 8949 §4.2.1 canonical CBOR (spec §3.4), not just whatever the
   `cbor` package's default encoder happens to produce.

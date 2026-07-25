@@ -2943,3 +2943,126 @@ bytes (once to find a boundary, once to actually parse) — every finding
 was reported twice until a `NO_FINDINGS` sink was introduced for the
 pure-bounding calls, verified by rerunning the exact fixtures that had
 shown the duplication.
+
+### 55. Encoder-side typeId made mandatory as a call-time argument — closing exactly the ambiguity #54's own linter had to declare undecidable, without reopening the failure mode #52 deliberately closed
+
+`qdef-lint.js` (#54) had to drop its "namespace present, typeId absent"
+footgun check because the two cases it would conflate — a forgotten
+typeId, and a Bundle root's typeId, which is *always* omitted — are
+byte-identical after the fact. That check was right to be dropped: a
+linter working from bytes alone genuinely can't tell them apart. But
+the encoder that produced those bytes always could — it knows whether
+it meant to write a Bundle or forgot a typeId — and prototype/src/
+core.js's `recordToItems` wasn't making it say so.
+
+Considered first, and rejected: making typeId mandatory on the *wire*,
+so a decoder could assume slot 2 is always present. Rejected for the
+same reason #52's root unification specifically bought: the guarantee
+that any well-formed CBOR array decodes as *some* valid Record (a
+subrecord missing typeId gracefully defaults to Bundle, rather than
+corrupting a sibling's positional read) would need reopening for every
+future decoder, not just this one, and every compliant encoder's actual
+Bundle records would pay a byte tax forever to buy back a parser
+simplification that turns out not to be one — the branch shape doesn't
+shrink, only what one branch does changes.
+
+The scoped alternative: `recordToItems` now throws if `typeId` is
+`undefined` — the wire format and `rust/qdef-core`'s decoder are
+untouched, typeId 0 is still omitted from the actual bytes exactly as
+before (`typeId != 0`, loose equality deliberately, so BigInt `0n` from
+the §9 large-Type-ID tier still counts as omittable). The check is
+call-time only: an omitted *argument* now fails loudly; an omitted
+*wire item* is unaffected and indistinguishable from before. Verified
+zero wire impact directly, not assumed: `gen-rust-fixtures.js`
+regenerated `rust/qdef-core/src/fixtures.rs` byte-identical to the
+already-committed file.
+
+Fixing every call site that relied on the old omission-is-allowed
+behavior touched 13 test files and `gen-rust-fixtures.js` itself (~51
+call sites, `typeId: 0,` added at each) — real churn, not a design
+cost, and mechanical: every one of them was passing `typeId: 0`
+implicitly already, just never writing it down. All 159 Node tests
+pass afterward.
+
+### 56. A byte-string or uint payload with typeId 0 and no namespace silently lost the payload entirely — found by asking why the mandatory-typeId fix (#55) still felt like a special case
+
+A follow-up design conversation about #55 zeroed in on one specific
+combination — `[namespace, 0, payload]` requiring the explicit `0` to
+read naturally, while a bare `[payload]` did not — and asked why the
+asymmetry existed at all. Checked directly rather than theorized about:
+it existed because `recordToItems` had a real, live gap. Encoding
+`{ typeId: 0, payload: 42 }` (a bare uint, no namespace, no map) and
+decoding the result back gave `{ typeId: 42, payload: undefined }` —
+the uint silently reinterpreted as typeId, the actual payload gone.
+The identical thing happened to a byte-string payload under the same
+conditions, reinterpreted as a leading namespace instead. Neither case
+was an error or a crash — both produced a fully well-formed, differently-
+meaning Record, the same failure shape as FINDINGS.md's superseded
+missing-`null`-marker entry, just never noticed because nothing had
+gone looking for it in the payload slot specifically.
+
+`recordToItems` already had guards for two of the four colliding
+payload shapes — array-shaped (throws) and record-spec-shaped
+(throws) — plus a silent auto-insert workaround for a third
+(map-shaped, protected by an automatically-inserted empty field Map).
+Byte-string and uint-shaped payload had no guard of any kind.
+
+**Fix: narrow the legal payload shape instead of adding a fourth
+guard.** A conformant encoder now emits only a byte string or a text
+string as payload — no scalar, no map, no tag. This removes the
+uint-vs-typeId and map-vs-field-Map collisions outright rather than
+compensating for them, and deletes the map-shaped-payload carve-out
+(and its auto-insert mechanism) entirely, since map is no longer a
+legal payload shape to protect. Checked against every real call site
+in `src/wrappers.js`, `src/signature.js`, and every test file: all
+already only ever used a byte string; the one file exercising
+scalar/map payload (`payload-any-shape.test.js`, since renamed
+`payload-shape.test.js`) existed specifically to assert the rule this
+entry retires.
+
+One collision survives narrowing on principle, not oversight: a
+byte-string payload at position 0 (no namespace, no nonzero typeId) is
+still the same shape as namespace itself, occupying the same position
+— no shape restriction elsewhere removes it. Closed the same way #55
+closed the equivalent typeId gap: a loud call-time throw rather than a
+silent auto-fix, consistent with how array- and record-spec-shaped
+payload are already handled. `rust/qdef-core` needed no change — it
+returns the payload position as opaque bytes regardless of shape, so
+decoder tolerance for non-conformant bytes (including this project's
+own pre-existing output) is unaffected either way. 163 Node tests pass
+afterward.
+
+### 57. #56's guard was scoped to exactly when the collision could occur; simplified to unconditional one design pass later, because "correct but conditional" is a worse rule to learn than "flat, no exceptions"
+
+#56's fix rejected a byte-string payload only when it would actually
+collide: `typeId 0` AND no `localNamespace`. Immediately reconsidered
+in review — QDEF hasn't shipped, so there was no compatibility reason
+to keep the narrower guard, and "a payload sometimes needs an explicit
+typeId depending on whether you also happened to pass a namespace" is
+exactly the kind of conditional special-casing this whole run of
+changes has been trying to eliminate, not reintroduce one layer down.
+
+Replaced with an unconditional rule: a payload requires a nonzero
+typeId, full stop — a Bundle can never carry one, namespace or not.
+Also considered and rejected: making typeId mandatory on the wire for
+every Record (closing the same collision by construction, at the cost
+of one byte on every payload-free Bundle — the common case). Scoping
+the fix to "payload requires typeId" gets the identical consistency
+result — one flat rule, zero exceptions — without taxing the much more
+common payload-free case at all. Wire format and decoder both still
+unchanged; `gen-rust-fixtures.js` regenerates byte-identical, since no
+existing fixture ever combined `typeId: 0` with a payload. 164 Node
+tests pass.
+
+**Update:** confirmed a zero-action outcome directly with `mofosyne/tagdrop`,
+not just inferred from their previously-documented usage patterns.
+Checked against their actual encoders: their Compress Wrapper
+(`TagDropCodec.kt:394`, `compressWrap`) and Media Payload
+(`TagDropCodec.kt:595-599`, `buildMediaPayload`) both always emit a raw
+byte-string payload alongside a nonzero typeId (`8` and `6`
+respectively) — clean under both #56's shape restriction and this
+entry's flat rule. Their root Bundle construction (`encodeRootBundle`)
+has no payload parameter in its API at all, so it structurally cannot
+violate the new rule even by accident. All three of this run's
+encoder-hardening changes are confirmed no-ops for TagDrop's real
+implementation, not just its previously-observed shape.

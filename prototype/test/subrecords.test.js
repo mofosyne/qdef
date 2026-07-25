@@ -95,6 +95,7 @@ test('a non-array item after the map is read as this Record\'s payload, not skip
 
 test('every Record is self-bounded by its own array -- two top-level Records, one with subrecords and one without, never bleed into each other', () => {
   const seq = core.encodeRecordBytes({
+    typeId: 0,
     subrecords: [
       { typeId: 20, fields: new Map([[0, 'A']]), subrecords: [{ typeId: 2, fields: new Map([[0, 1]]) }] },
       { typeId: 1, fields: new Map([[0, 'B']]) },

@@ -132,6 +132,37 @@ the spec (see FINDINGS.md). A CDDL schema was tried first and rejected
 — see FINDINGS.md for why the standard tooling couldn't actually
 validate QDEF's grammar, not just an assumption.
 
+**The reference encoder now requires `typeId` explicitly, the wire
+format doesn't change at all.** `prototype/src/core.js`'s
+`recordToItems` throws if `typeId` is omitted at call time, closing
+exactly the ambiguity the dropped footgun check above had to declare
+undecidable from bytes alone — the encoder always knows whether it
+meant a Bundle or forgot a typeId, even when the resulting bytes can't
+say. Wire-mandatory typeId was considered and rejected first: it would
+reopen the "any well-formed array decodes as some valid Record"
+guarantee root unification specifically bought, and tax every
+compliant encoder's actual Bundle records forever. `typeId: 0` is still
+omitted from the wire exactly as before; `rust/qdef-core` and every
+existing container are untouched (see FINDINGS.md).
+
+**Payload narrowed to byte string or text string only, closing a real
+silent-data-loss bug.** A bare uint or byte-string payload with `typeId:
+0` and no namespace used to decode back with the payload silently
+reinterpreted as typeId or namespace and gone entirely — found while
+tracing why the mandatory-typeId change above still felt like a special
+case for one particular shape. Rather than add a fourth guard mechanism
+alongside the three `recordToItems` already had (array/record-spec
+throw, map-shaped auto-inserted an empty field Map), the fix removes
+the ambiguous shapes: a conformant encoder now emits only bstr/tstr as
+payload. **The remaining collision guard was simplified one round
+further, from namespace-conditional to a flat rule: a payload requires
+a nonzero typeId, full stop — a Bundle can never carry one, namespace
+or not.** A wire-mandatory-typeId alternative (never omit typeId from
+any Record) was considered and rejected as strictly more expensive for
+the same result — it would tax every payload-free Bundle, the far more
+common case, instead of only the records that actually carry a payload.
+Wire format and decoder both unchanged either way (see FINDINGS.md).
+
 ## Deliberately not done yet
 
 - **Sign's general cross-tree coverage (the hash-list form).** Direction
