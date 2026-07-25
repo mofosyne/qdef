@@ -3031,3 +3031,25 @@ returns the payload position as opaque bytes regardless of shape, so
 decoder tolerance for non-conformant bytes (including this project's
 own pre-existing output) is unaffected either way. 163 Node tests pass
 afterward.
+
+### 57. #56's guard was scoped to exactly when the collision could occur; simplified to unconditional one design pass later, because "correct but conditional" is a worse rule to learn than "flat, no exceptions"
+
+#56's fix rejected a byte-string payload only when it would actually
+collide: `typeId 0` AND no `localNamespace`. Immediately reconsidered
+in review — QDEF hasn't shipped, so there was no compatibility reason
+to keep the narrower guard, and "a payload sometimes needs an explicit
+typeId depending on whether you also happened to pass a namespace" is
+exactly the kind of conditional special-casing this whole run of
+changes has been trying to eliminate, not reintroduce one layer down.
+
+Replaced with an unconditional rule: a payload requires a nonzero
+typeId, full stop — a Bundle can never carry one, namespace or not.
+Also considered and rejected: making typeId mandatory on the wire for
+every Record (closing the same collision by construction, at the cost
+of one byte on every payload-free Bundle — the common case). Scoping
+the fix to "payload requires typeId" gets the identical consistency
+result — one flat rule, zero exceptions — without taxing the much more
+common payload-free case at all. Wire format and decoder both still
+unchanged; `gen-rust-fixtures.js` regenerates byte-identical, since no
+existing fixture ever combined `typeId: 0` with a payload. 164 Node
+tests pass.

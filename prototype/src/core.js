@@ -31,10 +31,11 @@
 //   Payload's content or a simple text record). Arrays are excluded so
 //   a bare array right after the map/typeId is always unambiguously the
 //   start of subrecords, never a payload -- no marker needed to tell
-//   the two apart. A byte-string payload with no namespace and typeId
-//   0 (omitted from the wire) would collide with the namespace slot --
-//   this reference encoder refuses to produce that, requiring a
-//   nonzero typeId or an explicit namespace instead (see
+//   the two apart. A payload REQUIRES a nonzero typeId -- a Bundle
+//   (typeId 0, omitted from the wire) can never carry one, since a
+//   byte-string payload with no real typeId present would collide with
+//   the namespace slot; this is a flat rule with no exceptions, not
+//   conditional on whether a namespace happens to also be present (see
 //   docs/DESIGN.md).
 // - subrecord* (zero or more): every remaining item after the payload
 //   (or after the map if no payload is present) is itself a nested
@@ -102,10 +103,10 @@ function encodeContainer(rootRecord) {
  * @param {Buffer|string} [record.payload] - a byte string or a text
  *   string only, carrying this Record's opaque content (for Wrapper
  *   Records) or direct payload (e.g. Media Payload's content, simple
- *   text). To nest another Record, use `subrecords`. A byte-string
- *   payload with no `localNamespace` and `typeId` of `0` is rejected --
- *   it would be indistinguishable on the wire from a leading namespace
- *   (see docs/DESIGN.md).
+ *   text). To nest another Record, use `subrecords`. REQUIRES a nonzero
+ *   `typeId` -- a Bundle (`typeId: 0`) can never carry a payload, since
+ *   without a real typeId on the wire a byte-string payload would be
+ *   indistinguishable from a leading namespace (see docs/DESIGN.md).
  * @param {Buffer} [record.localNamespace] - if given, this Record's
  *   own namespace, overriding any inherited ambient one for this
  *   Record (and, per header.js's cascading resolution, for its own
@@ -135,11 +136,10 @@ function recordToItems({ typeId, fields, payload, localNamespace, subrecords }) 
         '(see docs/DESIGN.md)',
     );
   }
-  if (Buffer.isBuffer(payload) && localNamespace === undefined && typeId == 0) {
+  if (payload !== undefined && typeId == 0) {
     throw new Error(
-      'a byte-string payload with no localNamespace and typeId 0 is ambiguous on the wire -- it would be ' +
-        'indistinguishable from a leading namespace; pass a nonzero typeId or an explicit localNamespace ' +
-        '(see docs/DESIGN.md)',
+      'a Bundle (typeId 0) cannot carry a payload -- payload requires a real, wire-present typeId; ' +
+        'pass a nonzero typeId instead (see docs/DESIGN.md)',
     );
   }
   const items = [];

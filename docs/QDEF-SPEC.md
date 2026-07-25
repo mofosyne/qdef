@@ -364,14 +364,15 @@ another Record, use a subrecord (§3.1's Subrecords paragraph below) —
 payload can never itself be a nested Record (see DESIGN.md for why this
 was tried and reverted).
 
-**A byte-string payload with no namespace and typeId `0` (omitted from
-the wire) is indistinguishable from a leading namespace.** A conformant
-encoder MUST NOT produce this combination — pass a nonzero typeId, or
-an explicit namespace, to keep the byte string in the payload position
-instead of the namespace position (see DESIGN.md). This is the one
-remaining collision once map- and scalar-shaped payloads are excluded;
-every other payload shape is disambiguated by position and cardinality
-alone.
+**A payload REQUIRES a nonzero typeId — a Bundle (typeId `0`) MUST NOT
+carry a payload.** Flat and unconditional, not merely "when it would
+actually collide": a byte-string payload with no real typeId on the
+wire is indistinguishable from a leading namespace, so a conformant
+encoder never puts the two together, regardless of whether a namespace
+happens to also be present in that particular case (see DESIGN.md).
+This is the one remaining collision once map- and scalar-shaped
+payloads are excluded; every other payload shape is disambiguated by
+position and cardinality alone.
 
 **A conformant encoder MUST emit the payload as a definite-length CBOR
 item** — §3.4's canonical-encoding requirement already implies this. An

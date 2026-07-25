@@ -154,10 +154,14 @@ case for one particular shape. Rather than add a fourth guard mechanism
 alongside the three `recordToItems` already had (array/record-spec
 throw, map-shaped auto-inserted an empty field Map), the fix removes
 the ambiguous shapes: a conformant encoder now emits only bstr/tstr as
-payload, and the one truly unremovable collision (byte-string payload
-at position 0, indistinguishable from namespace) is now a loud
-call-time throw instead of a silent trap. Wire format and decoder both
-unchanged (see FINDINGS.md).
+payload. **The remaining collision guard was simplified one round
+further, from namespace-conditional to a flat rule: a payload requires
+a nonzero typeId, full stop — a Bundle can never carry one, namespace
+or not.** A wire-mandatory-typeId alternative (never omit typeId from
+any Record) was considered and rejected as strictly more expensive for
+the same result — it would tax every payload-free Bundle, the far more
+common case, instead of only the records that actually carry a payload.
+Wire format and decoder both unchanged either way (see FINDINGS.md).
 
 ## Deliberately not done yet
 

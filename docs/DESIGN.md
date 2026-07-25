@@ -1424,7 +1424,49 @@ position as opaque bytes regardless of shape.
 Prototyped in `prototype/src/core.js` (`recordToItems`'s narrowed
 validation) and `prototype/test/payload-shape.test.js` (renamed from
 `payload-any-shape.test.js`, rewritten to assert the retired shapes now
-throw, plus the two collision-closing tests).
+throw). The namespace-conditional collision guard described above was
+itself refined one round further almost immediately — see the next
+entry.
+
+## Payload/typeId-0 collision guard simplified from namespace-conditional to unconditional — a flat rule reads easier than a correct-but-conditional one
+
+The entry above closed the byte-string-payload-vs-namespace collision
+with a guard scoped exactly to when the collision could actually occur:
+reject only if `localNamespace` was also absent. Correct, but immediately
+flagged as inconsistent in review — "a byte-string payload only
+sometimes needing an explicit typeId depending on whether a namespace
+happens to also be present" is a harder rule to hold in your head than
+it needs to be, and QDEF hadn't shipped yet, so there was no reason to
+keep the narrower, more "efficient" guard just because it technically
+permitted one more construction.
+
+**Replaced with a flat rule: a payload requires a nonzero typeId,
+full stop.** A Bundle (typeId `0`) can never carry a payload, whether or
+not a namespace is also present — `recordToItems` now rejects
+`payload !== undefined && typeId == 0` unconditionally, rather than
+`Buffer.isBuffer(payload) && localNamespace === undefined && typeId ==
+0`. This also closes the door on the exact same collision for a
+would-be scalar/map payload if either of those shapes were ever
+reintroduced later, at no extra cost — the rule is about typeId
+presence, not about the payload's specific shape.
+
+**This was also considered as a wire-level change (making typeId
+mandatory on every Record, never omitted, closing the same collision by
+construction) and rejected as strictly more expensive for no extra
+benefit.** Wire-mandatory typeId would tax every payload-free Bundle
+(the common case — grouping subrecords, or a bare namespace
+declaration) by one byte, to fix a collision that only actually
+involves records that *also* carry a payload. Scoping the fix to
+"payload requires typeId" instead keeps every payload-free Bundle
+exactly as cheap as before, while achieving the identical consistency
+goal — payload's relationship to typeId is now one flat rule with zero
+exceptions, not "usually optional, but sometimes secretly required."
+
+**Wire format and decoder unchanged, same as every entry in this run**:
+a payload-free Bundle still omits typeId from the wire; `rust/qdef-core`
+needed no change. Verified: `gen-rust-fixtures.js` regenerates
+`fixtures.rs` byte-identical, since no existing fixture combined
+`typeId: 0` with a payload. 164 Node tests pass.
 
 ## Common Field Keys (§3.6) — the negative-key space's actual use, once the JS/Rust criticality divergence was fixed rather than just documented
 

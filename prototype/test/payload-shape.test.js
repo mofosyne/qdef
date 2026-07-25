@@ -7,8 +7,11 @@
 // a leading namespace, and both lost their actual content entirely on
 // decode -- a real bug, not a hypothetical. Narrowing the shape to
 // bstr/tstr removes the scalar/map cases outright; the remaining
-// bstr-vs-namespace collision is closed by requiring a nonzero typeId
-// or an explicit namespace instead (see docs/DESIGN.md).
+// bstr-vs-namespace collision is closed by a flat, unconditional rule
+// instead of a namespace-conditional one: a payload REQUIRES a nonzero
+// typeId, full stop -- a Bundle (typeId 0) can never carry a payload,
+// even when a namespace happens to also be present and the specific
+// collision wouldn't actually occur (see docs/DESIGN.md).
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -50,25 +53,30 @@ test('a map-shaped payload is rejected -- the field Map/payload carve-out no lon
   );
 });
 
-test('FINDING: a byte-string payload with typeId 0 and no namespace used to be silently misread as a leading namespace, losing the payload entirely -- now rejected', () => {
+test('FINDING: a byte-string payload with typeId 0 used to be silently misread as a leading namespace, losing the payload entirely -- now a flat, unconditional rejection', () => {
   assert.throws(
     () => core.encodeRecordBytes({ typeId: 0, payload: Buffer.from('hi') }),
-    /ambiguous on the wire/,
+    /Bundle.*cannot carry a payload/,
   );
 });
 
-test('a byte-string payload with typeId 0 is fine once an explicit localNamespace is given', () => {
-  const bytes = core.encodeRecordBytes({
-    typeId: 0,
-    localNamespace: Buffer.from('cdcdcdcd', 'hex'),
-    payload: Buffer.from('hi'),
-  });
-  const rec = core.decodeRecordBytes(bytes);
-  assert.ok(rec.localNamespace.equals(Buffer.from('cdcdcdcd', 'hex')));
-  assert.ok(rec.payload.equals(Buffer.from('hi')));
+test('a Bundle cannot carry a payload even with an explicit localNamespace -- the rule is unconditional, not just when it would actually collide', () => {
+  assert.throws(
+    () =>
+      core.encodeRecordBytes({
+        typeId: 0,
+        localNamespace: Buffer.from('cdcdcdcd', 'hex'),
+        payload: Buffer.from('hi'),
+      }),
+    /Bundle.*cannot carry a payload/,
+  );
 });
 
-test('a byte-string payload is fine once a nonzero typeId makes it unambiguous -- typeId 0 was only ever the collision case', () => {
+test('a text-string payload is banned on a Bundle too, not just byte-string -- the rule is "payload requires a real typeId," not shape-specific', () => {
+  assert.throws(() => core.encodeRecordBytes({ typeId: 0, payload: 'hi' }), /Bundle.*cannot carry a payload/);
+});
+
+test('a byte-string payload is fine once a nonzero typeId makes it unambiguous', () => {
   const bytes = core.encodeRecordBytes({ typeId: 5, payload: Buffer.from('hi') });
   const rec = core.decodeRecordBytes(bytes);
   assert.equal(rec.typeId, 5);
