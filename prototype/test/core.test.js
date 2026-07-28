@@ -1,196 +1,200 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { Readable } = require('stream');
 const cbor = require('cbor');
-
 const core = require('../src/core');
-const rt = require('../src/recordTypes');
 
-// ---------------------------------------------------------------------
-// Record Type ID routing (§3.1): typeId is optional and defaults to 0
-// (Bundle) when no uint is found at that position -- a forgiving-
-// parser choice (see docs/DESIGN.md): there is no "ignored, unroutable"
-// state anymore, since every Record always resolves to *some* typeId.
-// ---------------------------------------------------------------------
+// Grammar: [namespace?, ns_annotation?, typeId*, type_annotation?, map?, subrecord*]
 
-test('a record with no typeID before the map defaults to typeId 0 (Bundle), not "ignored"', () => {
-  const recordBytes = new Map([[0, 'SSID']]);
-  const container = Buffer.concat([core.MAGIC, cbor.encodeCanonical([recordBytes])]);
-
-  const root = core.decodeContainer(container);
-  assert.equal(root.typeId, 0);
-  assert.equal(root.map.get(0), 'SSID');
-});
-
-test('a leading byte string is unconditionally read as namespace, never as payload -- even when there\'s nothing after it to pair with', () => {
-  // Dropped requirement (see docs/DESIGN.md): namespace no longer needs
-  // a valid typeId immediately following it. A namespace-shaped payload
-  // with no real namespace intended needs an explicit typeId ahead of
-  // it to escape this reading.
-  const bytes = cbor.encodeCanonical([Buffer.from('not-a-namespace')]);
-  const rec = core.decodeRecordBytes(bytes);
-  assert.ok(rec.localNamespace.equals(Buffer.from('not-a-namespace')));
-  assert.equal(rec.typeId, 0);
-  assert.equal(rec.payload, undefined);
-});
-
-test('an explicit typeId ahead of a bstr payload keeps it from being read as namespace', () => {
-  const bytes = cbor.encodeCanonical([0, Buffer.from('a real payload')]);
-  const rec = core.decodeRecordBytes(bytes);
+test('Bundle: no typeId and no namespace', () => {
+  const rec = core.decodeRecordBytes(cbor.encodeCanonical([]));
+  assert.equal(rec.typeId, undefined);
   assert.equal(rec.localNamespace, undefined);
-  assert.equal(rec.typeId, 0);
-  assert.ok(rec.payload.equals(Buffer.from('a real payload')));
+  assert.equal(rec.map, null);
 });
 
-// ---------------------------------------------------------------------
-// NDEF path (§2): no magic prefix, just the bare self-delimited Record
-// array, parsed exactly like the magic path past the magic check.
-// ---------------------------------------------------------------------
-test('NDEF path: a bare self-delimited Record array (no magic) still routes via decodeSequence, structurally identical to the magic path', () => {
-  // A single record, array-wrapped like any Record -- becomes the root
-  // Record directly, no Bundle indirection (see docs/DESIGN.md).
-  const bareSeq = cbor.encodeCanonical([100, new Map([[0, 'SSID'], [2, 'pass'], [4, 2]])]);
-  // Sanity: this must NOT be parseable as a magic-prefixed container.
-  assert.throws(() => core.decodeContainer(bareSeq), /bad magic/);
-
-  const root = core.decodeSequence(bareSeq);
-  const rec = core.applyCriticality(root, rt.WIFI_KNOWN_KEYS);
-  assert.equal(rec.typeId, 100);
-  assert.equal(rec.map.get(0), 'SSID');
+test('Bundle with namespace', () => {
+  const ns = Buffer.from('deadbeef', 'hex');
+  const rec = core.decodeRecordBytes(cbor.encodeCanonical([ns, [1]]));
+  assert.equal(rec.typeId, undefined);
+  assert.ok(rec.localNamespace.equals(ns));
 });
 
-// ---------------------------------------------------------------------
-// Unknown Record Type at the container level: routed-or-skipped, no
-// Record-Type-specific handling required (§3.3's "Core QDEF parser").
-// ---------------------------------------------------------------------
-test('a totally unrecognized Record Type is skippable without inspecting its keys', () => {
-  const container = core.encodeContainer({
-    typeId: 0,
-    subrecords: [
-      { typeId: 12345, fields: new Map([[0, 'whatever'], [2, 'nested-app-data']]) },
-      { typeId: rt.WIFI_TYPE, fields: new Map([[0, 'SSID'], [2, 'pass'], [4, 2]]) },
-    ],
-  });
-  const root = core.decodeContainer(container);
-  const records = root.subrecords;
-
-  // A minimal core parser's dispatch table just doesn't have 12345 in it —
-  // it never needs to run applyCriticality for a type it has no schema for.
-  const KNOWN_TYPES = new Map([[rt.WIFI_TYPE, rt.WIFI_KNOWN_KEYS]]);
-  const handled = records
-    .filter((r) => KNOWN_TYPES.has(r.typeId))
-    .map((r) => core.applyCriticality(r, KNOWN_TYPES.get(r.typeId)));
-
-  assert.equal(handled.length, 1);
-  assert.equal(handled[0].typeId, 100);
+test('App type, no namespace', () => {
+  const rec = core.decodeRecordBytes(core.encodeRecordBytes({ typeId: [100], fields: new Map([[2, 'SSID']]) }));
+  assert.deepEqual(rec.typeId, [100]);
+  assert.equal(rec.localNamespace, undefined);
+  assert.equal(rec.map.get(2), 'SSID');
 });
 
-// ---------------------------------------------------------------------
-// §2's streaming claim: "a constrained parser can process each record as
-// it streams in, without buffering the whole payload first."
-// ---------------------------------------------------------------------
-test('records decode incrementally off a byte stream, confirming the no-buffering claim', () => {
-  // Each subrecord is still its own self-delimited CBOR array -- a
-  // generic CBOR streaming decoder already emits one complete, parsed
-  // item per array it finds, with no QDEF-specific grammar needed.
-  const seq = Buffer.concat([
-    cbor.encodeCanonical([100, new Map([[0, 'a']])]),
-    cbor.encodeCanonical([900, new Map([[0, 'b']])]),
-  ]);
-
-  return new Promise((resolve, reject) => {
-    const decoder = new cbor.Decoder();
-    const seenTypeIds = [];
-    decoder.on('data', (item) => {
-      if (Array.isArray(item) && typeof item[0] === 'number') seenTypeIds.push(item[0]);
-    });
-    decoder.on('error', reject);
-    decoder.on('end', () => {
-      assert.deepEqual(seenTypeIds, [100, 900]);
-      resolve();
-    });
-    // Feed the sequence in arbitrary small chunks, simulating bytes arriving
-    // off an optical scan / NFC read before the whole payload is buffered.
-    Readable.from([seq.subarray(0, 5), seq.subarray(5, 11), seq.subarray(11)]).pipe(decoder);
-  });
+test('App type within namespace', () => {
+  const ns = Buffer.from('deadbeef', 'hex');
+  const rec = core.decodeRecordBytes(core.encodeRecordBytes({ typeId: [1], localNamespace: ns, fields: new Map([[0, Buffer.from('data')]]) }));
+  assert.deepEqual(rec.typeId, [1]);
+  assert.ok(rec.localNamespace.equals(ns));
+  assert.ok(rec.map.get(0).equals(Buffer.from('data')));
 });
 
-// ---------------------------------------------------------------------
-// There is no backup-typeID mechanism anymore -- at most one typeID-
-// bearing item per Record (see docs/FINDINGS.md). A second typeID-shaped
-// item is just an ordinary unrecognized prefix item now.
-// ---------------------------------------------------------------------
-test('a second, would-be-backup typeID is not accumulated -- it is read as this Record\'s own payload instead', () => {
-  // There is no forward-compat padding left between typeId and the map:
-  // payload now accepts any well-formed CBOR shape (§3.1/§3.2), so a
-  // bare uint immediately after typeId -- with no map before it -- is
-  // unconditionally this Record's payload, not a skipped stray item.
-  // 900 would have been a backup typeID, once -- array-wrapped as the
-  // root Record's own items.
-  const recordBytes = cbor.encodeCanonical([100, 900]);
-  const container = Buffer.concat([core.MAGIC, recordBytes]);
-
-  const root = core.decodeContainer(container);
-  assert.equal(root.typeId, 100);
-  assert.equal(root.map, null);
-  assert.equal(root.payload, 900);
+test('Inherit marker (empty bstr)', () => {
+  const rec = core.decodeRecordBytes(core.encodeRecordBytes({ typeId: [1], localNamespace: Buffer.alloc(0), fields: new Map([[0, Buffer.from('x')]]) }));
+  assert.deepEqual(rec.typeId, [1]);
+  assert.equal(rec.localNamespace.length, 0);
 });
 
-test('a map-shaped item right after typeId is always the field Map, never padding or payload', () => {
-  const recordBytes = cbor.encodeCanonical([100, new Map([[0, 'SSID']])]);
-  const container = Buffer.concat([core.MAGIC, recordBytes]);
-
-  const root = core.decodeContainer(container);
-  assert.equal(root.typeId, 100);
-  assert.equal(root.map.get(0), 'SSID');
+test('Standard type (global, no namespace)', () => {
+  const rec = core.decodeRecordBytes(core.encodeRecordBytes({ typeId: [10], fields: new Map([[0, 'uri']]) }));
+  assert.deepEqual(rec.typeId, [10]);
+  assert.equal(rec.localNamespace, undefined);
+  assert.equal(rec.map.get(0), 'uri');
 });
 
-test('an indefinite-length payload candidate is recognized as payload -- decoder-tolerance-only, documented divergence from rust/qdef-core (§3.1)', () => {
-  // A conformant encoder never emits this (§3.4 requires definite-length),
-  // but a decoder MAY still recognize it. The Node prototype does, because
-  // its underlying `cbor` library normalizes indefinite-length byte/text
-  // strings into a single definite value before application code ever
-  // sees them -- there is no way, post-decode, to tell it apart from a
-  // conformant definite-length payload. rust/qdef-core deliberately does
-  // NOT recognize this shape (an explicit is_indefinite() guard); both
-  // are conformant per §3.1's decoder-tolerance wording.
-  //
-  // array(2) [ typeID uint(20), indefinite-length byte string "hello" ]
-  const bytes = Buffer.from([0x82, 0x14, 0x5f, 0x45, 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0xff]);
+test('Hierarchical typeId [1,2,3]', () => {
+  const ns = Buffer.from('6e73', 'hex');
+  const rec = core.decodeRecordBytes(core.encodeRecordBytes({ typeId: [1, 2, 3], localNamespace: ns, fields: new Map([[0, Buffer.from('d')]]) }));
+  assert.deepEqual(rec.typeId, [1, 2, 3]);
+  assert.ok(rec.localNamespace.equals(ns));
+});
+
+// --- Annotations ---
+
+test('ns annotation', () => {
+  const rec = core.decodeRecordBytes(core.encodeRecordBytes({
+    localNamespace: Buffer.from('deadbeef', 'hex'), nsAnnotation: 'TagDrop', typeId: [1], fields: new Map([[0, Buffer.from('d')]])
+  }));
+  assert.equal(rec.nsAnnotation, 'TagDrop');
+});
+
+test('type annotation', () => {
+  const rec = core.decodeRecordBytes(core.encodeRecordBytes({
+    typeId: [100], typeAnnotation: 'WiFi', fields: new Map([[2, 'SSID']])
+  }));
+  assert.equal(rec.typeAnnotation, 'WiFi');
+});
+
+test('both annotations', () => {
+  const rec = core.decodeRecordBytes(core.encodeRecordBytes({
+    localNamespace: Buffer.from('deadbeef', 'hex'), nsAnnotation: 'Ns', typeId: [1], typeAnnotation: 'Type', fields: new Map([[0, Buffer.from('d')]])
+  }));
+  assert.equal(rec.nsAnnotation, 'Ns');
+  assert.equal(rec.typeAnnotation, 'Type');
+});
+
+test('bare tstr at position 0 is an error', () => {
+  assert.throws(() => core.decodeRecordBytes(cbor.encodeCanonical(['hello'])), /bare tstr/);
+});
+
+test('bare tstr in Bundle is an error', () => {
+  assert.throws(() => core.decodeRecordBytes(cbor.encodeCanonical(['hello', [1]])), /bare tstr/);
+});
+
+// --- Payload at map key 0 ---
+
+test('payload at map key 0', () => {
+  const rec = core.decodeRecordBytes(core.encodeRecordBytes({ typeId: [10], fields: new Map([[0, 'hello']]) }));
+  assert.equal(rec.map.get(0), 'hello');
+});
+
+test('key 1 is just another key (payload descriptor)', () => {
+  const rec = core.decodeRecordBytes(core.encodeRecordBytes({ typeId: [6], fields: new Map([[0, Buffer.from('content')], [1, 22]]) }));
+  assert.ok(rec.map.get(0).equals(Buffer.from('content')));
+  assert.equal(rec.map.get(1), 22);
+});
+
+// --- Subrecords ---
+
+test('subrecords parse independently', () => {
+  const rec = core.decodeRecordBytes(core.encodeRecordBytes({
+    subrecords: [{ typeId: [10], fields: new Map([[0, 'a']]) }, { typeId: [20], fields: new Map([[0, 'b']]) }]
+  }));
+  assert.equal(rec.subrecords.length, 2);
+  assert.deepEqual(rec.subrecords[0].typeId, [10]);
+  assert.deepEqual(rec.subrecords[1].typeId, [20]);
+});
+
+test('non-array items between subrecords are silently skipped', () => {
+  const items = [
+    [10, {0: 'a'}],
+    1,
+    [20, {0: 'b'}],
+  ];
+  const rec = core.decodeRecordBytes(cbor.encodeCanonical(items));
+  assert.equal(rec.subrecords.length, 2);
+  assert.deepEqual(rec.subrecords[0].typeId, [10]);
+  assert.deepEqual(rec.subrecords[1].typeId, [20]);
+});
+
+// --- Container magic ---
+
+test('container with magic', () => {
+  const cont = core.encodeContainer({ typeId: [10], fields: new Map([[0, 'uri']]) });
+  assert.ok(cont.subarray(0, 4).equals(core.MAGIC));
+  const rec = core.decodeContainer(cont);
+  assert.deepEqual(rec.typeId, [10]);
+  assert.equal(rec.map.get(0), 'uri');
+});
+
+test('bad magic', () => {
+  assert.throws(() => core.decodeContainer(Buffer.from('xxxx')), /bad magic/);
+});
+
+// --- NDEF path ---
+
+test('decodeSequence: no magic, bare record', () => {
+  const bytes = core.encodeRecordBytes({ typeId: [100], fields: new Map([[0, Buffer.from('data')]]) });
+  const rec = core.decodeSequence(bytes);
+  assert.deepEqual(rec.typeId, [100]);
+});
+
+// --- Criticality ---
+
+test('even/odd criticality: unknown even key aborts', () => {
+  const rec = { map: new Map([[2, 'x']]) };
+  const result = core.applyCriticality(rec, new Set([]));
+  assert.equal(result.aborted, true);
+});
+
+test('even/odd criticality: unknown odd key is ignored', () => {
+  const rec = { map: new Map([[1, 'x']]) };
+  const result = core.applyCriticality(rec, new Set([]));
+  assert.equal(result.aborted, false);
+  assert.deepEqual(result.ignoredKeys, [1]);
+});
+
+test('criticality skips key 0 (payload)', () => {
+  const rec = { map: new Map([[0, 'payload'], [2, 'unknown']]) };
+  const result = core.applyCriticality(rec, new Set([]));
+  assert.equal(result.aborted, true); // key 2 is unknown even
+});
+
+test('criticality skips negative keys (common headers)', () => {
+  const rec = { map: new Map([[-1, 'id'], [2, 'unknown']]) };
+  const result = core.applyCriticality(rec, new Set([]));
+  assert.equal(result.aborted, true); // key 2 is unknown even
+});
+
+test('criticality: known keys pass', () => {
+  const rec = { map: new Map([[1, 'opt'], [2, 'crit']]) };
+  const result = core.applyCriticality(rec, new Set([1, 2]));
+  assert.equal(result.aborted, false);
+  assert.equal(result.ignoredKeys.length, 0);
+});
+
+// --- Container encode/decode ---
+
+test('round-trip encode/decode container', () => {
+  const original = { typeId: [10], fields: new Map([[0, 'https://example.com']]) };
+  const cont = core.encodeContainer(original);
+  const dec = core.decodeContainer(cont);
+  assert.deepEqual(dec.typeId, [10]);
+  assert.equal(dec.map.get(0), 'https://example.com');
+});
+
+// --- Simple end-to-end ---
+
+test('Bundle with one subrecord', () => {
+  const bytes = core.encodeRecordBytes({ subrecords: [{ typeId: [10], fields: new Map([[0, 'uri']]) }] });
   const rec = core.decodeRecordBytes(bytes);
-
-  assert.equal(rec.typeId, 20);
-  assert.ok(Buffer.isBuffer(rec.payload));
-  assert.equal(rec.payload.toString(), 'hello');
-});
-
-// ---------------------------------------------------------------------
-// Self-delimited root (see docs/DESIGN.md): the root is one CBOR array,
-// exactly like a subrecord, so bytes appended after it are provably
-// outside the container -- not end-of-buffer guesswork, and not
-// required to even be valid CBOR themselves.
-// ---------------------------------------------------------------------
-
-test('bytes appended after the root array, both magic-prefixed and NDEF/own-URI, are ignored -- not decode errors, not misread as more subrecords', () => {
-  const container = core.encodeContainer({ typeId: 100, fields: new Map([[0, 'SSID']]) });
-  const seq = core.encodeRecordBytes({ typeId: 100, fields: new Map([[0, 'SSID']]) });
-
-  // Trailing bytes that are themselves well-formed CBOR (a second,
-  // independent top-level item) must NOT be picked up as a subrecord --
-  // the root array already declared its own element count.
-  const validCborTrailer = cbor.encodeCanonical('not part of this container');
-  const withValidTrailer = core.decodeContainer(Buffer.concat([container, validCborTrailer]));
-  assert.equal(withValidTrailer.typeId, 100);
-  assert.equal(withValidTrailer.subrecords, undefined);
-
-  // Trailing bytes that AREN'T even valid CBOR (e.g. TagDrop's own
-  // deniability use case: a second, differently-encrypted payload
-  // appended after a visible one) must not throw either.
-  const junkTrailer = Buffer.from([0xff, 0xff, 0xff, 0x00, 0x01, 0x02]);
-  const withJunkTrailer = core.decodeContainer(Buffer.concat([container, junkTrailer]));
-  assert.equal(withJunkTrailer.typeId, 100);
-
-  const seqWithJunkTrailer = core.decodeSequence(Buffer.concat([seq, junkTrailer]));
-  assert.equal(seqWithJunkTrailer.typeId, 100);
+  assert.equal(rec.typeId, undefined);
+  assert.equal(rec.subrecords.length, 1);
+  assert.deepEqual(rec.subrecords[0].typeId, [10]);
 });

@@ -22,6 +22,47 @@ against prose here — that includes for an LLM agent proposing a change
 against this repo: treat this file as historical context, never as a
 source of truth for the current wire format.
 
+## Record shape simplified: hierarchical typeId, namespace bstr, payload at map key 0
+
+**Supersedes** the entire namespace/typeId/payload architecture of
+§3-§3.6 from earlier drafts. The redesign made four simultaneous,
+interlocking changes:
+
+1. **Hierarchical typeId**: consecutive uints — `[0, N]` = standard,
+   `[N]` (N > 0) = app type, absent = Bundle. No odd/even parity, no
+   tier ranges (beyond `0` being reserved for standard).
+
+2. **Namespace as optional byte-string prefix**: restored after an
+   intermediate draft dropped it. The namespace bstr sits before the
+   typeId uints, scoping non-standard typeIds. Empty bstr = inherit
+   parent's. Standard types (`[0, N]`) always ignore namespace. This
+   avoids the collision problem of bare uints while keeping the typeId
+   sequence clean — namespace and typeId are separate axes, each doing
+   one thing.
+
+3. **Payload at map key 0**: the dedicated payload slot is removed.
+   Every Record's payload lives at `map[0]`. This eliminates the
+   bstr/tstr restriction on payload shape, the "Bundle can't carry a
+   payload" rule, and the array-vs-payload ambiguity. Cost: ~2 bytes
+   per payload-bearing record, acceptable for byte-mode QR.
+
+4. **Negative keys restricted to ID and UUID only**: the Common Field
+   Key tier (§3.6) shrinks from 8 entries to 2.
+
+5. **Even/odd criticality scoped to positive keys only**: key 0 and
+   negative keys are spec-reserved and excluded from per-Type even/odd.
+
+**Motivation.**: Three independent axes (namespace, typeId, map keys)
+each with one clear job, no overlap, no parity cross-talk. The number
+of record shapes drops from 7 (the final old-system table) to 6, and
+the parser has exactly three branches: "is it a bstr?", "is it a
+uint?", "is it a map?"
+
+**Not yet resolved:** whether namespace bstr must repeat identically
+on every physical code of a multi-code group, or whether per-code
+overrides should be allowed. The old spec required repetition; the new
+system inherits that question.
+
 ## Registry governance — allocation shape proposed, authority still open
 
 Who allocates application-specific Record Type IDs (`100`+) is still

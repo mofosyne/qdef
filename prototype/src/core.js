@@ -1,162 +1,43 @@
 'use strict';
-// QDEF core: magic framing, typeID-prefix routing, even/odd unknown-key
-// criticality. Deliberately has no knowledge of any specific Record
-// Type, compression, or reassembly (see docs/QDEF-SPEC.md §3.3).
+// QDEF core: magic framing, namespace/typeId routing, even/odd unknown-key
+// criticality. Deliberately has no knowledge of any specific Record Type.
 //
-// There is exactly one grammar, applied identically everywhere -- the
-// container root, an NDEF/own-URI-scheme body, a Wrapper Record's
-// unwrapped inner bytes, and every subrecord are all the same one
-// self-delimited CBOR array (see docs/DESIGN.md's "Self-delimited root"
-// entry). No separate "container discriminator" concept exists (see
-// docs/DESIGN.md and docs/FINDINGS.md for why: it collapsed into this
-// same grammar once typeId became optional):
-//   [namespace?, typeId?, map?, payload?, subrecord*]
-// - namespace (optional): a byte string. Recognized whenever the
-//   current position holds one, unconditionally -- there is no
-//   requirement that a valid typeId immediately follow it (dropped
-//   deliberately; see docs/DESIGN.md). Scopes this Record's own
-//   typeId, overriding any inherited ambient namespace for this one
-//   Record (and, by cascade, its own subrecords) only.
-// - typeId (optional): a bare uint. Defaults to 0 (Bundle) when no
-//   uint is found at this position -- a forgiving-parser choice, not
-//   an error case: an encoder that meant to write a real typeId and
-//   didn't is the encoder's own responsibility to catch, not the
-//   decoder's to reject (see docs/DESIGN.md). No other typeId shape is
-//   legal, and there is no backup-typeId accumulation.
-// - map? (optional): the field Map, omitted when empty — default {}.
-// - payload? (optional): a byte string or a text string (nothing else --
-//   see docs/DESIGN.md for why the shape was narrowed from "any CBOR
-//   item except an array"), carrying this Record's opaque content (for
-//   Wrapper Records) or direct application payload (e.g. Media
-//   Payload's content or a simple text record). Arrays are excluded so
-//   a bare array right after the map/typeId is always unambiguously the
-//   start of subrecords, never a payload -- no marker needed to tell
-//   the two apart. A payload REQUIRES a nonzero typeId -- a Bundle
-//   (typeId 0, omitted from the wire) can never carry one, since a
-//   byte-string payload with no real typeId present would collide with
-//   the namespace slot; this is a flat rule with no exceptions, not
-//   conditional on whether a namespace happens to also be present (see
-//   docs/DESIGN.md).
-// - subrecord* (zero or more): every remaining item after the payload
-//   (or after the map if no payload is present) is itself a nested
-//   Record, recursively the same shape, always array-wrapped -- a
-//   subrecord's own boundary must be self-delimited since it sits
-//   inside a larger item list, unlike the outermost list itself.
+// Grammar (same for root, subrecord, and Wrapper inner bytes):
+//   [namespace?, ns_annotation?, typeId*, type_annotation?, map?, subrecord*]
 //
-// No version byte: local forward compatibility is §3.2's even/odd rule.
+// - namespace (optional): bstr at position 0. Empty = inherit parent's.
+// - ns_annotation (optional): tstr immediately after namespace.
+// - typeId*: consecutive uints after namespace/ns_annotation.
+//   First uint = 0 means standard QDEF type. Absent = Bundle.
+// - type_annotation (optional): tstr immediately after last typeId uint.
+// - map? (optional): first non-bstr, non-uint, non-tstr item if a map.
+//   Key 0 = payload. Keys > 0 have even/odd criticality.
+// - subrecord*: remaining items are nested Records.
 //
-// Field values carry no shape restriction: any well-formed CBOR item is
-// legal (§3.2 -- the earlier flat-scalar-or-string-only rule was
-// dropped; see docs/FINDINGS.md).
+// A tstr at position 0 with no preceding bstr or uints is malformed.
 
 const cbor = require('cbor');
 
 const MAGIC = Buffer.from([0x51, 0x44, 0x45, 0x46]); // "QDEF"
 
-/**
- * Encode a QDEF container: magic followed by the root Record, encoded
- * as one self-delimited CBOR array -- the exact same shape
- * encodeRecordBytes produces for any other Record (a subrecord, a
- * Wrapper's inner content). Self-delimiting the root this way means any
- * bytes appended after the container are unambiguously outside it, by
- * construction -- no end-of-buffer guesswork, no marker needed (see
- * docs/DESIGN.md's "Self-delimited root"). The root is otherwise an
- * ordinary Record: it MAY carry a real typeId of its own (a single
- * primary Record, e.g. a Media Payload, needs no Bundle indirection at
- * all -- see docs/DESIGN.md), or pass `typeId: 0` explicitly for Bundle
- * when the container holds several co-equal top-level Records, which
- * then live in `subrecords`.
- *
- * @param {Object} rootRecord - same shape as encodeRecordBytes's
- *   argument (typeId is a required argument on this encoder API, even
- *   though it's optional on the wire -- see recordToItems).
- */
 function encodeContainer(rootRecord) {
   return Buffer.concat([MAGIC, encodeRecordBytes(rootRecord)]);
 }
 
-/**
- * Build the raw (unencoded) JS array representing a single Record's own
- * elements, in order: [namespace?, typeId?, map?, payload?, ...subrecords]
- * -- subrecords themselves built by recursing into this same function,
- * so they nest as CBOR arrays automatically once handed to
- * cbor.encodeCanonical. There is no separate grammar for "a Record when
- * it's nested" or "a Record at the container root": this one shape,
- * reused everywhere.
- *
- * @param {Object} record
- * @param {number|bigint} record.typeId - REQUIRED on this encoder API,
- *   even though the wire grammar itself makes typeId optional (§3.1):
- *   the decoder stays forgiving of any encoder's output that omits it
- *   (defaults to 0, Bundle), but this reference encoder refuses to
- *   produce that omission silently, since omission-vs-intent is exactly
- *   the one ambiguity (a bstr payload with no namespace intended,
- *   misread as a leading namespace bstr) that can only be resolved at
- *   the point of encoding, never decoded back out of the bytes after
- *   the fact -- see docs/DESIGN.md's "Encoder-enforced explicit typeId"
- *   and prototype/scripts/qdef-lint.js's own footgun-check writeup for
- *   why a post-hoc check can't catch this. Pass `0` explicitly for a
- *   Bundle -- still omitted from the actual wire bytes, since `0` is
- *   indistinguishable from absent to any decoder.
- * @param {Map<number, any>} [record.fields] - omitted when empty (saves
- *   one byte per record with no fields).
- * @param {Buffer|string} [record.payload] - a byte string or a text
- *   string only, carrying this Record's opaque content (for Wrapper
- *   Records) or direct payload (e.g. Media Payload's content, simple
- *   text). To nest another Record, use `subrecords`. REQUIRES a nonzero
- *   `typeId` -- a Bundle (`typeId: 0`) can never carry a payload, since
- *   without a real typeId on the wire a byte-string payload would be
- *   indistinguishable from a leading namespace (see docs/DESIGN.md).
- * @param {Buffer} [record.localNamespace] - if given, this Record's
- *   own namespace, overriding any inherited ambient one for this
- *   Record (and, per header.js's cascading resolution, for its own
- *   subrecords too unless they declare their own override).
- * @param {Array<Object>} [record.subrecords] - if given, each element
- *   is itself a record object of this same shape, appended as further
- *   elements after the payload.
- */
-function recordToItems({ typeId, fields, payload, localNamespace, subrecords }) {
-  if (typeId === undefined) {
-    throw new Error(
-      'typeId is required on this encoder API -- pass 0 explicitly for a Bundle rather than omitting it, ' +
-        'so an accidental omission fails loudly instead of silently producing ambiguous bytes (see docs/DESIGN.md)',
-    );
-  }
-  if (payload !== undefined && !Buffer.isBuffer(payload) && typeof payload !== 'string') {
-    if (Array.isArray(payload)) {
-      throw new Error('payload cannot be array-shaped -- use subrecords to nest a Record instead');
-    }
-    if (isRecordSpec(payload)) {
-      throw new Error(
-        'payload cannot be a record spec ({typeId, fields, ...}) -- use subrecords to nest a Record instead',
-      );
-    }
-    throw new Error(
-      'payload must be a byte string (Buffer) or a text string -- no other CBOR shape is supported ' +
-        '(see docs/DESIGN.md)',
-    );
-  }
-  if (payload !== undefined && typeId == 0) {
-    throw new Error(
-      'a Bundle (typeId 0) cannot carry a payload -- payload requires a real, wire-present typeId; ' +
-        'pass a nonzero typeId instead (see docs/DESIGN.md)',
-    );
-  }
+function recordToItems({ typeId, fields, localNamespace, nsAnnotation, typeAnnotation, subrecords }) {
   const items = [];
+
   if (localNamespace !== undefined) items.push(localNamespace);
-  // typeId 0 (Bundle) is still omitted from the actual wire bytes when
-  // possible -- indistinguishable from absent to any decoder either way
-  // (§3.1). The check above is call-time-only, catching an omitted
-  // *argument*, not an omitted *wire item*; this is not a wire-format
-  // change. Loose equality deliberately: typeId may be a BigInt for the
-  // 0x10000+ tier (§9), and `0n` must still compare equal to `0`.
-  if (typeId != 0) items.push(typeId);
+  if (nsAnnotation !== undefined) items.push(nsAnnotation);
 
-  const hasFields = fields !== undefined && fields.size > 0;
+  if (typeId !== undefined) {
+    for (const id of typeId) items.push(id);
+  }
+  if (typeAnnotation !== undefined) items.push(typeAnnotation);
 
-  if (hasFields) items.push(fields);
-
-  if (payload !== undefined) items.push(payload);
+  if (fields !== undefined && fields.size > 0) {
+    items.push(fields);
+  }
 
   if (subrecords !== undefined) {
     for (const sub of subrecords) items.push(recordToItems(sub));
@@ -164,42 +45,10 @@ function recordToItems({ typeId, fields, payload, localNamespace, subrecords }) 
   return items;
 }
 
-/**
- * Detects a leftover record-spec object ({typeId, fields, ...}) passed
- * as payload -- a migration trap from when payload could recursively
- * encode a nested Record. cbor.encodeCanonical would otherwise happily
- * encode such an object as a literal CBOR map with string keys like
- * "typeId", silently producing garbage instead of an error.
- */
-function isRecordSpec(value) {
-  return (
-    value !== null &&
-    typeof value === 'object' &&
-    !Buffer.isBuffer(value) &&
-    !(value instanceof Map) &&
-    !Array.isArray(value) &&
-    typeof value.typeId !== 'undefined'
-  );
-}
-
-/**
- * Encode a single Record as one self-delimited CBOR array -- used for a
- * subrecord, or for the bytes a Wrapper Record's payload carries before
- * it's unwrapped.
- */
 function encodeRecordBytes(record) {
   return cbor.encodeCanonical(recordToItems(record));
 }
 
-/**
- * Decode a QDEF container: verify magic, then decode everything after it
- * as one self-delimited Record array (see decodeRecordBytes). No
- * discriminator to skip or interpret -- the root's own namespace/map
- * fields (if any) carry exactly the job a separate discriminator item
- * used to. Bytes after the root array (if any) are never touched --
- * they are provably outside the container, not guessed at from where
- * the buffer happens to end.
- */
 function decodeContainer(buf) {
   if (buf.length < 4) throw new Error('QDEF container too short for magic');
   const magic = buf.subarray(0, 4);
@@ -209,29 +58,10 @@ function decodeContainer(buf) {
   return decodeRecordBytes(buf.subarray(4));
 }
 
-/**
- * Decode a bare, self-delimited Record array with no magic prefix --
- * the NDEF/own-URI-scheme path (§2), where the carrier (an NDEF MIME
- * type, or an app's own scheme prefix) already identifies the format
- * and already isolates this content from every other QDEF-aware
- * decoder. Structurally identical to decodeContainer past the magic
- * check, and to decodeRecordBytes -- kept as a separate named export
- * for call-site clarity (this one path's caller-visible meaning is "the
- * whole NDEF/own-URI body," not "one Wrapper's unwrapped inner Record"),
- * not because the grammar differs.
- */
 function decodeSequence(seq) {
   return decodeRecordBytes(seq);
 }
 
-/**
- * Parse a list of already-decoded CBOR items into subrecords: each item
- * that is itself a CBOR array is one Record, parsed by
- * parseRecordFromItems below (an array's own elements are exactly such
- * a list); anything else (a stray non-array item) isn't a Record and is
- * silently skipped (forward-compat tolerance, the same principle
- * Phase 2 already applies inside a single Record).
- */
 function parseRecordList(items) {
   const records = [];
   for (const item of items) {
@@ -240,85 +70,66 @@ function parseRecordList(items) {
   return records;
 }
 
-/**
- * Parse a single Record from an already-decoded, flat list of CBOR
- * items -- a Record's own array elements, whether that array is a
- * subrecord, the container root, an NDEF/own-URI body, or a Wrapper
- * Record's unwrapped inner bytes. No structural difference between
- * these contexts: this one function serves all of them.
- *
- *   [namespace?, typeId?, map?, payload?, subrecord*]
- *
- * - namespace: recognized whenever the current item is a byte string,
- *   unconditionally -- no longer requires a following valid typeId
- *   (dropped; see docs/DESIGN.md). A namespace-shaped payload with no
- *   real namespace intended needs an explicit typeId (even `0`) ahead
- *   of it to avoid being read as one.
- * - typeId: a bare uint (major type 0) if present at this position;
- *   absent, defaults to 0 (Bundle). No other shape is recognized as a
- *   typeId.
- * - map? (optional): the item immediately after typeId, if map-shaped;
- *   normalized to a Map instance. Major type 5 in this position is
- *   unconditionally the field Map, never padding, never payload -- if
- *   no map is found there, defaults to null (empty).
- * - payload? (optional): the item immediately after the map (or after
- *   typeId if no map), if present and not array-shaped, is this
- *   Record's payload -- any other CBOR shape is fair game. An
- *   array-shaped item in this position is never payload; it's always
- *   subrecord 0, unconditionally, with no marker needed to tell the two
- *   apart (see docs/DESIGN.md).
- * - subrecord*: every remaining item after payload is a nested Record.
- */
 function parseRecordFromItems(arr) {
   let i = 0;
-  let typeId;
   let localNamespace;
+  let nsAnnotation;
+  let typeAnnotation;
 
+  // Check for namespace bstr at position 0
   if (Buffer.isBuffer(arr[0])) {
     localNamespace = arr[0];
     i = 1;
+    // Check for ns_annotation tstr
+    if (i < arr.length && typeof arr[i] === 'string') {
+      nsAnnotation = arr[i];
+      i++;
+    }
   }
 
-  if (i < arr.length && isTypeId(arr[i])) {
-    typeId = arr[i];
+  // Consume consecutive uints as typeId
+  const typeId = [];
+  while (i < arr.length && isTypeIdItem(arr[i])) {
+    typeId.push(arr[i]);
     i++;
-  } else {
-    typeId = 0;
+  }
+  const resolvedTypeId = typeId.length > 0 ? typeId : undefined;
+
+  // Check for type_annotation tstr (only valid after at least one uint)
+  if (resolvedTypeId !== undefined && i < arr.length && typeof arr[i] === 'string') {
+    typeAnnotation = arr[i];
+    i++;
   }
 
+  // Error: bare tstr at position 0 with no namespace or typeId
+  if (localNamespace === undefined && resolvedTypeId === undefined && i < arr.length && typeof arr[i] === 'string') {
+    // If the first (and only) item is a tstr, that's malformed
+    if (i === 0) {
+      throw new Error('bare tstr at record start with no namespace or typeId');
+    }
+  }
+
+  // Next item, if map, is the field Map
   let map = null;
   if (i < arr.length && isMapItem(arr[i])) {
-    // Normalize: the cbor library decodes empty maps as plain {}, but
-    // downstream code expects Map instances with .get()/.set().
     map =
       arr[i] instanceof Map ? arr[i] : new Map(Object.entries(arr[i]).map(([k, v]) => [Number(k), v]));
-    i++;
-  }
-
-  let payload = undefined;
-  if (i < arr.length && !Array.isArray(arr[i])) {
-    payload = arr[i];
     i++;
   }
 
   const subrecords = i < arr.length ? parseRecordList(arr.slice(i)) : undefined;
 
   return {
-    typeId,
+    typeId: resolvedTypeId,
     localNamespace,
+    nsAnnotation,
+    typeAnnotation,
     subrecords,
     map,
-    payload,
   };
 }
 
-/**
- * Check if a decoded CBOR item is a valid typeID: an unsigned integer
- * (uint, major type 0) — the only valid typeID shape. Byte string and
- * text string Type IDs (decentralized/self-certifying and "Named ID,"
- * respectively) were both retired; see docs/FINDINGS.md.
- */
-function isTypeId(item) {
+function isTypeIdItem(item) {
   if (typeof item === 'number' && Number.isInteger(item) && item >= 0) {
     return true;
   }
@@ -328,11 +139,6 @@ function isTypeId(item) {
   return false;
 }
 
-/**
- * Check whether a decoded CBOR item is a map. The `cbor` library
- * decodes empty CBOR maps as plain `{}` objects, not `Map` instances,
- * so we must handle both cases.
- */
 function isMapItem(item) {
   if (item instanceof Map) return true;
   return (
@@ -346,8 +152,8 @@ function isMapItem(item) {
 }
 
 /**
- * Apply the even/odd criticality rule (§3.2) for a specific Record Type's
- * known key set. Returns the same record annotated with aborted/ignoredKeys.
+ * Apply even/odd criticality (§3.2) for positive keys only.
+ * Key 0 (payload) and negative keys are spec-reserved and skipped.
  */
 function applyCriticality(record, knownKeys) {
   if (!record.map) return { ...record, aborted: false, ignoredKeys: [] };
@@ -355,6 +161,7 @@ function applyCriticality(record, knownKeys) {
   const keys = map instanceof Map ? map.keys() : Object.keys(map).map(Number);
   const ignoredKeys = [];
   for (const key of keys) {
+    if (key === 0 || key < 0) continue;
     if (knownKeys.has(key)) continue;
     if (key % 2 === 0) {
       return {
@@ -368,22 +175,7 @@ function applyCriticality(record, knownKeys) {
   return { ...record, aborted: false, ignoredKeys };
 }
 
-/**
- * Decode a single self-delimited Record array from raw bytes -- the one
- * shared implementation behind decodeContainer (past the magic check)
- * and decodeSequence, and also used directly for inner Records a
- * Wrapper Record (§4.1) unwraps. Reads exactly the first CBOR item off
- * `buf` and requires it to be an array (the same shape encodeRecordBytes
- * always produces); any bytes after that first item are never touched
- * -- they are provably outside this Record, not guessed at from where
- * `buf` happens to end (see docs/DESIGN.md's "Self-delimited root").
- */
 function decodeRecordBytes(buf) {
-  // extendedResults: true so trailing bytes of any shape -- valid CBOR
-  // or not -- are simply left unread rather than triggering a decode
-  // error or being (mis)interpreted as more items. That tolerance is
-  // the entire point of self-delimiting the root: what follows the
-  // array is provably none of this decoder's business.
   const { value } = cbor.decodeFirstSync(buf, { extendedResults: true });
   if (Array.isArray(value)) return parseRecordFromItems(value);
   return parseRecordFromItems([]);
