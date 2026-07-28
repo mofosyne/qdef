@@ -4,13 +4,13 @@ const assert = require('node:assert/strict');
 const core = require('../src/core');
 const sig = require('../src/signature');
 
-test('Signature [16]: encode and verify', () => {
+test('Signature [8]: encode and verify', () => {
   const records = [
     { typeId: [10], fields: new Map([[0, 'https://example.com']]) },
   ];
   const keyPair = sig.generateSigningKeyPair();
   const signed = sig.signatureEncode(records, keyPair.privateKey);
-  assert.deepEqual(signed.typeId, [16]);
+  assert.deepEqual(signed.typeId, [8]);
   assert.ok(signed.fields.get(0) instanceof Buffer);          // signature at key 0
   assert.equal(signed.fields.get(2), -8);                     // algorithm at key 2
   assert.equal(signed.fields.get(4).length, 32);              // public key at key 4

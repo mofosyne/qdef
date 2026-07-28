@@ -369,31 +369,28 @@ Map is empty or absent, `{}` is omitted.
 | TypeId | Record Type      | Section | Notes                          |
 +--------+------------------+---------+---------------------------------+
 | (none) | Bundle           | §4.6    | Structural grouping             |
-| [0,2]  | Split            | §4.1    | Fragment reassembly / parity    |
-| [0,4]  | Encrypt          | §4.1    | AEAD (e.g. AES-256-GCM)         |
-| [0,6]  | Media Payload    | §4.3    | Typed binary content            |
-| [0,8]  | Compress         | §4.1    | DEFLATE                         |
-| [0,10] | Open/Hint URI    | §4.2    | URI to open, or fallback        |
-| [0,12] | App Route        | §4.4    | Application dispatch/routing    |
-| [0,14] | Media Preview    | §4.5    | Content identification + body   |
-| [0,16] | Signature        | §4.7    | Detached authenticity           |
+| [1]    | Split            | §4.1    | Fragment reassembly / parity    |
+| [2]    | Encrypt          | §4.1    | AEAD (e.g. AES-256-GCM)         |
+| [3]    | Media Payload    | §4.3    | Typed binary content            |
+| [4]    | Compress         | §4.1    | DEFLATE                         |
+| [5]    | Open/Hint URI    | §4.2    | URI to open, or fallback        |
+| [6]    | App Route        | §4.4    | Application dispatch/routing    |
+| [7]    | Media Preview    | §4.5    | Content identification + body   |
+| [8]    | Signature        | §4.7    | Detached authenticity           |
 +--------+------------------+---------+---------------------------------+
 ```
 
-All nine sit in the `[0, N]` form with `N` in the `2`–`22` range,
-Standards Action tier — this spec document's own publication is the
-authoritative declaration.
+All nine are global types (no namespace), spec-reserved in the 1–22
+range.
 
-**Type ID allocation ranges.** Since `0` is reserved for standard
-types, all application types use typeIds starting with a uint > 0.
-The namespace (if any) is a separate byte-string prefix:
+**Type ID allocation ranges:**
 
 ```
 +---------------------+---------------------------------------+--------+
 | TypeId form         | Governance                            | Scope  |
 +---------------------+---------------------------------------+--------+
-| [0, N] (N 2-22)    | Standards Action — standard types     | global |
-| [0, N] (N 24-98)   | Specification Required — reserved      | global |
+| [N] (N 1-22)       | Standards Action — standard types     | global |
+| [N] (N 23-98)      | Specification Required — reserved      | global |
 | [N] (N 100-32767)  | Spec Required — reviewed app types     | global |
 |                     |                                       | or ns  |
 | [N] (N 32768+)     | First Come First Served — self-alloc   | global |
@@ -405,7 +402,7 @@ The namespace (if any) is a separate byte-string prefix:
 
 ```
 1. Is this part of QDEF's own standard-record-type infrastructure?
-     YES -> [0, N] with N in 2-22
+     YES -> use assigned number 1-22, no namespace
 
 2. Do you want eventual global recognition?
      YES -> [N] with N in 100-32767

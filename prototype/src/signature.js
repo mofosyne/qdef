@@ -5,7 +5,7 @@
 const crypto = require('crypto');
 const core = require('./core');
 
-const SIGNATURE_TYPE = [16];
+const SIGNATURE_TYPE = [8];
 const SIGNATURE_KNOWN_KEYS = new Set([2, 4]); // algorithm=2, publicKey=4
 
 const COSE_ALG_EDDSA = -8;

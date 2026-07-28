@@ -8,11 +8,11 @@ const crypto = require('crypto');
 const MIN_SELF_CERTIFY_BYTES = 4;
 
 /**
- * Check if a typeId is a QDEF standard type (reserved range 2-22,
+ * Check if a typeId is a QDEF standard type (reserved range 1-22,
  * as defined in §4). Standard types are global (no namespace).
  */
 function isStandardType(typeId) {
-  return Array.isArray(typeId) && typeId.length === 1 && typeId[0] >= 2 && typeId[0] <= 22;
+  return Array.isArray(typeId) && typeId.length === 1 && typeId[0] >= 1 && typeId[0] <= 22;
 }
 
 /**

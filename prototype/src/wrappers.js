@@ -8,13 +8,13 @@ const zlib = require('zlib');
 const cbor = require('cbor');
 const core = require('./core');
 
-const SPLIT_TYPE = [2];
-const COMPRESS_TYPE = [8];
-const ENCRYPT_TYPE = [4];
-const OPEN_HINT_URI_TYPE = [10];
-const MEDIA_PAYLOAD_TYPE = [6];
-const APP_ROUTE_TYPE = [12];
-const MEDIA_PREVIEW_TYPE = [14];
+const SPLIT_TYPE = [1];
+const ENCRYPT_TYPE = [2];
+const MEDIA_PAYLOAD_TYPE = [3];
+const COMPRESS_TYPE = [4];
+const OPEN_HINT_URI_TYPE = [5];
+const APP_ROUTE_TYPE = [6];
+const MEDIA_PREVIEW_TYPE = [7];
 
 // Known keys for each standard type (keys > 0, excluding key 0 which is payload)
 const SPLIT_KNOWN_KEYS = new Set([2, 4, 6, 7, 9]);

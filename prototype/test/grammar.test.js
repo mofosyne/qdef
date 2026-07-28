@@ -100,7 +100,7 @@ test('wrapper: compress round-trip', () => {
   const comp = wrappers.compressEncode(inner);
   const compBytes = core.encodeRecordBytes(comp);
   const compDec = core.decodeRecordBytes(compBytes);
-  assert.deepEqual(compDec.typeId, [8]);
+  assert.deepEqual(compDec.typeId, [4]);
   const decomp = core.decodeRecordBytes(wrappers.compressDecode(compDec));
   assert.equal(decomp.map.get(0).toString(), 'secret data');
 });
@@ -111,7 +111,7 @@ test('wrapper: encrypt round-trip', () => {
   const enc = wrappers.encryptEncode(inner, key);
   const encBytes = core.encodeRecordBytes(enc);
   const encDec = core.decodeRecordBytes(encBytes);
-  assert.deepEqual(encDec.typeId, [4]);
+  assert.deepEqual(encDec.typeId, [2]);
   assert.equal(encDec.map.get(2).length, 12); // nonce at key 2
   const dec = core.decodeRecordBytes(wrappers.encryptDecode(encDec, key));
   assert.equal(dec.map.get(0).toString(), 'secret');
@@ -139,14 +139,14 @@ test('wrapper: split with parity recovery', () => {
 
 // --- Standard type IDs follow the new bare-uint convention ---
 
-test('standard type IDs are bare [N] not [0,N]', () => {
-  assert.deepEqual(wrappers.SPLIT_TYPE, [2]);
-  assert.deepEqual(wrappers.COMPRESS_TYPE, [8]);
-  assert.deepEqual(wrappers.ENCRYPT_TYPE, [4]);
-  assert.deepEqual(wrappers.OPEN_HINT_URI_TYPE, [10]);
-  assert.deepEqual(wrappers.MEDIA_PAYLOAD_TYPE, [6]);
-  assert.deepEqual(wrappers.APP_ROUTE_TYPE, [12]);
-  assert.deepEqual(wrappers.MEDIA_PREVIEW_TYPE, [14]);
+test('standard type IDs are sequential 1-8', () => {
+  assert.deepEqual(wrappers.SPLIT_TYPE, [1]);
+  assert.deepEqual(wrappers.ENCRYPT_TYPE, [2]);
+  assert.deepEqual(wrappers.MEDIA_PAYLOAD_TYPE, [3]);
+  assert.deepEqual(wrappers.COMPRESS_TYPE, [4]);
+  assert.deepEqual(wrappers.OPEN_HINT_URI_TYPE, [5]);
+  assert.deepEqual(wrappers.APP_ROUTE_TYPE, [6]);
+  assert.deepEqual(wrappers.MEDIA_PREVIEW_TYPE, [7]);
 });
 
 // --- Known keys ---
