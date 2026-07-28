@@ -1,14 +1,14 @@
 # QDEF — Quick Data Exchange Format
 
-**Status: Draft. Validated by two throwaway prototypes — a Node round-trip
-prototype covering the full design ([`/prototype`](../prototype)) and a
-`no_std`, zero-dependency Rust prototype of the mandatory core specifically
-([`/rust/qdef-core`](../rust/qdef-core)), which also builds for a bare-metal
-Cortex-M0 target (see [FINDINGS.md](FINDINGS.md)); not yet implemented as a
-reference library, not yet used in production anywhere. This document is
-normative; the reasoning behind its decisions — mechanisms tried and
-removed, alternatives weighed, and what's still unresolved — lives in
-[DESIGN.md](DESIGN.md).**
+**Status: Draft — work in progress. The wire format is settled and
+validated by two prototypes — a Node round-trip prototype covering the
+full design ([`/prototype`](../prototype)) and a `no_std`, zero-dependency
+Rust prototype of the mandatory core ([`/rust/qdef-core`](../rust/qdef-core)),
+which also builds for a bare-metal Cortex-M0 target (see
+[FINDINGS.md](FINDINGS.md)); but there is no reference library and no
+production use yet. This document is normative; the reasoning behind its
+decisions — mechanisms tried and removed, alternatives weighed, and what's
+still unresolved — lives in [DESIGN.md](DESIGN.md).**
 
 QDEF is a general-purpose binary container for multi-action 2D barcodes
 (QR, Data Matrix, Aztec) and NFC tags. Think of it as filling the gap NDEF
@@ -75,33 +75,25 @@ goal. A 4-byte magic header (4 bytes total, no version byte) for instant
 optical-stream validation, followed directly by the **root Record** —
 one self-delimited CBOR array (major type 4), the exact same shape as
 any subrecord (§3), holding that Record's own
-`namespace?`/`typeId*`/`map?`/`subrecord*` items. Self-
+`namespace? typeId?`/`map?`/`subrecord*` items. Self-
 delimiting the root this way means any bytes appended after the
 container are unambiguously outside it, by construction — no
 end-of-buffer guesswork, no marker needed.
 
-```
-+----------------------+----------------------------------------------------+
-|   Magic (4 bytes)     |     Root Record, one CBOR array (§3)                 |
-+----------------------+----------------------------------------------------+
-| 0x51 0x44 0x45 0x46   |  [ namespace?, typeId*, map?, sub* ]                |
-|       "QDEF"          |  (self-delimited; anything after it is              |
-|                        |   provably outside the container)                   |
-+----------------------+----------------------------------------------------+
-```
+| Magic (4 bytes) | Root Record |
+|---|---|
+| `0x51 0x44 0x45 0x46` ("QDEF") | One self-delimited CBOR array: `[namespace?, typeId*, map?, sub*]`. Anything after it is provably outside the container. |
 
 The root Record follows the same grammar as every other Record (§3):
-an optional byte-string **namespace** (empty = inherit), then zero or
-more consecutive uints forming the **typeId** sequence, then an
-optional CBOR **map** (key `0` reserved for the payload), then
-**subrecords**:
+an optional byte-string **namespace** (empty string = inherit from
+parent), then zero or more consecutive uints forming the **typeId**
+sequence, then an optional CBOR **map** (key `0` reserved for payload),
+then **subrecords**:
 
 ```
-QDEF [100, {2: "SSID"}]                        -- typeId [100], no namespace
-QDEF [h'deadbeef', 1, {0: "data"}]            -- namespace + type [1]
-QDEF [[100, {2: "SSID"}], [200, {0: "data"}]]  -- Bundle (no typeId), two subrecords
-QDEF [0, 10, {0: "https://..."}]               -- standard type [0, 10]
-QDEF [h'deadbeef', 0, 10, {0: "..."}]         -- namespace ignored for standard type
+QDEF [5, {0: "https://..."}]                 -- typeId [5] = Open/Hint URI (standard)
+QDEF [h'deadbeef', 1, {0: "data"}]         -- namespace + typeId [1], scoped
+QDEF [[5, {0: "..."}], [100, {2: "SSID"}]]   -- Bundle, two subrecords
 ```
 
 Both the root array and every subrecord's own array header (its CBOR
@@ -121,10 +113,12 @@ same self-delimited root array with no magic, decoded via the same
 `decodeSequence` path.
 
 **No version byte.** §3's even/odd criticality rule for map keys already
-provides local forward compatibility.
+provides local forward compatibility; versioning is redundant with
+per-field criticality.
 
 **No record count or total payload size in the header.** The root
-Record's own CBOR array is self-delimiting.
+Record's own CBOR array is self-delimiting, so these fields would be
+redundant.
 
 ## 3. The Record Architecture
 
@@ -135,39 +129,119 @@ namespace?, ns_annotation?, typeId*, type_annotation?, map?, subrecord*
 ```
 
 - **namespace** (optional): a CBOR **byte string** (major type 2) at
-  position 0. Empty (`h''`) = inherit parent's. Absent = no scoping.
+  position 0. Empty (`h''`) = inherit parent's namespace. Absent = no
+  scoping for following app typeIds.
 - **ns_annotation** (optional): a **text string** (major type 3)
-  immediately after namespace — human-readable label, never load-bearing.
-  Valid only after a namespace bstr.
-- **typeId***: zero or more consecutive CBOR **uints** (major type 0).
-  Leading uint `0` = standard QDEF type (§4) — always global. Leading
-  uint > 0 = app type, scoped by namespace if present. Zero = Bundle.
+  immediately after a namespace — a human-readable label for the
+  namespace, never load-bearing for routing. Present only if a
+  namespace precedes it.
+- **typeId** (optional): zero or more consecutive CBOR **uints** (major
+  type 0). Global when no namespace is present; scoped to the namespace
+  otherwise. Low values `1`–`22` are reserved for standard QDEF types
+  (§4); all other values are available for application types. Absent
+  (no uints) = **Bundle**.
 - **type_annotation** (optional): a **text string** immediately after
-  the last typeId uint — human-readable label, never load-bearing.
-  Valid only after at least one uint.
-- **map** (optional): first non-bstr, non-uint, non-tstr item, if a map
-  (major 5), is the field Map. Key `0` = payload.
-- **subrecord***: remaining items are nested Records.
+  the last typeId uint — a human-readable label for the type, never
+  load-bearing. Present only if at least one uint precedes it.
+- **map** (optional): the first non-bstr, non-uint, non-tstr item, if
+  it is a CBOR **map** (major type 5), is the field Map. Key `0` is
+  reserved for the payload. Negative keys `-1` and `-3` are QDEF common
+  headers (ID and UUID). Positive keys carry application fields with
+  even/odd criticality (§3.2).
+- **subrecord***: remaining items after the map.
 
-A text string in any other position (e.g. position 0 with no preceding
-bstr or uints) is a malformed Record — decoder MUST reject.
+A text string in any other position (e.g. at position 0 with no
+preceding namespace or uints) is a malformed Record — the decoder MUST
+reject it.
+
+A subrecord is always generically isolable — any decoder can skip one
+using ordinary CBOR array-skipping, without Record-grammar knowledge.
 
 ### Record shapes at a glance
 
 | Wire shape | Typical use |
 |---|---|
 | `[ [ ... ], ... ]` | Bundle (no ns, no typeId) |
-| `[h'ns', "n", [ ... ]]` | Bundle with namespace + annotation |
-| `[N, { ... }]` | App type, no namespace |
-| `[N, "name", { ... }]` | App type + type annotation |
-| `[h'ns', "n", N, { ... }]` | Namespace + ns annotation + type |
-| `[h'ns', N, "n", { ... }]` | Namespace + type + type annotation |
-| `[0, N, { ... }]` | Standard type (global) |
-| `[h'', N, { ... }]` | Inheriting parent's ns |
+| `[h'ns', [ ... ], ...]` | Bundle with namespace |
+| `[N, { ... }]` | App type (no namespace), or standard type (§4) when N is 1–22 |
+| `[N, "name", { ... }]` | App type with type annotation |
+| `[h'ns', "name", N, { ... }]` | Namespace + ns annotation + type |
+| `[h'ns', N, "name", { ... }]` | Namespace + type + type annotation |
+| `[h'', N, { ... }]` | App type inheriting parent's ns |
+
+### TypeId + Namespace system
+
+Two axes, one rule each:
+
+| Axis | Rule |
+|---|---|
+| **namespace** absent | typeId is **global** — same meaning for every decoder |
+| **namespace** present (bstr, or empty `h''` inherit) | typeId is **scoped** to that namespace |
+| **typeId** absent | **Bundle** — structural only |
+| **typeId** present | Defines the Record's type, globally or scoped per namespace |
+
+Namespace presence is the sole scoping signal. A typeId `[2]` without a
+namespace is globally the Split wrapper (§4.1). The same `[2]` within
+a namespace `h'deadbeef'` is an app-chosen type, unrelated to Split.
+
+Standard QDEF Record Types (§4) are global (no namespace) with reserved
+low typeId numbers 1–22. Application types are global when no namespace
+is declared, or scoped when one is. The X.X.X hierarchical space is
+shared — namespace presence, not the typeId value, determines scope.
 
 ### Map key conventions
 
-Same as website copy.
+| Key range | Purpose | Governance |
+|---|---|---|
+| `0` | Payload | RESERVED — same meaning in every Record |
+| `1` | Payload descriptor | RESERVED — optional hint for what key 0 holds (MIME type, URI, label, etc.) |
+| `< 0` | Common header keys | Spec-governed — only `-1` (ID) and `-3` (UUID) |
+| `>= 2` | Application fields | Per-Type numbering, with even/odd criticality (§3.2) |
+
+Key `0` carries the Record's payload when present. Key `1` is an
+optional hint describing the payload — never load-bearing for routing,
+a decoder MUST NOT rely on it for correctness. A Bundle (no typeId)
+MUST NOT have either key.
+
+Key 0 and 1 form a natural pair: the heavy data and its description.
+All standard types follow this convention, and application types are
+encouraged to do the same:
+
+| Standard type | Key 0 | Key 1 |
+|---|---|---|
+| Bundle | — | — |
+| Split [1] | fragment bytes | — |
+| Encrypt [2] | ciphertext + tag | — |
+| Media Payload [3] | content bytes | media type (MIME/CoAP) |
+| Compress [4] | deflated bytes | — |
+| Open/Hint URI [5] | URI | label |
+| App Route [6] | domain/hash | label |
+| Media Preview [7] | — (content in subrecord) | — |
+| Signature [8] | signature bytes | — |
+
+Application types that don't follow this convention shift their fields
+to start at key 2, which also gets the first even/odd criticality
+signal.
+
+**Implementer caution:** a uint typeId element MUST be encoded as a
+native CBOR uint (major type 0), never wrapped in a bignum tag (CBOR
+tag `2`/`3`).
+
+### 3.1 Annotations
+
+Annotations are optional text strings in two fixed positions: one
+after the namespace bstr (ns_annotation) and one after the last typeId
+uint (type_annotation). They are human-readable labels — never
+load-bearing for routing, criticality, or any parse-time decision.
+
+A decoder MUST NOT use an annotation to determine a Record's type,
+choose a code path, or modify any parsed value. The decoder SHOULD
+preserve annotations for diagnostic display or re-encoding.
+
+A conformant encoder MAY emit annotations to improve readability of
+the wire format for debugging and forensic inspection. Since QR code
+capacity often includes error-correction slack, annotations typically
+cost zero net bytes (they occupy what would otherwise be padding).
 
 ### 3.2 The Extensibility Rule (Even/Odd Keys)
 
@@ -195,16 +269,19 @@ a string, or a nested array, map, or tag of any depth.
 ```
 
 Pre-encoding structured content as an opaque byte string is still
-legal:
+legal, and still useful when an outer decoder should skip it without a
+generic CBOR library:
 
 ```
 7: h'8301060b'                    // pre-encoded [1, 6, 11], opaque to a
                                    //   decoder that skips it
 ```
 
-**Skip-safety.** `skip_any_item` walks containers of any shape with a
+**Skip-safety.** `skip_any_item` (the mandatory core's generic "skip any
+well-formed CBOR item" function) walks containers of any shape with a
 bounded explicit stack, never the call stack. Nesting depth is bounded
-by each decoder's own practical limit.
+by each decoder's own practical limit, an implementation detail, not
+part of this spec's wire contract.
 
 **Advisory, not required.** Encoders SHOULD NOT produce field values
 nested more deeply than genuinely useful content needs. Decoders MAY
@@ -213,14 +290,20 @@ enforce their own depth limit and reject anything deeper.
 **Indefinite-length items are legal in field values for decoders to
 accept, never for conformant encoders to produce** — §3.4's
 canonical-encoding requirement (definite-length forms only) is
-unchanged for encoders.
+unchanged for encoders; this is decoder-side tolerance only.
 
 **Precondition on "the whole stream is unaffected":** this isolation
-guarantee assumes the Record's own array is at least well-formed CBOR.
-A Record with absent typeId (Bundle) or unrecognized typeId is still
-well-formed CBOR and isolable — only that one Record is affected, never
-its siblings. A Record whose own array is not even well-formed CBOR is
-a stronger failure.
+guarantee assumes the Record's own array is at least well-formed CBOR —
+a parser needs the array's byte length to find where the next Record
+starts, and determines that length generically (skipping the whole
+array as one item) before attempting to interpret what's inside it
+(§3). A Record with absent typeId (Bundle) or unrecognized typeId is
+still well-formed CBOR and isolable this way — only that one Record is
+affected, never its siblings. A Record whose own array is not even
+well-formed CBOR (including a malformed indefinite-length chunk
+sequence within it) is a stronger failure: the parser cannot determine
+that boundary at all and cannot safely resume scanning for further
+siblings.
 
 ### 3.3 Conformance Levels
 
@@ -264,7 +347,7 @@ This is a requirement on *encoders*, not decoders: a decoder MUST NOT
 reject an otherwise well-formed Record merely for being non-canonically
 encoded (key order never affects whether `map[N]` is findable). The rule
 exists so that anywhere QDEF hashes a Record's bytes for content-
-addressing (§4.1's `group_id`, and any future Sign mechanism, §8), two
+addressing (§4.1's `group_id` and any future Sign mechanism, §8), two
 independent encoders handed identical field values compute the same
 hash — otherwise semantically-identical content could hash differently
 across encoders. See DESIGN.md for the full reasoning.
@@ -276,21 +359,47 @@ cheap, since Record Maps are small by construction.
 
 ### 3.5 Namespace Scoping
 
-A namespace is a byte string prefix on a Record, scoping its
-non-standard typeIds. The namespace value is self-chosen — typically a
+A namespace is a byte string prefix on a Record. When present, the
+Record's typeId is scoped to that namespace — a different namespace (or
+no namespace) treats the same typeId as a different type. When absent,
+the typeId is global, interpreted the same by every decoder.
+
+The namespace value is self-chosen by the application — typically a
 hash-derived value from a reverse-domain string, 4+ bytes long for
-collision safety.
+collision safety (SHA-256 prefix, self-certify at 4+ bytes). Two
+independent apps picking the same namespace collide every type within
+it.
 
-**Two special values:**
+**Special values:**
 - **Empty byte string `h''`**: inherit the parent Record's namespace.
-- **Absent (no bstr at position 0)**: no namespace.
+  Only valid inside a subrecord whose parent declared one.
+- **Absent (no bstr at position 0)**: no namespace — typeId is global.
 
-**Standard types ignore namespace.** A typeId starting with `0` (e.g.
-`[0, 10]`) is always global.
+**Cascade.** A Record's namespace (if any) applies to its subrecords by
+default. A subrecord uses `h''` to inherit, `h'ns'` to set its own, or
+omits the namespace to opt out entirely (global within the subrecord).
 
-**Cascade.** A Record's namespace applies to its subrecords by default.
-A subrecord uses `h''` to inherit, or declares its own explicit
-namespace to override, or omits it entirely to opt out.
+```
+QDEF [10, {0: "https://..."}]                    // Global (standard) type [10]
+QDEF [h'deadbeef', 1, {0: h'<payload>'}]         // Namespace-scoped type [1]
+QDEF [h'deadbeef', [100, {2: "child"}]]          // Bundle with namespace,
+                                                  //   subrecord inherits
+QDEF [h'deadbeef', [h'', 100, {2: "child"}]]    // Explicit inherit
+```
+
+Standard QDEF Record Types (§4) use global (no-namespace) typeIds with
+reserved low numbers 1–22. An app could assign `[2]` inside its own
+namespace for a completely different purpose — no collision with Split,
+because the namespace is different.
+
+**Byte-length guidance:** self-allocate at 4 bytes or longer (birthday
+bound: ~9k namespaces before 1% collision risk at 4 bytes). Shorter is
+reserved — safe only with direct coordination.
+
+**Hash-derivation:** `value = SHA-256(UTF-8(name))[0:N]`, with an
+optional human-readable Hint name carried in the ns_annotation slot
+(§3.1) rather than a map key — available at parse time without map
+lookup.
 
 ### 3.6 Reserved Map Keys
 
@@ -300,37 +409,30 @@ which is governed by per-Type even/odd criticality:
 **Key `0` — Payload (RESERVED).** The Record's content payload. A
 text string value is assumed plaintext; a byte string is opaque content
 whose meaning is defined by the Record's own Type. Any other CBOR type
-is also valid. A Bundle (no typeId) MUST NOT carry key `0`.
+is also valid. A Bundle (no typeId) MUST NOT carry key `0`, but it MAY
+carry a map with only metadata keys (e.g. `-3` for a container UUID):
 
-**Key `1` — Payload descriptor (RESERVED).** An optional hint
-describing what key `0` holds — for example, a MIME type, URI scheme,
-or human-readable label. Never load-bearing for routing; a decoder MUST
-NOT rely on it for correctness. Key 0 and key 1 form a natural pair
-(the data and its description) used by all standard types.
-
-Keys 2+ are Type-specific, with even/odd criticality.
+```
+QDEF [{-3: h'<16B UUID>'}, [10, {0: "uri"}]]   // Bundle with UUID + subrecord
+```
 
 **Negative keys — QDEF Common Headers (spec-governed).** These are
 few, spec-maintained only, and never self-allocatable by an
-application:
+application — an application-invented negative key would break the
+consistent, Type-independent recognition this tier exists for:
 
-```
-+------+-----------------+--------------------------------------------+
-| Key  | Name            | Value shape                                 |
-+------+-----------------+--------------------------------------------+
-|  -1  | ID              | bstr or tstr -- an NDEF-ID-equivalent       |
-|      |                 | correlation token                           |
-|  -3  | UUID            | bstr, exactly 16 bytes -- a standard        |
-|      |                 | RFC 4122/9562 UUID, binary form only        |
-+------+-----------------+--------------------------------------------+
-```
+| Key | Name | Value shape |
+|---|---|---|
+| -1 | ID | `bstr` or `tstr` — an NDEF-ID-equivalent correlation token |
+| -3 | UUID | `bstr`, exactly 16 bytes — standard RFC 4122/9562 UUID |
 
 **ID vs. UUID: two different jobs, not two shapes of the same field.**
 ID is for correlating Records *within* the same scan/tap — cheap,
-scoped, no uniqueness requirement. UUID is a stronger, standardized
-identifier meant to survive outside the container entirely — tracking
-a specific piece of content across scans, sessions, or systems. A Record
-MAY carry either, both, or neither.
+scoped, no uniqueness requirement, the direct equivalent of NDEF's own
+`ID` field. UUID is a stronger, standardized identifier meant to survive
+outside the container entirely — tracking a specific piece of content
+across scans, sessions, or systems. A Record MAY carry either, both, or
+neither.
 
 **A Type's own key `0` (payload) and the common `ID` key (`-1`) can
 never collide** — CBOR's major-type distinction between non-negative
@@ -339,6 +441,20 @@ disjoint.
 
 All other keys are positive integers (`> 0`) governed by that Record
 Type's own field numbering, with even/odd criticality (§3.2).
+
+### Typical use of reserved keys
+
+| Key | Typical application | Example |
+|-----|-------------------|---------|
+| `0` | Primary content | Media Payload carries image bytes; Compress carries deflated stream; Open/Hint URI carries the URL; App Route carries the domain |
+| `1` | Content descriptor | Media Payload describes key 0's MIME type; Open/Hint URI gives the link text; App Route labels the routing target |
+| `-1` (ID) | Intra-container correlation | A Signature Record references its covered Records by ID; a Split fragment shares ID with other fragments in the group |
+| `-3` (UUID) | Cross-session identity | A Media Payload carries the same UUID across scans so a client can deduplicate content it already saw on a different QR code |
+
+An application type that carries a heavy binary blob and a short label
+should use key 0 for the blob and key 1 for the label — this is the
+convention all standard types follow, and generic tools will render the
+pair consistently.
 
 ## 4. The QDEF Standard Record Types
 
@@ -351,52 +467,42 @@ instead: a small, curated set of Record Types any application can pull
 in — writing no reassembly code, no cipher code, no fallback-routing
 code of its own.
 
-**Notation.** Throughout this section, `Type [0, N]: { ... }` is
-shorthand for a standard Record Type's own array (§3):
-`[0, N, { ... }]`. The brace-only form is used here purely for
-readability; the wire shape is always the full array. When the field
-Map is empty or absent, `{}` is omitted.
+**Notation.** Throughout this section, `Type N: { ... }` is shorthand
+for a standard Record Type: `[N, { ... }]` — a global typeId with no
+namespace. The wire shape is always the full array. Standard types are
+global (no namespace bstr) by construction; the same typeId number
+inside an app-chosen namespace is a different, unrelated type.
 
-**Standard record type IDs** all share the `[0, N]` form — the leading
-`0` marks them as QDEF-spec-standard. `N` values `2`–`98` are reserved;
-`N = 0` is not used (Bundle has no typeId). Application types use `[N]`
-(N > 0) for simple types or `[Ns, Nt]` for namespace-scoped types.
+**Standard record type IDs** use the low range 1–22, reserved for the
+QDEF spec. Higher numbers are available for apps, with or without a
+namespace for scoping.
 
-**Currently assigned type IDs**, each defined in its own subsection below:
+**Currently assigned type IDs:**
 
-```
-+--------+------------------+---------+---------------------------------+
-| TypeId | Record Type      | Section | Notes                          |
-+--------+------------------+---------+---------------------------------+
-| (none) | Bundle           | §4.6    | Structural grouping             |
-| [1]    | Split            | §4.1    | Fragment reassembly / parity    |
-| [2]    | Encrypt          | §4.1    | AEAD (e.g. AES-256-GCM)         |
-| [3]    | Media Payload    | §4.3    | Typed binary content            |
-| [4]    | Compress         | §4.1    | DEFLATE                         |
-| [5]    | Open/Hint URI    | §4.2    | URI to open, or fallback        |
-| [6]    | App Route        | §4.4    | Application dispatch/routing    |
-| [7]    | Media Preview    | §4.5    | Content identification + body   |
-| [8]    | Signature        | §4.7    | Detached authenticity           |
-+--------+------------------+---------+---------------------------------+
-```
+| TypeId | Record Type | Section | Notes |
+|---|---|---|---|---|
+| (absent) | Bundle | §4.6 | Structural grouping |
+| [1] | Split | §4.1 | Fragment reassembly / parity |
+| [2] | Encrypt | §4.1 | AEAD (e.g. AES-256-GCM) |
+| [3] | Media Payload | §4.3 | Typed binary content |
+| [4] | Compress | §4.1 | DEFLATE |
+| [5] | Open/Hint URI | §4.2 | URI to open / fallback |
+| [6] | App Route | §4.4 | Application dispatch |
+| [7] | Media Preview | §4.5 | Content identification |
+| [8] | Signature | §4.7 | Detached authenticity |
 
 All nine are global types (no namespace), spec-reserved in the 1–22
 range.
 
-**Type ID allocation ranges:**
+**Type ID allocation ranges.** Scope is determined by namespace
+presence, not the typeId value:
 
-```
-+---------------------+---------------------------------------+--------+
-| TypeId form         | Governance                            | Scope  |
-+---------------------+---------------------------------------+--------+
-| [N] (N 1-22)       | Standards Action — standard types     | global |
-| [N] (N 23-98)      | Specification Required — reserved      | global |
-| [N] (N 100-32767)  | Spec Required — reviewed app types     | global |
-|                     |                                       | or ns  |
-| [N] (N 32768+)     | First Come First Served — self-alloc   | global |
-|                     |                                       | or ns  |
-+---------------------+---------------------------------------+--------+
-```
+| Range | Governance | Scope |
+|---|---|---|
+| 1–22 | Standards Action — QDEF standard types (§4) | global (by spec) |
+| 23–98 | Specification Required — reserved | global |
+| 100–32767 | Specification Required — reviewed app types | global (no ns) or scoped (with ns) |
+| 32768+ | First Come First Served — self-allocated | global (no ns) or scoped (with ns) |
 
 **Choosing a type ID form:**
 
@@ -404,52 +510,41 @@ range.
 1. Is this part of QDEF's own standard-record-type infrastructure?
      YES -> use assigned number 1-22, no namespace
 
-2. Do you want eventual global recognition?
-     YES -> [N] with N in 100-32767
+2. Does your app need collision isolation from other apps?
+     YES -> declare a byte-string namespace (§3.5) and use any
+            typeId within it — numbers are local to your namespace
 
-     NO  -> [N] with N 32768+, optionally scoped by a
-            self-chosen byte-string namespace (§3.5)
+     NO  -> pick any number 100+ without a namespace (global)
 ```
 
 ### 4.1 Wrapper Records (optional)
 
 A **Wrapper Record** is an ordinary Record — same routing, same even/odd
-rule — using a reserved low Type ID, whose payload is not application data
-but the *encoded bytes of another Record* (which may itself be a Wrapper
-Record, nested). Unwrapping and re-parsing the result as a Record is the
-entire mechanism: no new parsing concept beyond "run the Record parser
-again on these bytes." A single generic resolver — reassemble fragments /
-decompress / decrypt, then re-parse as a Record, repeat until the result
-isn't a Wrapper Record anymore — implements this for every Record Type
-that opts in, with zero code written by that Record Type's own author
-(demonstrated in `prototype/src/wrappers.js`'s `resolveStack`).
+rule — using a standard Type ID, whose payload at map key `0` is not
+application data but the *encoded bytes of another Record* (which may
+itself be a Wrapper Record, nested). Unwrapping and re-parsing the
+result as a Record is the entire mechanism: no new parsing concept
+beyond "run the Record parser again on these bytes." A single generic
+resolver — reassemble fragments / decompress / decrypt, then re-parse as
+a Record, repeat until the result isn't a Wrapper Record — implements
+this for every Record Type that opts in, with zero code written by that
+Record Type's own author (demonstrated in `prototype/src/wrappers.js`'s
+`resolveStack`).
 
-Wrapper Type IDs, authoritatively assigned by this spec document itself
-(Standards Action, `0`–`22` — see the note above the Type ID allocation
-table on why that tier needs no separate registry to be real):
+Wrapper Type IDs use the standard low range, global (no namespace):
 
 ```
-Type [0, 2]:                     // Split
+Type 4:                          // Compress (DEFLATE)
   // field map:
-  0: h'<fragment bytes>',       // PAYLOAD: this code's slice (key 0)
-  2: h'<group_id>',              // CRITICAL: content-addressed hash of the
-                                  //   full reassembled bytes
-  4: 1,                          // CRITICAL: this fragment's index
-  6: 4,                          // CRITICAL: total fragment count
-  7: 5821,                       // OPTIONAL (odd): total_bytes (MUST be
-                                  //   present when key 9 is set)
-  9: 1                           // OPTIONAL: parity_scheme
+  0: h'<deflate bytes>'          // PAYLOAD: deflated bytes (key 0 = payload)
 
-Type [0, 8]:                     // Compress (DEFLATE)
+Type 2:                          // Encrypt (e.g. AES-GCM)
   // field map:
-  0: h'<deflate bytes>'          // PAYLOAD: deflated bytes (key 0)
-
-Type [0, 4]:                     // Encrypt (e.g. AES-GCM)
-  // field map:
-  0: h'<ciphertext+tag>',        // PAYLOAD: ciphertext + 16-byte GCM tag
+  0: h'<ciphertext+tag>',        // PAYLOAD: ciphertext concatenated with the
+                                  //   16-byte GCM authentication tag (key 0)
   2: h'<nonce>',                 // CRITICAL
   3: 3,                          // OPTIONAL: Algorithm — 3 = A256GCM
-  5: -25                         // OPTIONAL: Key Algorithm
+  5: -25                         // OPTIONAL: Key Algorithm — -25 = ECDH-ES+HKDF-256
 ```
 
 **Keys `3` (Algorithm) and `5` (Key Algorithm)** are each a uint or a
@@ -483,7 +578,7 @@ application needing ciphertext indistinguishable from random should
 keep its own encryption entirely inside an opaque registered blob (§5)
 instead. See FINDINGS.md #13.
 
-**Fragment chunking (Type 2).** The spec must fix *how* the original bytes
+**Fragment chunking (Split, Type 1).** The spec must fix *how* the original bytes
 are sliced, not just what fields describe the result, or two independent
 encoders/decoders can't agree on wire bytes. Fixed rule:
 
@@ -534,36 +629,48 @@ whose *entire* content is a single URI, with nothing else to fall back
 from.
 
 ```
-Type [0, 10]:                        // Open/Hint URI (standard record type)
+Type 5:                            // Open/Hint URI (standard record type)
   // field map:
-  0: "https://example.com/open-this",  // PAYLOAD: URI (key 0)
+  0: "https://example.com/open-this",  // PAYLOAD: URI a generic tool or
+                                        //   browser can follow (key 0)
   1: "Open in MyApp",                   // OPTIONAL: human-readable label
   3: "en",                              // OPTIONAL: BCP 47 language tag
-  5: 0                                  // OPTIONAL: suggested action
+                                        //   for key 1's label
+  5: 0                                  // OPTIONAL: suggested action --
+                                        //   0 = perform the action (open
+                                        //   the URI), 1 = save for later,
+                                        //   2 = open for editing
 }
+```
 
 This is what gives a QDEF container the "something useful happens even
 without the specific app" property. It **must** stay a plain sibling
-record, never nested inside a Wrapper.
+record, never nested inside a Wrapper — a Wrapper's opaque payload
+would hide it from a parser that understands nothing else in the
+container.
 
 **Keys `3` and `5`** are odd/optional (§3.2): key `3` a BCP 47 language
-tag for key `1`'s label, key `5` a suggested action.
+tag for key `1`'s label, key `5` a suggested action (`0` = perform the
+action, `1` = save for later, `2` = open for editing). A decoder that
+doesn't recognize either still gets a fully working URI and label.
 
 **Multiple languages or URIs need no new mechanism** — repeat Open/Hint
-URI as an ordinary sibling Record, once per variant.
+URI as an ordinary sibling Record, once per variant. Nothing in QDEF
+restricts how many Records of the same Type appear in one array.
 
 ### 4.3 Media Payload (optional)
 
 A plain standard record type Record Type — not a wrapper — for attaching a standard,
 already-widely-recognized media type (a JPEG thumbnail, a vCard, a PDF
 snippet) without registering a bespoke Type ID for every possible file
-format the way [EXAMPLES.md](EXAMPLES.md) does for application-specific content:
+format the way Examples does for application-specific content:
 
 ```
-Type 6:                           // Media Payload (standard record type)
+Type 3:                            // Media Payload (standard record type)
   // field map:
   0: h'<content bytes>',          // PAYLOAD: the content itself (key 0)
-  1: 22                           // OPTIONAL: Media Type — uint or text
+  1: 22                           // OPTIONAL: Media Type — uint or text,
+                                   //   see below (22 = image/jpeg)
 ```
 
 **Key `1` (Media Type) may be a uint or a text string** — an encoder's
@@ -594,15 +701,18 @@ implementer-specific knowledge baked in ([GitHub issue
 #10](https://github.com/mofosyne/qdef/issues/10)):
 
 ```
-Type [0, 12]:                       // App Route — domain form
+Type 6:                            // App Route (standard record type) — domain form
   // field map:
-  0: "example.com",                 // PAYLOAD: domain (key 0)
+  0: "example.com",                 // PAYLOAD: a domain the routing target
+                                     //   has verified control over (key 0)
   1: "Open in Example App"          // OPTIONAL: human-readable label
 
-Type [0, 12]:                       // App Route — hash-derived form
+Type 6:                            // App Route (standard record type) — hash-derived form
   // field map:
   0: h'<truncated SHA-256>',        // PAYLOAD: hash-derived byte string
+                                     //   value (key 0)
   1: "com.example/tagdrop-paper"    // OPTIONAL: Hint name
+}
 ```
 
 **Key `0` may be a domain string or a hash-derived byte string — two
@@ -617,14 +727,12 @@ application opens.
 
 *The hash-derived form* uses a hash-derivation algorithm (SHA-256 over
 the name's UTF-8 bytes, truncated to the developer's chosen length) to
-produce key `0`'s value, with key `1` playing the Hint name role. This
-is a plain field value, not a Type ID — App Route's own routing typeId
-is always the standard uint `12` either way. **This form has no
-anti-spoofing property.** The hash-derivation proves name-to-value
-consistency, never authorization — anyone can compute the same hash
-from the same name. Use this form only where getting it wrong costs
-*effort*, not *trust*: a fast, per-code pre-filter a scanner uses to
-reject an obviously-unrelated scan before attempting reassembly,
+produce key `0`'s value, with key `1` playing the Hint name role.
+**This form has no anti-spoofing property.** The hash-derivation proves
+name-to-value consistency, never authorization — anyone can compute the
+same hash from the same name. Use this form only where getting it wrong
+costs *effort*, not *trust*: a fast, per-code pre-filter a scanner uses
+to reject an obviously-unrelated scan before attempting reassembly,
 layered ahead of §4.1's `group_id` integrity check, never as a
 replacement for it.
 
@@ -667,11 +775,13 @@ independently of the content bytes themselves, which travel as this
 Record's own subrecord (§3):
 
 ```
-Type [0, 14]:                       // Media Preview (standard record type)
+Type 7:                            // Media Preview (standard record type)
   // field map:
   // (no key 0 — no payload; content travels as subrecord)
-  2: "image/png",                   // CRITICAL: IANA media type
-  3: h'12<digest>',                 // OPTIONAL: multihash-style content hash
+  2: "image/png",                   // CRITICAL: IANA media type (RFC 6838),
+                                     //   or a CoAP Content-Format uint
+  3: h'12<digest>',                 // OPTIONAL: multihash-style content
+                                     //   hash -- see below
   5: "photo.png",                   // OPTIONAL: filename or slug
   7: "Trail photo"                  // OPTIONAL: human-readable label
 }
@@ -703,8 +813,8 @@ The identified content itself is carried as a subrecord, typically a
 §4.3 Media Payload:
 
 ```
-[ 0, 14, { 2: "image/png", 3: h'...', 5: "photo.png" },
-  [ 0, 6, { 0: h'<payload bytes>', 2: "image/png" } ] ]
+[ 7, { 2: "image/png", 3: h'...', 5: "photo.png" },
+  [ 3, { 0: h'<payload bytes>', 1: "image/png" } ] ]
 ```
 
 **Why not put identification fields on Media Payload's own map?** §4.3
@@ -714,18 +824,17 @@ Preview adds the identification layer as a separate, composable Record
 instead of growing Media Payload's own field set.
 
 **When Split is present, Split MUST be outermost, with Media Preview as
-its subrecord** — not the reverse. A decoder that doesn't recognize `[0, 14]`
-(critical): a decoder that doesn't recognize Type 14 aborts on that
-whole Record, including anything nested inside it. If Media Preview
-wrapped Split instead, an old Split-only decoder that has never heard
-of Media Preview would lose the ability to reassemble the fragment
-group at all. With Split outermost, that same old decoder just skips
-the unrecognized Media Preview subrecord (§3.2) and reassembles
-correctly regardless:
+its subrecord** — not the reverse. A decoder that doesn't recognize
+`[7]` (Media Preview) skips the entire Record, including anything
+nested inside it. If Media Preview wrapped Split instead, an old
+Split-only decoder that has never heard of Media Preview would lose the
+ability to reassemble the fragment group at all. With Split outermost,
+that same old decoder just skips the unrecognized Media Preview
+subrecord (§3.2) and reassembles correctly regardless:
 
 ```
-[ 0, 2, { 0: h'<fragment 0>', 2: h'<group_id>', 4: 0, 6: 3, 7: 9 },
-  [ 0, 14, { 2: "image/png", 3: h'...', 5: "photo.png" } ] ]
+[ 1, { 0: h'<fragment 0>', 2: h'<group_id>', 4: 0, 6: 3, 7: 9 },
+  [ 7, { 2: "image/png", 3: h'...', 5: "photo.png" } ] ]
 ```
 
 Identification fields repeat on every code in the group, the same as
@@ -738,18 +847,29 @@ Prototyped in `prototype/test/media-preview.test.js`.
 
 A **Bundle** is a structural Record — not a wrapper, not application
 data — for grouping related Records together as subrecords. It has no
-typeId (absent), no payload (no key 0), and no field Map of its own.
-Its meaning is entirely in its subrecords:
+typeId (absent) and no payload (no key 0). It MAY carry a map with
+metadata keys (UUID, ID, etc.) for container-level identity. Its
+meaning is otherwise entirely in its subrecords:
 
 ```
-[]                              // Empty Bundle (container root, no subrecords)
-[[100, {2: "SSID"}], [0, 10, ...]] // Bundle with two subrecords
+[]                              // Empty Bundle (no map)
+[[100, {2: "SSID"}], [10, ...]] // Bundle with two subrecords
+[{-3: h'<16B>'}, [100, ...]]   // Bundle with container UUID
 ```
 
 The container root is implicitly a Bundle whenever its array leads with
 no uints (§2). An explicit Bundle subrecord exists for grouping Records
 one level down, which a generic tool can recognize and skip as a unit
-without inspecting each subrecord's typeId.
+without inspecting each subrecord's typeId:
+
+```
+[
+  [ [1, {0: h'<fragment>', 2: h'<group_id>', 4: 0, 6: 3}],
+    [1, {0: h'<fragment>', 2: h'<group_id>', 4: 1, 6: 3}] ],
+  [5, {0: "https://..."}]
+]
+// Bundle holding Split fragments and an Open/Hint URI
+```
 
 A decoder that doesn't recognize Bundle (no standard-type knowledge)
 skips the entire array generically via ordinary array-skipping — the
@@ -766,7 +886,7 @@ them.
 
 A **Signature** is a sibling Record providing detached authenticity: it
 covers Records around it without wrapping or hiding them, so they stay
-plain and readable to a decoder that doesn't recognize Type 16 at all.
+plain and readable to a decoder that doesn't recognize Type 8 at all.
 Coverage is positional, not hash-based — a Signature Record covers
 every Record immediately preceding it **within the same array** (the
 root array, or a shared parent's own subrecord list), since the
@@ -775,13 +895,18 @@ whichever is nearer. It never covers a Record at a different nesting
 level, its own parent's map or payload, or anything that follows it:
 
 ```
-Type [0, 16]:                      // Signature (standard record type)
+Type 8:                            // Signature (standard record type)
   // field map:
   0: h'<signature bytes>',         // PAYLOAD: signature over the covered
-                                     //   Records' own canonical bytes (key 0)
+                                     //   Records' own canonical bytes,
+                                     //   concatenated in wire order
+                                     //   (64 bytes for EdDSA)
   2: -8,                           // CRITICAL: Algorithm — a COSE Algorithm
-                                     //   ID (IANA registry, RFC 9053); -8 = EdDSA
-  4: h'<32-byte public key>'       // CRITICAL: Public Key — raw bytes
+                                     //   ID (IANA "COSE Algorithms"
+                                     //   registry, RFC 9053); -8 = EdDSA
+  4: h'<32-byte public key>'       // CRITICAL: Public Key — raw bytes,
+                                     //   length and shape defined by
+                                     //   Algorithm (32 bytes for EdDSA)
 ```
 
 Unlike Encrypt's Algorithm field (§4.1, key `3`, odd/optional — a
@@ -798,7 +923,7 @@ the wire, not a reconstruction: a decoder recomputes it by re-encoding
 each covered Record from its parsed form and concatenating the results,
 the same canonical-encoding reliance `group_id` (§4.1) already requires.
 
-**A decoder that does recognize Type 16 MUST NOT let Algorithm broaden
+**A decoder that does recognize Type 8 MUST NOT let Algorithm broaden
 which algorithms it's willing to run** — the same allowlist discipline
 as Encrypt's key `3`/`5` (§4.1).
 
@@ -840,8 +965,8 @@ one Record Type ID and carry that payload unchanged, byte-for-byte, as an
 opaque blob under a single key:
 
 ```
-[ N, {
-  0: h'<existing payload bytes>'  // CRITICAL: raw bytes, unchanged from
+[ N, {                            // typeId [N], key 0 = payload
+  0: h'<existing payload bytes>'  // PAYLOAD: raw bytes, unchanged from
                                    //   whatever that application already
                                    //   defines — QDEF never looks inside
 } ]
@@ -857,13 +982,12 @@ QDEF for it to keep working exactly as it does today.
 (`mofosyne/tagdrop` uses exactly this pattern, illustrated here as Type
 `900`; §7 below is an unrelated adopter using the same mechanism.)
 
-**Registering a real Type ID before governance exists.** `900` here is
+**Registering a real Type ID before governance exists.** `[900]` here is
 an illustrative placeholder, not a protected allocation — the
-`100`–`32767` tier has no review authority yet. Any adopter wiring this
-into real shipping code before that governance exists should declare
-their own namespace (§3.5) and use a namespace-scoped odd uint instead
-of a fixed low number in the shared tier — cheaper, and no Type ID to
-migrate later.
+`[N]` with `N` in `100`–`32767` tier has no review authority yet. Any
+adopter wiring this into real shipping code before that governance
+exists should pick their own namespace `Ns > 0` and use `[Ns, Nt]`
+instead — cheaper, and no Type ID to migrate later.
 
 **On signing:** an adopter whose own signature covers the
 fully-reassembled plaintext (after all splitting/addressing is
@@ -900,7 +1024,8 @@ codes are only ever scanned by its own app, never clicked or typed — so per
 "When QDEF earns its place" (§1), going through QDEF's byte-mode container
 (magic header included) is the right call.
 
-Registers one Record Type, say `[950]`, for the plain secret-key bytes:
+Registers one Record Type (`[950]` — an illustrative placeholder, not a
+protected allocation), for the plain secret-key bytes:
 
 ```
 [950, {0: h'<raw secret key packet bytes>'}]   // typeId [950], payload at key 0
@@ -912,12 +1037,12 @@ composes it through two Wrapper Records, in the recommended order from
 layer here — key material is already high-entropy, DEFLATE wouldn't help):
 
 ```
-authoring:  [950] Record  →  Encrypt [0, 4]  →  Split [0, 2]
-decoding:   Split [0, 2]  →  Encrypt [0, 4]  →  [950] Record
+authoring:  [950] Record  →  Encrypt [2]  →  Split [1]
+decoding:   Split [1]  →  Encrypt [2]  →  [950] Record
             (per code)       (after reassembly)    (the real key)
 ```
 
-Each printed code carries one Split-Wrapper Record (Type 2) with
+Each printed code carries one Split-Wrapper Record (`[1]`) with
 `parity_scheme` set — losing one code out of the set is recoverable, which
 matters far more for a one-off secret-key backup than for disposable
 content. The app wrote **zero** reassembly, parity, or AES-GCM code of its
