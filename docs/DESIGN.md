@@ -2911,6 +2911,23 @@ binary internals across carriers needs to verify *every* carrier those
 bytes can reach provides isolation, not just the primary one. See
 FINDINGS.md for the full story.
 
+**Superseded.** The "implied, never-transmitted namespace" pattern below
+relied on the odd/even Type-ID parity rule for its fail-closed property.
+The later hierarchical-typeId redesign ("Record shape simplified,"
+above) dropped that parity rule entirely — scoping is now determined
+purely by whether a namespace bstr is actually present on the wire, with
+no structural distinction between "meant to be scoped, namespace
+missing" and "genuinely global." That removed this pattern's safety
+argument without a replacement being carried forward at the time. The
+gap was closed by requiring namespace to always be transmitted in-band
+(explicitly, or via `h''` cascade) rather than by reviving a fail-closed
+marker on the typeId itself — see current §3.5 ("Namespace must be
+transmitted, never merely implied"). An implied-namespace carrier that
+never puts the namespace bytes on the wire at all is no longer a
+conformant pattern for a scoped typeId; a real namespace bstr (even a
+cheap `h''` cascade) MUST be present instead. Kept below for historical
+context only.
+
 **A better pattern than either self-allocated-even or transmitted-
 namespace, surfaced by asking TagDrop what their own decoder actually
 does internally.** TagDrop's own implementation already "reinserts" a
@@ -2934,13 +2951,12 @@ ever reaches an unisolated carrier. It also converts to real,
 transmitted-namespace interoperability later at zero cost to the Type
 IDs themselves — only the carrier changes, not the numbers.
 
-Added to spec §3.5 as the now-recommended pattern for any isolated-
-carrier application, superseding plain self-allocated-even as the
-default suggestion (still valid, just no longer the first thing to
-reach for). Requires exactly one discipline: the implied namespace
-value must be identical across every one of the application's own
-carriers, or the pattern's safety collapses back to the even-ID case.
-See FINDINGS.md #29.
+**(Historical.)** This was previously "added to spec §3.5 as the
+now-recommended pattern for any isolated-carrier application." It no
+longer is — see the Superseded note above. Requires exactly one
+discipline: the implied namespace value must be identical across every
+one of the application's own carriers, or the pattern's safety collapses
+back to the even-ID case. See FINDINGS.md #29.
 
 §3.1's form boundary excludes CBOR major type 1 (negative integer) from
 valid typeID prefix forms. Negint is different from array/map/tag/

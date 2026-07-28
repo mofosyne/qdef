@@ -387,6 +387,24 @@ QDEF [h'deadbeef', [100, {2: "child"}]]          // Bundle with namespace,
 QDEF [h'deadbeef', [h'', 100, {2: "child"}]]    // Explicit inherit
 ```
 
+**Namespace must be transmitted, never merely implied.** "Absent" above
+is unconditional: a Record with no namespace bstr anywhere in its own
+ancestry is standard/global typeId space, full stop — there is no
+carrier-level exception where a namespace is inferred from context
+outside the QDEF bytes themselves (a URI scheme, a carrier-specific NDEF
+MIME type) rather than actually present on the wire. An application
+that wants any of its typeIds scoped MUST declare that namespace
+in-band — either explicitly, or via `h''` cascading from a parent
+Record that already declared it. A decoder has no way to reconstruct a
+namespace it was never given, and correctly reads a bare typeId as its
+standard/global meaning instead. (This supersedes the "implied,
+never-transmitted namespace" pattern DESIGN.md previously recommended;
+see the superseded note there.)
+
+This costs little in practice: declare the namespace once, at the
+outermost Record that needs it, and every subrecord inherits it for
+1 byte (`h''`) rather than repeating the full value.
+
 Standard QDEF Record Types (§4) use global (no-namespace) typeIds with
 reserved low numbers 1–22. An app could assign `[2]` inside its own
 namespace for a completely different purpose — no collision with Split,
