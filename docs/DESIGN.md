@@ -58,10 +58,11 @@ of record shapes drops from 7 (the final old-system table) to 6, and
 the parser has exactly three branches: "is it a bstr?", "is it a
 uint?", "is it a map?"
 
-**Not yet resolved:** whether namespace bstr must repeat identically
-on every physical code of a multi-code group, or whether per-code
-overrides should be allowed. The old spec required repetition; the new
-system inherits that question.
+**Namespace repetition in multi-code groups (resolved).** The namespace
+bstr MUST repeat identically on every physical code of a Split group.
+Each code is parsed independently with no cross-code state — a decoder
+holding one code has no way to learn a namespace declared on another.
+This was the rule in the old spec and is unchanged.
 
 ## Registry governance — allocation shape proposed, authority still open
 
