@@ -83,8 +83,17 @@ test('header: effective namespace', () => {
   const empty = Buffer.alloc(0);
   assert.ok(header.effectiveNamespace(a, b).equals(a)); // own explicit wins
   assert.ok(header.effectiveNamespace(empty, b).equals(b)); // h'' inherits
-  assert.equal(header.effectiveNamespace(undefined, b), undefined); // absent breaks the chain
+  assert.equal(header.effectiveNamespace(undefined, b), undefined); // absent = always global for THIS Record
   assert.equal(header.effectiveNamespace(undefined, undefined), undefined);
+});
+
+test('header: namespace passed to children', () => {
+  const a = Buffer.from('aa', 'hex');
+  const b = Buffer.from('bb', 'hex');
+  const empty = Buffer.alloc(0);
+  assert.ok(header.namespaceForChildren(a, b).equals(a)); // explicit resets ambient
+  assert.ok(header.namespaceForChildren(empty, b).equals(b)); // h'' passes ambient through
+  assert.ok(header.namespaceForChildren(undefined, b).equals(b)); // absent ALSO passes ambient through
 });
 
 test('header: hash derivation and verification', () => {

@@ -19,7 +19,7 @@ test('isInheritMarker', () => {
   assert.equal(header.isInheritMarker(undefined), false);
 });
 
-test('effectiveNamespace', () => {
+test('effectiveNamespace: a Record\'s own scope', () => {
   const a = Buffer.from('aa', 'hex');
   const b = Buffer.from('bb', 'hex');
   const empty = Buffer.alloc(0);
@@ -29,10 +29,27 @@ test('effectiveNamespace', () => {
   // h'' (empty, the inherit marker) resolves to the ambient namespace.
   assert.ok(header.effectiveNamespace(empty, b).equals(b));
   assert.equal(header.effectiveNamespace(empty, undefined), undefined);
-  // Absent (no bstr at all) is NOT an inherit — it has no namespace and
-  // breaks the chain, regardless of what the ambient namespace was.
+  // Absent (no bstr at all) is unconditionally global for THIS Record's
+  // own typeId, regardless of ambient -- but (see namespaceForChildren
+  // below) that says nothing about what its own subrecords receive.
   assert.equal(header.effectiveNamespace(undefined, b), undefined);
   assert.equal(header.effectiveNamespace(undefined, undefined), undefined);
+});
+
+test('namespaceForChildren: what a Record passes on to its subrecords', () => {
+  const a = Buffer.from('aa', 'hex');
+  const b = Buffer.from('bb', 'hex');
+  const empty = Buffer.alloc(0);
+  // An explicit, non-empty namespace resets the ambient for children.
+  assert.ok(header.namespaceForChildren(a, b).equals(a));
+  // h'' passes the received ambient straight through unchanged.
+  assert.ok(header.namespaceForChildren(empty, b).equals(b));
+  // Absent ALSO passes the ambient straight through -- unlike
+  // effectiveNamespace, absence does not reset or break this. This is
+  // what lets a scoped Record's h'' reach through an intervening
+  // standard-type or Bundle Record that stayed global for itself.
+  assert.ok(header.namespaceForChildren(undefined, b).equals(b));
+  assert.equal(header.namespaceForChildren(undefined, undefined), undefined);
 });
 
 test('deriveHashId and verifyNamespaceHint', () => {

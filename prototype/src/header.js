@@ -1,7 +1,12 @@
 'use strict';
 // Namespace scoping (§3.5): a byte-string prefix on a Record, scoping
-// its non-standard typeIds. Empty bstr = inherit parent's namespace.
-// Standard types (typeId 1-22) always ignore namespace and stay global.
+// its OWN typeId. Empty bstr (h'') = adopt the ambient namespace as its
+// own scope; absent = its own typeId is always global (typeId 1-22
+// standard types are always global this way, by construction). Either
+// way, whatever ambient namespace was received still passes through
+// unchanged to its own subrecords unless this Record set an explicit
+// namespace of its own -- see effectiveNamespace() vs
+// namespaceForChildren() below, which answer two different questions.
 
 const crypto = require('crypto');
 
@@ -16,20 +21,21 @@ function isStandardType(typeId) {
 }
 
 /**
- * Determine the effective namespace for a Record given its own
- * localNamespace and its immediate parent's effective namespace
- * (§3.5's Cascade rule: inheritance only flows through an unbroken
- * chain — an intervening Record with no namespace of its own breaks
- * the chain for anything nested inside it, even if some ancestor
- * further up declared one).
+ * Determine the effective namespace for a Record's OWN typeId, given
+ * its own localNamespace and its immediate parent's effective
+ * namespace (§3.5's Cascade rule).
  *
- * - localNamespace is undefined (no bstr at all): this Record has NO
- *   namespace, full stop. Does NOT inherit — the chain is broken here.
- * - localNamespace is an empty Buffer (h'', the inherit marker): use
- *   ambientNamespace (the immediate parent's own effective namespace).
- *   Only meaningful if the parent actually had one.
+ * - localNamespace is undefined (no bstr at all): this Record's own
+ *   typeId is global, unconditionally -- regardless of ambientNamespace.
+ * - localNamespace is an empty Buffer (h'', the inherit marker): adopt
+ *   ambientNamespace (the immediate parent's own effective namespace)
+ *   as this Record's own scope.
  * - localNamespace is a non-empty Buffer: this Record's own explicit
- *   namespace, which becomes what ITS subrecords can inherit from.
+ *   namespace.
+ *
+ * This says nothing about what namespace reaches this Record's own
+ * subrecords -- see namespaceForChildren() for that; they are two
+ * separate questions.
  *
  * Returns the effective namespace Buffer, or undefined if none.
  */
@@ -37,6 +43,25 @@ function effectiveNamespace(localNamespace, ambientNamespace) {
   if (localNamespace === undefined) return undefined;
   if (isInheritMarker(localNamespace)) return ambientNamespace;
   return localNamespace;
+}
+
+/**
+ * Determine what namespace a Record passes on to its own subrecords
+ * as their ambient namespace (§3.5's Cascade rule).
+ *
+ * An explicit, non-empty localNamespace resets the ambient namespace
+ * for everything nested inside this Record. Anything else -- h'', or
+ * namespace absent entirely -- passes ambientNamespace straight
+ * through unchanged, independent of how this Record's OWN typeId got
+ * interpreted (effectiveNamespace, above). This is what lets a scoped
+ * Record's h'' reach through an intervening standard-type or Bundle
+ * Record that stayed global for its own purposes.
+ */
+function namespaceForChildren(localNamespace, ambientNamespace) {
+  if (localNamespace !== undefined && !isInheritMarker(localNamespace)) {
+    return localNamespace;
+  }
+  return ambientNamespace;
 }
 
 /**
@@ -54,11 +79,11 @@ function isInheritMarker(ns) {
  * the same (mutated) root record for convenience.
  */
 function resolveNamespacesDeep(record, ambientNamespace) {
-  const resolved = effectiveNamespace(record.localNamespace, ambientNamespace);
-  record.effectiveNamespace = resolved;
+  record.effectiveNamespace = effectiveNamespace(record.localNamespace, ambientNamespace);
+  const nextAmbient = namespaceForChildren(record.localNamespace, ambientNamespace);
   if (record.subrecords) {
     for (const sub of record.subrecords) {
-      resolveNamespacesDeep(sub, resolved);
+      resolveNamespacesDeep(sub, nextAmbient);
     }
   }
   return record;
@@ -89,6 +114,7 @@ module.exports = {
   MIN_SELF_CERTIFY_BYTES,
   isStandardType,
   effectiveNamespace,
+  namespaceForChildren,
   isInheritMarker,
   resolveNamespacesDeep,
   deriveHashId,

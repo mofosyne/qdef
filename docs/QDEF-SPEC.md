@@ -371,46 +371,42 @@ independent apps picking the same namespace collide every type within
 it.
 
 **Special values:**
-- **Empty byte string `h''`**: inherit the parent Record's namespace.
-  Only valid inside a subrecord whose parent declared one.
-- **Absent (no bstr at position 0)**: no namespace — typeId is global.
+- **Empty byte string `h''`**: adopt the ambient namespace — whatever
+  the immediate parent passed down — as this Record's own scope.
+- **Absent (no bstr at position 0)**: this Record's own typeId is
+  global/standard-managed space, full stop, regardless of any ambient
+  namespace flowing through it.
 
 **Best practice: every scoped Record carries its own namespace token —
-`h''` or a real value — never absent.** This isn't a style preference:
-per Cascade below, an absent namespace unconditionally means global, no
-matter what any ancestor declared, so this is the only way a Record
-that's meant to be scoped actually stays scoped. Don't reason "some
-ancestor already declared a namespace, so this Record is covered" —
-check the one Record in front of you and its immediate parent; that's
-always sufficient, and nothing further up the tree matters.
+`h''` or a real value — never absent.** Absence always means global for
+*that Record's own typeId*, no matter what ambient namespace is present
+— this is the only way a Record that's meant to be scoped actually
+stays scoped.
 
-**Further practice: for a group of scoped Records together, prefer a
-dedicated Bundle immediately around them that declares the namespace
-itself, over relying on one declared many `h''` links further up.** The
-Cascade chain below works correctly through any number of links, but
-each one is a place a later edit — extracting a subtree, reordering
-Records, restructuring a Bundle — could silently break it. A namespace
-declared right next to the Records that need it keeps correctness
-locally verifiable (one Bundle and its direct scoped children) instead
-of depending on the whole tree staying exactly as originally authored.
+**Cascade.** A Record's own namespace token decides only how *that
+Record's own typeId* is interpreted — it does not, by itself, decide
+what namespace continues on to its subrecords:
 
-**Cascade.** A Record's effective namespace reaches its subrecords only
-through an unbroken chain — each level's own namespace slot decides
-independently, regardless of what some ancestor further up declared:
+- **Own scope:** absent = global (unconditional, regardless of
+  ambient); `h''` = the ambient namespace received from the immediate
+  parent; an explicit `h'ns'` = that value.
+- **What passes to subrecords:** an explicit `h'ns'` becomes the new
+  ambient namespace for everything nested inside it. Anything else —
+  `h''`, or namespace absent entirely — passes the ambient namespace it
+  received straight through, unchanged, independent of how *this*
+  Record's own typeId got interpreted.
 
-- `h''` inherits the *immediate parent's* effective namespace. Valid
-  only when that parent actually has one (explicit, or itself already
-  inherited).
-- `h'ns'` sets an explicit namespace of its own, which is then what its
-  own subrecords can inherit from in turn.
-- Omitting the namespace entirely opts this Record out — its typeId is
-  global — and this also **breaks the chain for anything nested inside
-  it.** A namespace declared two or more levels up does not reach
-  through an intervening Record that has no namespace of its own, even
-  if that Record is otherwise ordinary scoped-application content. Each
-  level must either carry `h''` to pass the namespace through, or
-  redeclare it explicitly; there is no "skip a global ancestor and
-  inherit from further up."
+This applies uniformly — a QDEF standard type (§4), a plain Bundle, and
+an application-defined type are all the same Record shape for this
+purpose. A standard type's own typeId is always global by construction
+(no namespace value changes what `Type 7` means), but that's a fact
+about *its own* interpretation only — it doesn't stop the ambient
+namespace from reaching whatever's nested inside it. Standard types
+aren't a structurally different kind of thing from application types
+here: per §4's allocation-range table, they're the same global typeId
+space under different governance tiers (Standards Action for `1`–`22`,
+Specification Required or First Come First Served above that), not two
+separate mechanisms.
 
 ```
 QDEF [10, {0: "https://..."}]                    // Global (standard) type [10]
@@ -418,34 +414,35 @@ QDEF [h'deadbeef', 1, {0: h'<payload>'}]         // Namespace-scoped type [1]
 QDEF [h'deadbeef', [100, {2: "child"}]]          // Bundle with namespace,
                                                   //   subrecord inherits
 QDEF [h'deadbeef', [h'', 100, {2: "child"}]]    // Explicit inherit
-QDEF [h'deadbeef', [7, {0: h''}, [h'', 200, {}]]]   // Chain BROKEN: the
-                                                  //   global (namespace-
-                                                  //   less) middle Record
-                                                  //   has nothing to pass
-                                                  //   down, so its own
-                                                  //   subrecord's `h''`
-                                                  //   is invalid here —
-                                                  //   [200] would need an
-                                                  //   explicit namespace
+QDEF [h'deadbeef', [7, [h'', 200, {}]]]         // typeId [7] (Media
+                                                  //   Preview) is global
+                                                  //   for ITSELF, but
+                                                  //   still passes
+                                                  //   h'deadbeef' on to
+                                                  //   its own subrecord,
+                                                  //   whose h'' correctly
+                                                  //   resolves to it
 ```
 
 **Namespace must be transmitted, never merely implied.** "Absent" above
-is unconditional: a Record with no namespace bstr anywhere in its own
-ancestry is standard/global typeId space, full stop — there is no
-carrier-level exception where a namespace is inferred from context
+is unconditional for a Record's own scope: a Record with no namespace
+bstr of its own is standard/global typeId space, full stop — there is
+no carrier-level exception where a namespace is inferred from context
 outside the QDEF bytes themselves (a URI scheme, a carrier-specific NDEF
-MIME type) rather than actually present on the wire. An application
-that wants any of its typeIds scoped MUST declare that namespace
-in-band — either explicitly, or via `h''` cascading from a parent
-Record that already declared it. A decoder has no way to reconstruct a
-namespace it was never given, and correctly reads a bare typeId as its
-standard/global meaning instead. (This supersedes the "implied,
-never-transmitted namespace" pattern DESIGN.md previously recommended;
-see the superseded note there.)
+MIME type) rather than actually present on the wire somewhere in its
+ancestry. An application that wants any of its typeIds scoped MUST
+declare that namespace in-band — either explicitly on that Record, or
+via `h''`, or via an ancestor's explicit declaration reaching it through
+any number of intervening pass-through Records. A decoder has no way to
+reconstruct a namespace it was never given anywhere on the wire, and
+correctly reads a bare typeId as its standard/global meaning instead.
+(This supersedes the "implied, never-transmitted namespace" pattern
+DESIGN.md previously recommended; see the superseded note there.)
 
 This costs little in practice: declare the namespace once, at the
-outermost Record that needs it, and every subrecord inherits it for
-1 byte (`h''`) rather than repeating the full value.
+outermost Record that needs it, and every scoped descendant inherits it
+for 1 byte (`h''`) each — including through any number of standard-type
+or Bundle Records in between — rather than repeating the full value.
 
 Standard QDEF Record Types (§4) use global (no-namespace) typeIds with
 reserved low numbers 1–22. An app could assign `[2]` inside its own
