@@ -375,6 +375,15 @@ it.
   Only valid inside a subrecord whose parent declared one.
 - **Absent (no bstr at position 0)**: no namespace — typeId is global.
 
+**Best practice: every scoped Record carries its own namespace token —
+`h''` or a real value — never absent.** This isn't a style preference:
+per Cascade below, an absent namespace unconditionally means global, no
+matter what any ancestor declared, so this is the only way a Record
+that's meant to be scoped actually stays scoped. Don't reason "some
+ancestor already declared a namespace, so this Record is covered" —
+check the one Record in front of you and its immediate parent; that's
+always sufficient, and nothing further up the tree matters.
+
 **Cascade.** A Record's effective namespace reaches its subrecords only
 through an unbroken chain — each level's own namespace slot decides
 independently, regardless of what some ancestor further up declared:
