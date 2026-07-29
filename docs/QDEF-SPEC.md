@@ -384,6 +384,16 @@ ancestor already declared a namespace, so this Record is covered" —
 check the one Record in front of you and its immediate parent; that's
 always sufficient, and nothing further up the tree matters.
 
+**Further practice: for a group of scoped Records together, prefer a
+dedicated Bundle immediately around them that declares the namespace
+itself, over relying on one declared many `h''` links further up.** The
+Cascade chain below works correctly through any number of links, but
+each one is a place a later edit — extracting a subtree, reordering
+Records, restructuring a Bundle — could silently break it. A namespace
+declared right next to the Records that need it keeps correctness
+locally verifiable (one Bundle and its direct scoped children) instead
+of depending on the whole tree staying exactly as originally authored.
+
 **Cascade.** A Record's effective namespace reaches its subrecords only
 through an unbroken chain — each level's own namespace slot decides
 independently, regardless of what some ancestor further up declared:
