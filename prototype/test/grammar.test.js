@@ -80,8 +80,10 @@ test('header: inherit marker', () => {
 test('header: effective namespace', () => {
   const a = Buffer.from('aa', 'hex');
   const b = Buffer.from('bb', 'hex');
-  assert.ok(header.effectiveNamespace(a, b).equals(a)); // override
-  assert.ok(header.effectiveNamespace(undefined, b).equals(b)); // inherit
+  const empty = Buffer.alloc(0);
+  assert.ok(header.effectiveNamespace(a, b).equals(a)); // own explicit wins
+  assert.ok(header.effectiveNamespace(empty, b).equals(b)); // h'' inherits
+  assert.equal(header.effectiveNamespace(undefined, b), undefined); // absent breaks the chain
   assert.equal(header.effectiveNamespace(undefined, undefined), undefined);
 });
 

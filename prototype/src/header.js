@@ -1,7 +1,7 @@
 'use strict';
 // Namespace scoping (§3.5): a byte-string prefix on a Record, scoping
 // its non-standard typeIds. Empty bstr = inherit parent's namespace.
-// Standard types ([0, N]) always ignore namespace.
+// Standard types (typeId 1-22) always ignore namespace and stay global.
 
 const crypto = require('crypto');
 
@@ -17,16 +17,26 @@ function isStandardType(typeId) {
 
 /**
  * Determine the effective namespace for a Record given its own
- * localNamespace and its parent's ambient namespace.
+ * localNamespace and its immediate parent's effective namespace
+ * (§3.5's Cascade rule: inheritance only flows through an unbroken
+ * chain — an intervening Record with no namespace of its own breaks
+ * the chain for anything nested inside it, even if some ancestor
+ * further up declared one).
  *
- * - localNamespace is a Buffer: use it (even if empty = inherit marker)
- * - localNamespace is undefined: inherit parent's
+ * - localNamespace is undefined (no bstr at all): this Record has NO
+ *   namespace, full stop. Does NOT inherit — the chain is broken here.
+ * - localNamespace is an empty Buffer (h'', the inherit marker): use
+ *   ambientNamespace (the immediate parent's own effective namespace).
+ *   Only meaningful if the parent actually had one.
+ * - localNamespace is a non-empty Buffer: this Record's own explicit
+ *   namespace, which becomes what ITS subrecords can inherit from.
  *
  * Returns the effective namespace Buffer, or undefined if none.
  */
 function effectiveNamespace(localNamespace, ambientNamespace) {
-  if (localNamespace !== undefined) return localNamespace;
-  return ambientNamespace;
+  if (localNamespace === undefined) return undefined;
+  if (isInheritMarker(localNamespace)) return ambientNamespace;
+  return localNamespace;
 }
 
 /**
@@ -34,6 +44,24 @@ function effectiveNamespace(localNamespace, ambientNamespace) {
  */
 function isInheritMarker(ns) {
   return Buffer.isBuffer(ns) && ns.length === 0;
+}
+
+/**
+ * Walk a decoded Record tree (the shape core.js's decode functions
+ * produce: { typeId, localNamespace, subrecords, ... }) and annotate
+ * every node in place with its own resolved `effectiveNamespace`,
+ * applying the Cascade rule (§3.5) recursively down the tree. Returns
+ * the same (mutated) root record for convenience.
+ */
+function resolveNamespacesDeep(record, ambientNamespace) {
+  const resolved = effectiveNamespace(record.localNamespace, ambientNamespace);
+  record.effectiveNamespace = resolved;
+  if (record.subrecords) {
+    for (const sub of record.subrecords) {
+      resolveNamespacesDeep(sub, resolved);
+    }
+  }
+  return record;
 }
 
 /**
@@ -62,6 +90,7 @@ module.exports = {
   isStandardType,
   effectiveNamespace,
   isInheritMarker,
+  resolveNamespacesDeep,
   deriveHashId,
   verifyNamespaceHint,
 };

@@ -22,8 +22,16 @@ test('isInheritMarker', () => {
 test('effectiveNamespace', () => {
   const a = Buffer.from('aa', 'hex');
   const b = Buffer.from('bb', 'hex');
+  const empty = Buffer.alloc(0);
+  // Own explicit namespace wins, regardless of ambient.
   assert.ok(header.effectiveNamespace(a, b).equals(a));
-  assert.ok(header.effectiveNamespace(undefined, b).equals(b));
+  assert.equal(header.effectiveNamespace(a, undefined).equals(a), true);
+  // h'' (empty, the inherit marker) resolves to the ambient namespace.
+  assert.ok(header.effectiveNamespace(empty, b).equals(b));
+  assert.equal(header.effectiveNamespace(empty, undefined), undefined);
+  // Absent (no bstr at all) is NOT an inherit — it has no namespace and
+  // breaks the chain, regardless of what the ambient namespace was.
+  assert.equal(header.effectiveNamespace(undefined, b), undefined);
   assert.equal(header.effectiveNamespace(undefined, undefined), undefined);
 });
 
