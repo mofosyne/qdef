@@ -375,9 +375,23 @@ it.
   Only valid inside a subrecord whose parent declared one.
 - **Absent (no bstr at position 0)**: no namespace — typeId is global.
 
-**Cascade.** A Record's namespace (if any) applies to its subrecords by
-default. A subrecord uses `h''` to inherit, `h'ns'` to set its own, or
-omits the namespace to opt out entirely (global within the subrecord).
+**Cascade.** A Record's effective namespace reaches its subrecords only
+through an unbroken chain — each level's own namespace slot decides
+independently, regardless of what some ancestor further up declared:
+
+- `h''` inherits the *immediate parent's* effective namespace. Valid
+  only when that parent actually has one (explicit, or itself already
+  inherited).
+- `h'ns'` sets an explicit namespace of its own, which is then what its
+  own subrecords can inherit from in turn.
+- Omitting the namespace entirely opts this Record out — its typeId is
+  global — and this also **breaks the chain for anything nested inside
+  it.** A namespace declared two or more levels up does not reach
+  through an intervening Record that has no namespace of its own, even
+  if that Record is otherwise ordinary scoped-application content. Each
+  level must either carry `h''` to pass the namespace through, or
+  redeclare it explicitly; there is no "skip a global ancestor and
+  inherit from further up."
 
 ```
 QDEF [10, {0: "https://..."}]                    // Global (standard) type [10]
@@ -385,6 +399,15 @@ QDEF [h'deadbeef', 1, {0: h'<payload>'}]         // Namespace-scoped type [1]
 QDEF [h'deadbeef', [100, {2: "child"}]]          // Bundle with namespace,
                                                   //   subrecord inherits
 QDEF [h'deadbeef', [h'', 100, {2: "child"}]]    // Explicit inherit
+QDEF [h'deadbeef', [7, {0: h''}, [h'', 200, {}]]]   // Chain BROKEN: the
+                                                  //   global (namespace-
+                                                  //   less) middle Record
+                                                  //   has nothing to pass
+                                                  //   down, so its own
+                                                  //   subrecord's `h''`
+                                                  //   is invalid here —
+                                                  //   [200] would need an
+                                                  //   explicit namespace
 ```
 
 **Namespace must be transmitted, never merely implied.** "Absent" above
