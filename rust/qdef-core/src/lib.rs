@@ -168,7 +168,7 @@ impl<'a> Record<'a> {
 
     /// Read payload at map key 0, if present.
     pub fn payload_bytes(&self) -> Result<Option<&'a [u8]>, Error> {
-        Ok(find_value(self.map_bytes, 0).map_err(Error::Cbor)?)
+        find_value(self.map_bytes, 0).map_err(Error::Cbor)
     }
 }
 
@@ -245,12 +245,10 @@ fn parse_record_items(buf: &[u8], start: usize) -> Result<Record<'_>, Error> {
     }
 
     // Error: bare tstr with no namespace or typeId
-    if local_namespace.is_none() && type_id_len == 0 {
-        if pos < buf.len() {
-            let h = cbor::read_head(&buf[pos..]).map_err(Error::Cbor)?;
-            if h.major == 3 {
-                return Err(Error::BareAnnotation);
-            }
+    if local_namespace.is_none() && type_id_len == 0 && pos < buf.len() {
+        let h = cbor::read_head(&buf[pos..]).map_err(Error::Cbor)?;
+        if h.major == 3 {
+            return Err(Error::BareAnnotation);
         }
     }
 

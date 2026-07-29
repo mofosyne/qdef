@@ -30,17 +30,16 @@ mod vectors {
     pub fn ns_and_annotations() -> Vec<u8> {
         // array(5): bstr(4)"deadbeef", tstr(6)"TestNs", uint(1), tstr(8)"TestType", map{0: bstr(4)"data"}
         vec![
-            0x85,              // array(5)
-            0x44,              // bstr(4)
-            0xde, 0xad, 0xbe, 0xef,
-            0x66,              // tstr(6)
+            0x85, // array(5)
+            0x44, // bstr(4)
+            0xde, 0xad, 0xbe, 0xef, 0x66, // tstr(6)
             0x54, 0x65, 0x73, 0x74, 0x4e, 0x73, // "TestNs"
-            0x01,              // uint(1)
-            0x68,              // tstr(8)
+            0x01, // uint(1)
+            0x68, // tstr(8)
             0x54, 0x65, 0x73, 0x74, 0x54, 0x79, 0x70, 0x65, // "TestType"
-            0xa1,              // map(1)
-            0x00,              // key 0
-            0x44,              // bstr(4)
+            0xa1, // map(1)
+            0x00, // key 0
+            0x44, // bstr(4)
             0x64, 0x61, 0x74, 0x61, // "data"
         ]
     }
@@ -48,11 +47,11 @@ mod vectors {
     /// App type with no namespace: `[100, {2: "field"}]`
     pub fn app_type_no_ns() -> Vec<u8> {
         vec![
-            0x82,              // array(2)
-            0x18, 0x64,        // uint(100)
-            0xa1,              // map(1)
-            0x02,              // key 2
-            0x65,              // tstr(5)
+            0x82, // array(2)
+            0x18, 0x64, // uint(100)
+            0xa1, // map(1)
+            0x02, // key 2
+            0x65, // tstr(5)
             0x66, 0x69, 0x65, 0x6c, 0x64, // "field"
         ]
     }
@@ -60,11 +59,11 @@ mod vectors {
     /// Standard type [2] (Split): `[2, {0: h'frag'}]`
     pub fn standard_type() -> Vec<u8> {
         vec![
-            0x82,              // array(2)
-            0x02,              // uint(2)
-            0xa1,              // map(1)
-            0x00,              // key 0 = payload
-            0x44,              // bstr(4)
+            0x82, // array(2)
+            0x02, // uint(2)
+            0xa1, // map(1)
+            0x00, // key 0 = payload
+            0x44, // bstr(4)
             0x66, 0x72, 0x61, 0x67, // "frag"
         ]
     }
@@ -72,26 +71,25 @@ mod vectors {
     /// Inherit marker: `[h'', 1, {0: h'x'}]`
     pub fn inherit_marker() -> Vec<u8> {
         vec![
-            0x83,              // array(3)
-            0x40,              // bstr(0) — empty = inherit
-            0x01,              // uint(1)
-            0xa1,              // map(1)
-            0x00,              // key 0
-            0x41,              // bstr(1)
-            0x78,              // "x"
+            0x83, // array(3)
+            0x40, // bstr(0) — empty = inherit
+            0x01, // uint(1)
+            0xa1, // map(1)
+            0x00, // key 0
+            0x41, // bstr(1)
+            0x78, // "x"
         ]
     }
 
     /// Hierarchical typeId: `[h'ns', 1, 2, 3, {0: h'd'}]`
     pub fn hierarchical_typeid() -> Vec<u8> {
         vec![
-            0x85,              // array(5)
-            0x42,              // bstr(2)
-            0x6e, 0x73,       // "ns"
+            0x85, // array(5)
+            0x42, // bstr(2)
+            0x6e, 0x73, // "ns"
             0x01, 0x02, 0x03, // uints 1, 2, 3
-            0xa1,              // map(1)
-            0x00,
-            0x41, 0x64,       // bstr(1) "d"
+            0xa1, // map(1)
+            0x00, 0x41, 0x64, // bstr(1) "d"
         ]
     }
 
@@ -109,7 +107,7 @@ mod vectors {
         buf.extend_from_slice(&[0x00, 0x67, 0x70, 0x61, 0x79, 0x6c, 0x6f, 0x61, 0x64]);
         // key -1 (CBOR: major 1, arg 0 = value -1)
         buf.extend_from_slice(&[0x20, 0x62, 0x69, 0x64]); // 0x20 = negint(0) = -1
-        // key 2
+                                                          // key 2
         buf.extend_from_slice(&[0x02, 0x67, 0x75, 0x6e, 0x6b, 0x6e, 0x6f, 0x77, 0x6e]);
         buf
     }
@@ -226,9 +224,7 @@ fn ndef_path_no_magic() {
 #[test]
 fn payload_at_map_key_zero() {
     // [10, {0: h'hello'}]
-    let buf = vec![
-        0x82, 0x0a, 0xa1, 0x00, 0x45, 0x68, 0x65, 0x6c, 0x6c, 0x6f,
-    ];
+    let buf = vec![0x82, 0x0a, 0xa1, 0x00, 0x45, 0x68, 0x65, 0x6c, 0x6c, 0x6f];
     let rec = parse_root_record(&buf).unwrap();
     let payload = rec.payload_bytes().unwrap().unwrap();
     assert_eq!(read_definite_string(payload).unwrap(), b"hello");
@@ -238,7 +234,7 @@ fn payload_at_map_key_zero() {
 fn subrecords_generically_isolable() {
     // Bundle: [[10, {0: "a"}], [20, {0: "b"}]]
     let buf = vec![
-        0x82,                               // array(2): two subrecords
+        0x82, // array(2): two subrecords
         0x82, 0x0a, 0xa1, 0x00, 0x61, 0x61, // sub1: [10, {0: "a"}]
         0x82, 0x14, 0xa1, 0x00, 0x61, 0x62, // sub2: [20, {0: "b"}]
     ];
@@ -254,9 +250,9 @@ fn malformed_inner_record_does_not_corrupt_sequence_walker() {
     // Two subrecords: [10, {0: "a"}] followed by a well-formed non-Record item, then [20, {0: "b"}]
     // The non-Record is skipped by the generic walker.
     let buf = vec![
-        0x83,                               // array(3)
+        0x83, // array(3)
         0x82, 0x0a, 0xa1, 0x00, 0x61, 0x61, // sub1: [10, {0: "a"}]
-        0x01,                               // uint(1) — not a Record, skipped
+        0x01, // uint(1) — not a Record, skipped
         0x82, 0x14, 0xa1, 0x00, 0x61, 0x62, // sub3: [20, {0: "b"}]
     ];
     let rec = parse_root_record(&buf).unwrap();
@@ -275,10 +271,15 @@ mod cross_val {
     // the Node encoder produces (see gen_test_vectors.js output).
 
     /// App [100] with payload at key 0
-    pub const APP_100: &[u8] = &[0x82, 0x18, 0x64, 0xA1, 0x00, 0x47, 0x70, 0x61, 0x79, 0x6C, 0x6F, 0x61, 0x64];
+    pub const APP_100: &[u8] = &[
+        0x82, 0x18, 0x64, 0xA1, 0x00, 0x47, 0x70, 0x61, 0x79, 0x6C, 0x6F, 0x61, 0x64,
+    ];
 
     /// Standard [10] OpenURI
-    pub const OPENURI_10: &[u8] = &[0x82, 0x0A, 0xA1, 0x00, 0x6E, 0x68, 0x74, 0x74, 0x70, 0x73, 0x3A, 0x2F, 0x2F, 0x65, 0x78, 0x2E, 0x63, 0x6F, 0x6D];
+    pub const OPENURI_10: &[u8] = &[
+        0x82, 0x0A, 0xA1, 0x00, 0x6E, 0x68, 0x74, 0x74, 0x70, 0x73, 0x3A, 0x2F, 0x2F, 0x65, 0x78,
+        0x2E, 0x63, 0x6F, 0x6D,
+    ];
 
     /// Empty bundle
     pub const BUNDLE_EMPTY: &[u8] = &[0x80];
@@ -287,16 +288,23 @@ mod cross_val {
     pub const BUNDLE_WITH_SUB: &[u8] = &[0x81, 0x82, 0x0A, 0xA1, 0x00, 0x63, 0x75, 0x72, 0x69];
 
     /// Namespace (h'6e73') + ns annotation "Ns" + typeId [1] + type annotation "Type" + map
-    pub const NS_ANN_TYPE_ANN: &[u8] = &[0x85, 0x42, 0x6E, 0x73, 0x62, 0x4E, 0x73, 0x01, 0x64, 0x54, 0x79, 0x70, 0x65, 0xA1, 0x00, 0x44, 0x64, 0x61, 0x74, 0x61];
+    pub const NS_ANN_TYPE_ANN: &[u8] = &[
+        0x85, 0x42, 0x6E, 0x73, 0x62, 0x4E, 0x73, 0x01, 0x64, 0x54, 0x79, 0x70, 0x65, 0xA1, 0x00,
+        0x44, 0x64, 0x61, 0x74, 0x61,
+    ];
 
     /// Hierarchical typeId [1,2,3] under namespace h'6e73'
-    pub const HIERARCHICAL: &[u8] = &[0x85, 0x42, 0x6E, 0x73, 0x01, 0x02, 0x03, 0xA1, 0x00, 0x41, 0x64];
+    pub const HIERARCHICAL: &[u8] = &[
+        0x85, 0x42, 0x6E, 0x73, 0x01, 0x02, 0x03, 0xA1, 0x00, 0x41, 0x64,
+    ];
 
     /// Inherit marker h'' + typeId [1]
     pub const INHERIT: &[u8] = &[0x83, 0x40, 0x01, 0xA1, 0x00, 0x41, 0x78];
 
     /// 9-uint typeId — Rust truncates to 8, map still found
-    pub const NINE_UINT_TID: &[u8] = &[0x8A, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0xA1, 0x00, 0x41, 0x64];
+    pub const NINE_UINT_TID: &[u8] = &[
+        0x8A, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0xA1, 0x00, 0x41, 0x64,
+    ];
 }
 
 #[test]
@@ -364,11 +372,11 @@ fn cross_val_nine_uint_truncation() {
 
 fn encode_test_record() -> Vec<u8> {
     vec![
-        0x82,              // array(2)
-        0x18, 0x64,        // uint(100)
-        0xa1,              // map(1)
-        0x00,              // key 0
-        0x44,              // bstr(4)
+        0x82, // array(2)
+        0x18, 0x64, // uint(100)
+        0xa1, // map(1)
+        0x00, // key 0
+        0x44, // bstr(4)
         0x74, 0x65, 0x73, 0x74, // "test"
     ]
 }

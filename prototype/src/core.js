@@ -31,7 +31,8 @@ function recordToItems({ typeId, fields, localNamespace, nsAnnotation, typeAnnot
   if (nsAnnotation !== undefined) items.push(nsAnnotation);
 
   if (typeId !== undefined) {
-    for (const id of typeId) items.push(id);
+    const ids = Array.isArray(typeId) ? typeId : [typeId];
+    for (const id of ids) items.push(id);
   }
   if (typeAnnotation !== undefined) items.push(typeAnnotation);
 
