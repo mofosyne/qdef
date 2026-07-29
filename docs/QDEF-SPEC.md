@@ -651,14 +651,15 @@ zero-padded to `chunkLen` before XOR). Splitting a group across
 different-capacity physical codes with different-sized fragments while
 still supporting parity recovery is not yet resolved — see §8.
 
-`parity_scheme` mechanics: a parity fragment (index ≥ `count`, present
-only when `parity_scheme` is set) is pure bonus redundancy — plain
-reassembly only ever requires fragments `0` through `count − 1`. A
-decoder that doesn't understand `parity_scheme` can ignore any fragment
-past `count` and still reassemble correctly, losing only resilience,
-never correctness. `parity_scheme = 1` (prototype-defined only): a
-single XOR parity fragment, recovering exactly one missing/damaged
-fragment.
+`parity_scheme` mechanics: **key `9`, OPTIONAL (odd)** — a decoder that
+doesn't understand it can simply ignore it, which is exactly what it
+does: a parity fragment (index ≥ `count`, present only when key `9` is
+set) is pure bonus redundancy — plain reassembly only ever requires
+fragments `0` through `count − 1`. A decoder that doesn't understand
+`parity_scheme` can ignore any fragment past `count` and still
+reassemble correctly, losing only resilience, never correctness.
+`parity_scheme = 1` (prototype-defined only): a single XOR parity
+fragment, recovering exactly one missing/damaged fragment.
 
 **Fixed nesting order** when more than one Wrapper is combined: `Split
 (outermost, if present) → Encrypt → Compress → plain inner Record`.
@@ -890,8 +891,9 @@ that same old decoder just skips the unrecognized Media Preview
 subrecord (§3.2) and reassembles correctly regardless:
 
 ```
-[ 1, { 0: h'<fragment 0>', 2: h'<group_id>', 4: 0, 6: 3, 7: 9 },
+[ 1, { 0: h'<fragment 0>', 2: h'<group_id>', 4: 0, 6: 3, 7: 5821, 9: 1 },
   [ 7, { 2: "image/png", 3: h'...', 5: "photo.png" } ] ]
+// key 7 = total_bytes (5821), key 9 = parity_scheme (1 = XOR)
 ```
 
 Identification fields repeat on every code in the group, the same as
